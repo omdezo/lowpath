@@ -25,8 +25,9 @@
     Publish the result as the GitHub commit status "local-ci" on HEAD, so the
     pull request shows a green or red check without GitHub Actions. Needs the
     GitHub CLI (on PATH, or its path in $env:LOWPATH_GH) signed in with repo
-    scope, and a clean working tree (the status must describe exactly the
-    pushed commit).
+    scope, a pushed HEAD, and a clean working tree with no untracked files
+    (the status must describe exactly the pushed commit). Reporting is best
+    effort: if it can't publish, it says why and the CI result is unchanged.
 
 .EXAMPLE
     .\scripts\ci.ps1
@@ -75,30 +76,64 @@ function Get-StageList {
     ($results | ForEach-Object { "$($_.Stage) $($_.Result.ToLower())" }) -join ', '
 }
 
+# Get-ReportTarget returns the GitHub repo and commit a -Report run describes,
+# or $null (after saying why) when the result can't honestly describe exactly
+# one commit: uncommitted or untracked files would be built but not pushed.
+function Get-ReportTarget {
+    try {
+        if (git -C $root status --porcelain) {
+            Write-Host 'Not reporting: the working tree has uncommitted or untracked changes.' -ForegroundColor Yellow
+            return $null
+        }
+        $sha = "$(git -C $root rev-parse HEAD)".Trim()
+        $remote = "$(git -C $root remote get-url origin)".Trim()
+        if (-not $sha) {
+            Write-Host 'Not reporting: no commit to report on.' -ForegroundColor Yellow
+            return $null
+        }
+        if ($remote -notmatch 'github\.com[:/](?<repo>[^/]+/[^/]+?)(\.git)?/?$') {
+            Write-Host "Not reporting: origin ($remote) is not a GitHub repository." -ForegroundColor Yellow
+            return $null
+        }
+        return [pscustomobject]@{ Repo = $Matches['repo']; Sha = $sha }
+    } catch {
+        Write-Host "Not reporting: $_" -ForegroundColor Yellow
+        return $null
+    }
+}
+
 # Publish-Status records the run as the "local-ci" commit status on GitHub.
-# A dirty tree is refused: the check must describe the commit reviewers see.
+# Reporting is best effort: a problem here never changes the CI result.
 function Publish-Status([string]$State, [string]$Description) {
     if (-not $Report) { return }
-    $gh = if ($env:LOWPATH_GH) { $env:LOWPATH_GH } else { 'gh' }
-    if (git -C $root status --porcelain --untracked-files=no) {
-        Write-Host 'Not reporting: the working tree has uncommitted changes.' -ForegroundColor Yellow
-        return
-    }
-    $sha = (git -C $root rev-parse HEAD).Trim()
-    $remote = (git -C $root remote get-url origin).Trim()
-    if ($remote -notmatch 'github\.com[:/](?<repo>[^/]+/[^/]+?)(\.git)?$') {
-        Write-Host "Not reporting: origin ($remote) is not a GitHub repository." -ForegroundColor Yellow
-        return
-    }
-    $repo = $Matches['repo']
-    $mode = if ($Quick) { 'quick' } elseif ($E2E) { 'full + e2e' } else { 'full' }
-    $desc = "[$mode] $Description"
-    if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 137) + '...' }
-    & $gh api "repos/$repo/statuses/$sha" -f state=$State -f context=local-ci -f "description=$desc" | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Reported local-ci = $State on $($sha.Substring(0, 7))." -ForegroundColor Green
-    } else {
-        Write-Host 'Could not report the status to GitHub.' -ForegroundColor Yellow
+    try {
+        if (-not $reportTarget) {
+            Write-Host 'Not reporting: see the warning at the start of the run.' -ForegroundColor Yellow
+            return
+        }
+        $target = Get-ReportTarget
+        if (-not $target) { return }
+        if ($target.Sha -ne $reportTarget.Sha) {
+            Write-Host 'Not reporting: HEAD moved while CI was running.' -ForegroundColor Yellow
+            return
+        }
+        $gh = if ($env:LOWPATH_GH) { $env:LOWPATH_GH } else { 'gh' }
+        if (-not (Get-Command $gh -ErrorAction SilentlyContinue)) {
+            Write-Host "Not reporting: GitHub CLI not found ($gh). Install it or set `$env:LOWPATH_GH." -ForegroundColor Yellow
+            return
+        }
+        $mode = if ($Quick) { 'quick' } else { 'full' }
+        if ($E2E) { $mode += ' + e2e' }
+        $desc = "[$mode] $Description"
+        if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 137) + '...' }
+        & $gh api "repos/$($target.Repo)/statuses/$($target.Sha)" -f state=$State -f context=local-ci -f "description=$desc" | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Reported local-ci = $State on $($target.Sha.Substring(0, 7))." -ForegroundColor Green
+        } else {
+            Write-Host 'Could not report the status to GitHub (is gh signed in, and is the commit pushed?).' -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "Could not report the status to GitHub: $_" -ForegroundColor Yellow
     }
 }
 
@@ -118,6 +153,10 @@ function Invoke-WithEnv([hashtable]$Vars, [scriptblock]$Command) {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
     }
 }
+
+# With -Report, check up front that the result can be published, so a dirty
+# tree is caught before the run instead of after it.
+$reportTarget = if ($Report) { Get-ReportTarget } else { $null }
 
 Push-Location $root
 try {

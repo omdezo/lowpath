@@ -47,9 +47,12 @@ Every change, including maintainers' own, goes through a pull request.
    .\scripts\ci.ps1 -Report          # add -E2E when the UI or app flow changed
    ```
 
-   It refuses to report from a dirty tree, so the check always describes the
-   pushed commit. CI runs on contributors' machines; GitHub Actions is
-   manual-only.
+   It refuses to report from a dirty tree (untracked files included), so the
+   check always describes the pushed commit. CI runs on contributors'
+   machines; GitHub Actions is manual-only. Publishing a status needs write
+   access to the repository and Windows, so for pull requests from forks, or
+   from Linux and macOS (`scripts/ci.sh`), a maintainer runs `-Report` on the
+   PR's head commit.
 6. **Mark the PR ready** when the check is green, the template's testing
    section is filled in, and `CHANGELOG.md` has a line under *Unreleased*.
 7. **Review.** At least one review by someone other than the author, with

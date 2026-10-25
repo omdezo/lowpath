@@ -31,3 +31,6 @@ First public release.
 
 ### Removed
 - Accounts, sign-up, trials and plans: Lowpath is free and open source.
+
+[Unreleased]: https://github.com/omdezo/lowpath/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/omdezo/lowpath/releases/tag/v0.2.0
