@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Runs the quick local CI before every push. Enable once per clone with:
+#   git config core.hooksPath .githooks
+# Skip in an emergency with: git push --no-verify
+set -e
+cd "$(git rev-parse --show-toplevel)"
+if command -v pwsh >/dev/null 2>&1; then
+  pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci.ps1 -Quick
+elif command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci.ps1 -Quick
+else
+  bash scripts/ci.sh
+fi

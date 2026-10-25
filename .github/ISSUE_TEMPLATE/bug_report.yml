@@ -1,0 +1,40 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      placeholder: e.g. VALORANT, CS2, Fortnite
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Capture mode
+      options:
+        - Route mode (automatic)
+        - Proxy mode
+        - Not sure
+  - type: input
+    id: location
+    attributes:
+      label: Your region and ISP
+      placeholder: e.g. Riyadh, Saudi Arabia — STC
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Settings → Advanced → Export diagnostics, or the last lines of `%APPDATA%\Lowpath\lowpath.log`. Remove anything you consider private.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Lowpath version and Windows version
+      placeholder: e.g. 0.2.0 on Windows 11 24H2

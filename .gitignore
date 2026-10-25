@@ -1,0 +1,14 @@
+/bin/
+/dist/
+/ui/node_modules/
+/ui/dist/*
+!/ui/dist/index.html
+/.claude/devdata/
+*.exe
+launch.json
+/e2e/node_modules/
+/e2e/out/
+/.claude/
+IDEA.docx
+/.ci/
+*.tsbuildinfo

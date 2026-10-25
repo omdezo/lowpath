@@ -1,0 +1,75 @@
+name: CI
+
+# CI runs locally: scripts/ci.ps1 (Windows) or scripts/ci.sh (Linux/macOS),
+# and the .githooks/pre-push hook. This workflow is manual-only so it never
+# spends GitHub Actions minutes unless someone starts it on purpose.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags "-H windowsgui -s -w" -o dist/Lowpath.exe ./cmd/lowpath
+          go build -trimpath -o dist/lpcheck.exe ./cmd/lpcheck
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lowpath-windows
+          path: dist/
+
+  relay:
+    name: Linux relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test relay packages
+        run: go test ./internal/relay/... ./internal/proto/... ./internal/dedup/... ./cmd/lpcheck/...
+
+      - name: Build relays
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/relay-linux-amd64 ./cmd/relay
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/relay-linux-arm64 ./cmd/relay
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lowpath-relay-linux
+          path: dist/

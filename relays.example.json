@@ -1,0 +1,10 @@
+{
+  "relays": [
+    { "id": "fra-a", "label": "Frankfurt via Carrier A", "region": "EU-Central", "continent": "Europe", "addr": "203.0.113.10:40001" },
+    { "id": "fra-b", "label": "Frankfurt via Carrier B", "region": "EU-Central", "continent": "Europe", "addr": "203.0.113.11:40001" },
+    { "id": "ams",   "label": "Amsterdam",               "region": "EU-West",    "continent": "Europe", "addr": "198.51.100.5:40001" }
+  ],
+  "games": {
+    "cs2": { "server": "192.0.2.50:27015" }
+  }
+}
