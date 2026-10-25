@@ -1,0 +1,33 @@
+# Changelog
+
+All notable changes to Lowpath are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
+uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Every pull request that changes behaviour adds a line under **Unreleased**.
+
+## [Unreleased]
+
+### Added
+- Local CI publishes its result as the `local-ci` status check on pull
+  requests (`scripts/ci.ps1 -Report`).
+- CODEOWNERS, this changelog, and the pull request process in
+  `CONTRIBUTING.md`.
+
+## [0.2.0] - 2026-10-26
+
+First public release.
+
+### Added
+- Per-process UDP capture on Windows (WinDivert) with injection of replies.
+- Multipath relay overlay with packet duplication and first-copy-wins dedup.
+- Linux relay with access keys, destination policy, flow limits and
+  server-leg ping; forwarding hops; one-command deploy over SSH.
+- Honest before/after measurements (ICMP to the real game server, relay path
+  plus the relay's own ping).
+- One-button UI with real game artwork, route map, live graph and details.
+- Built-in loopback test relay and the `lpcheck` STUN route checker.
+- Unit, internet and end-to-end tests; local CI pipeline.
+
+### Removed
+- Accounts, sign-up, trials and plans: Lowpath is free and open source.

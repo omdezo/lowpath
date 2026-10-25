@@ -21,15 +21,24 @@
 .PARAMETER E2E
     Also run the end-to-end UI test (needs Microsoft Edge).
 
+.PARAMETER Report
+    Publish the result as the GitHub commit status "local-ci" on HEAD, so the
+    pull request shows a green or red check without GitHub Actions. Needs the
+    GitHub CLI (on PATH, or its path in $env:LOWPATH_GH) signed in with repo
+    scope, and a clean working tree (the status must describe exactly the
+    pushed commit).
+
 .EXAMPLE
     .\scripts\ci.ps1
     .\scripts\ci.ps1 -Quick
     .\scripts\ci.ps1 -E2E
+    .\scripts\ci.ps1 -E2E -Report     # before asking for review on a PR
 #>
 [CmdletBinding()]
 param(
     [switch]$Quick,
-    [switch]$E2E
+    [switch]$E2E,
+    [switch]$Report
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,7 +63,43 @@ function Invoke-Stage([string]$Name, [scriptblock]$Body) {
     }
     $sw.Stop()
     $results.Add([pscustomobject]@{ Stage = $Name; Result = if ($ok) { 'PASS' } else { 'FAIL' }; Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) })
-    if (-not $ok) { Show-Summary; Write-Host "Stage '$Name' failed; log: $log" -ForegroundColor Red; exit 1 }
+    if (-not $ok) {
+        Show-Summary
+        Write-Host "Stage '$Name' failed; log: $log" -ForegroundColor Red
+        Publish-Status 'failure' "$Name failed ($(Get-StageList))"
+        exit 1
+    }
+}
+
+function Get-StageList {
+    ($results | ForEach-Object { "$($_.Stage) $($_.Result.ToLower())" }) -join ', '
+}
+
+# Publish-Status records the run as the "local-ci" commit status on GitHub.
+# A dirty tree is refused: the check must describe the commit reviewers see.
+function Publish-Status([string]$State, [string]$Description) {
+    if (-not $Report) { return }
+    $gh = if ($env:LOWPATH_GH) { $env:LOWPATH_GH } else { 'gh' }
+    if (git -C $root status --porcelain --untracked-files=no) {
+        Write-Host 'Not reporting: the working tree has uncommitted changes.' -ForegroundColor Yellow
+        return
+    }
+    $sha = (git -C $root rev-parse HEAD).Trim()
+    $remote = (git -C $root remote get-url origin).Trim()
+    if ($remote -notmatch 'github\.com[:/](?<repo>[^/]+/[^/]+?)(\.git)?$') {
+        Write-Host "Not reporting: origin ($remote) is not a GitHub repository." -ForegroundColor Yellow
+        return
+    }
+    $repo = $Matches['repo']
+    $mode = if ($Quick) { 'quick' } elseif ($E2E) { 'full + e2e' } else { 'full' }
+    $desc = "[$mode] $Description"
+    if ($desc.Length -gt 140) { $desc = $desc.Substring(0, 137) + '...' }
+    & $gh api "repos/$repo/statuses/$sha" -f state=$State -f context=local-ci -f "description=$desc" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Reported local-ci = $State on $($sha.Substring(0, 7))." -ForegroundColor Green
+    } else {
+        Write-Host 'Could not report the status to GitHub.' -ForegroundColor Yellow
+    }
 }
 
 function Show-Summary {
@@ -139,6 +184,8 @@ try {
 
     Show-Summary
     Write-Host 'CI passed.' -ForegroundColor Green
+    $total = [math]::Round(($results | Measure-Object Seconds -Sum).Sum)
+    Publish-Status 'success' "all stages passed in ${total}s ($(Get-StageList))"
 } finally {
     Pop-Location
 }
