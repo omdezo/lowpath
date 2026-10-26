@@ -337,7 +337,7 @@ func (f *fakeCounters) Counters(int) (diag.Counters, error) {
 
 func TestLineWatchFlagsADownloadDuringASession(t *testing.T) {
 	nic := &fakeCounters{at: time.Unix(1000, 0)}
-	w := newLineWatch(nic, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8})
+	w := newLineWatch(nic, nil, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8})
 	started := time.Unix(999, 0)
 	snap := &engine.Snapshot{}
 	step := func(rtt, server float64, rxMbps, gameKBps float64) *diag.PassiveState {
@@ -388,7 +388,7 @@ func TestLineWatchFlagsADownloadDuringASession(t *testing.T) {
 
 func TestLineWatchUnreadableCounters(t *testing.T) {
 	nic := &fakeCounters{at: time.Unix(0, 0), err: errors.New("no adapter")}
-	w := newLineWatch(nic, diag.LineRate{})
+	w := newLineWatch(nic, nil, diag.LineRate{})
 	snap := &engine.Snapshot{After: engine.Stats{RTT: 30, Up: true, Samples: 5}}
 	for i := range 3 {
 		w.tick(time.Unix(int64(i+1), 0), lineInput{snap: snap, started: time.Unix(0, 0)})

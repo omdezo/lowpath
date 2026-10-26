@@ -50,9 +50,42 @@ func (p *Procfs) UDPSockets() ([]Socket, error) {
 	if len(byInode) == 0 {
 		return out, nil
 	}
-	pids, err := p.pids()
+	err := p.eachSocket(func(pid uint32, ino uint64) bool {
+		if local, ok := byInode[ino]; ok {
+			out = append(out, Socket{Local: local, PID: pid})
+		}
+		return true
+	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// SocketOwners maps the socket inodes in want to the PIDs holding them. A
+// socket shared by several processes (inherited across fork) goes to one
+// of them. Sockets of other users' processes have no owner it can see and
+// are left out.
+func (p *Procfs) SocketOwners(want map[uint64]bool) (map[uint64]uint32, error) {
+	out := map[uint64]uint32{}
+	if len(want) == 0 {
+		return out, nil
+	}
+	err := p.eachSocket(func(pid uint32, ino uint64) bool {
+		if _, seen := out[ino]; want[ino] && !seen {
+			out[ino] = pid
+		}
+		return len(out) < len(want)
+	})
+	return out, err
+}
+
+// eachSocket calls f with every socket:[inode] link in /proc/<pid>/fd this
+// process may read, until f returns false.
+func (p *Procfs) eachSocket(f func(pid uint32, ino uint64) bool) error {
+	pids, err := p.pids()
+	if err != nil {
+		return err
 	}
 	for _, pid := range pids {
 		dir := "proc/" + strconv.FormatUint(uint64(pid), 10) + "/fd"
@@ -65,14 +98,12 @@ func (p *Procfs) UDPSockets() ([]Socket, error) {
 			if err != nil {
 				continue
 			}
-			if ino, ok := socketInode(target); ok {
-				if local, ok := byInode[ino]; ok {
-					out = append(out, Socket{Local: local, PID: pid})
-				}
+			if ino, ok := socketInode(target); ok && !f(pid, ino) {
+				return nil
 			}
 		}
 	}
-	return out, nil
+	return nil
 }
 
 func (p *Procfs) ProcessNames() (map[uint32]string, error) {

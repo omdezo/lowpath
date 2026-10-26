@@ -14,6 +14,7 @@ import (
 const (
 	Route     = unix.NETLINK_ROUTE
 	Netfilter = unix.NETLINK_NETFILTER
+	SockDiag  = unix.NETLINK_SOCK_DIAG
 )
 
 // replyTimeout bounds every wait for the kernel, which normally answers in

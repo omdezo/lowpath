@@ -41,6 +41,7 @@ type Fake struct {
 	Service    *Service
 	ServiceAPI *ServiceAPI
 	WiFi       *WiFi
+	Conns      *Conns
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -60,6 +61,7 @@ func New(dir string) *Fake {
 		Service:    &Service{},
 		ServiceAPI: NewServiceAPI(),
 		WiFi:       &WiFi{linkErr: diag.ErrNoWiFi, surveyErr: diag.ErrNoWiFi, tuneErr: diag.ErrNoWiFi},
+		Conns:      &Conns{},
 	}
 }
 
@@ -68,8 +70,49 @@ func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
 		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory, WiFi: f.WiFi,
-		Service: f.Service, ServiceAPI: f.ServiceAPI,
+		Service: f.Service, ServiceAPI: f.ServiceAPI, Conns: f.Conns,
 	}
+}
+
+// Conns is a TCP connection table the test fills in. It starts empty and
+// readable, like a Linux PC with nothing open.
+type Conns struct {
+	mu     sync.Mutex
+	conns  []diag.TCPConn
+	owners map[uint64]uint32
+	err    error
+}
+
+// Set replaces the connections and their owners (by connection ID).
+func (c *Conns) Set(conns []diag.TCPConn, owners map[uint64]uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conns, c.owners = slices.Clone(conns), maps.Clone(owners)
+}
+
+// SetErr makes TCPConns fail with err (errors.ErrUnsupported plays Windows
+// and macOS; nil: work again).
+func (c *Conns) SetErr(err error) { c.mu.Lock(); c.err = err; c.mu.Unlock() }
+
+func (c *Conns) TCPConns() ([]diag.TCPConn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return nil, c.err
+	}
+	return slices.Clone(c.conns), nil
+}
+
+func (c *Conns) Owners(conns []diag.TCPConn) map[uint64]uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[uint64]uint32{}
+	for _, x := range conns {
+		if pid, ok := c.owners[x.ID]; ok {
+			out[x.ID] = pid
+		}
+	}
+	return out
 }
 
 // WiFi is a Wi-Fi adapter the test describes. It starts with no adapter

@@ -19,11 +19,14 @@ const routeRefresh = 10 * time.Second
 
 // lineWatch runs the passive bufferbloat detector during a session: once a
 // second it reads the default interface's byte counters (GetIfEntry2Ex on
-// Windows) and the relay latency from the engine, and flags when other
-// traffic fills the line while the game's ping rises.
+// Windows), the per-connection counters where the OS has them (to leave
+// LAN traffic out and name the busiest program) and the relay latency from
+// the engine, and flags when other traffic fills the line while the game's
+// ping rises.
 type lineWatch struct {
-	net diag.NetStats
-	det *diag.PassiveDetector
+	net   diag.NetStats
+	det   *diag.PassiveDetector
+	split *diag.ConnWatch
 
 	// Only the watch goroutine touches these.
 	meter    *diag.Meter
@@ -40,8 +43,12 @@ type lineWatch struct {
 	newLine *diag.LineRate     // from a test that just finished, for the next tick
 }
 
-func newLineWatch(ns diag.NetStats, line diag.LineRate) *lineWatch {
-	return &lineWatch{net: ns, det: diag.NewPassiveDetector(diag.PassiveConfig{}, line), meter: diag.NewMeter()}
+// newLineWatch watches ns; split may be nil (no per-connection counters).
+func newLineWatch(ns diag.NetStats, split *diag.ConnWatch, line diag.LineRate) *lineWatch {
+	if split == nil {
+		split = diag.NewConnWatch(nil, nil)
+	}
+	return &lineWatch{net: ns, det: diag.NewPassiveDetector(diag.PassiveConfig{}, line), split: split, meter: diag.NewMeter()}
 }
 
 // lineRate is the line rate a finished bufferbloat test measured.
@@ -127,7 +134,17 @@ func (w *lineWatch) tick(now time.Time, in lineInput) {
 	if in.snap == nil {
 		w.set(nil)
 		w.sessKey = time.Time{}
+		w.split.Reset()
 		return
+	}
+	// Per-connection counters only during a session, every second of it,
+	// so each sample has the previous second to compare with.
+	var conns diag.ConnSample
+	connsOK := false
+	if rateOK {
+		conns, connsOK = w.split.Sample(now, w.route.Index)
+	} else {
+		w.split.Reset()
 	}
 	snap := in.snap
 	if !in.started.Equal(w.sessKey) {
@@ -138,6 +155,9 @@ func (w *lineWatch) tick(now time.Time, in lineInput) {
 		return
 	}
 	s := diag.PassiveSample{At: now, Rx: tp.RxBps, Tx: tp.TxBps, RateKnown: rateOK}
+	if connsOK {
+		s.LANRx, s.LANTx, s.LANKnown, s.Talkers = conns.LANRx, conns.LANTx, true, conns.Talkers
+	}
 	if dt := now.Sub(w.wireAt).Seconds(); dt > 0 && snap.WireUp >= w.wireUp && snap.WireDown >= w.wireDown {
 		s.OwnTx = float64(snap.WireUp-w.wireUp) / dt
 		s.OwnRx = float64(snap.WireDown-w.wireDown) / dt

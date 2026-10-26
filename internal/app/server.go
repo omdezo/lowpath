@@ -247,7 +247,7 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:        newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		line:        newLineWatch(cfg.NetStats, diag.NewConnWatch(cfg.Platform.Conns, cfg.Platform.Owners.ProcessNames), lineRate(cfg.Store.Bloat())),
 		verdict:     newVerdicts(cfg.NetStats),
 		wifi:        newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
 		marker:      cfg.Marker,
