@@ -701,7 +701,13 @@ catalog entry or not:
   multicast, broadcast.
 - **Network**: RIPEstat (`network-info`, `as-overview`, `maxmind-geo-lite`),
   cached 24 h, looked up in the background; private, CGNAT and loopback
-  addresses are never sent. `NetworkInfo` gains `lat`/`lon` when GeoLite2
+  addresses are never sent. The card keeps an answer 1 h and a failure
+  1 min, but one spoiled by a timeout or a busy registry (`diag.Transient`,
+  `NetworkInfo.Transient`: a failure, or an ISP or city missing for that
+  reason) only 3 s, like the cache under it; spoiled lookups in a row wait
+  6, 12 … up to 60 s. While an address is looked up again the card keeps
+  showing the last answer, and a timeout never replaces a network it
+  already knows. `NetworkInfo` gains `lat`/`lon` when GeoLite2
   names a city (a country-only answer's point is its center, useless here).
   The diagnostics report drops them (`Location.Redacted`).
 - **City check** (`catalog.CheckGeo`): light in fibre covers ≈ 204 km/ms
