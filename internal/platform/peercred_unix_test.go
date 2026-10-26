@@ -88,10 +88,21 @@ func TestSocketAPIPeerCheckAsRoot(t *testing.T) {
 	}
 	dir := socketDir(t)
 	os.Chmod(dir, 0o755) // other accounts reach the socket in it
-	exe, err := os.Executable()
+	// go test builds this binary in a root-only (0700) folder, so the
+	// children run a copy the other accounts can reach.
+	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "child.test")
+	if err := os.WriteFile(exe, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(exe, 0o755) // whatever the umask
 	ask := func(t *testing.T, path string, uid uint32) string {
 		t.Helper()
 		cmd := exec.Command(exe, "-test.run=^TestPeerChild$", "-test.v")
