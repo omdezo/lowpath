@@ -70,7 +70,9 @@ func newOwners(processes []string, pids []uint32, self uint32, os owner.Resolver
 }
 
 // normalizeName lower-cases an image name and adds ".exe" when there is no
-// extension, so "CS2" matches cs2.exe.
+// extension, so "CS2" matches cs2.exe. Both sides go through it, so a native
+// Linux program ("cs2", "lpcheck") also matches a game listed by its
+// Windows name.
 func normalizeName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s != "" && !strings.Contains(s, ".") {
@@ -189,7 +191,7 @@ func (o *owners) rebuild() error {
 		}
 	}
 	for pid, name := range o.known {
-		if pid != o.self && (o.pids[pid] || o.names[strings.ToLower(name)]) {
+		if pid != o.self && (o.pids[pid] || o.names[normalizeName(name)]) {
 			t.game[pid] = true
 			t.pids = append(t.pids, pid)
 		}

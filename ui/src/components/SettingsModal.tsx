@@ -126,7 +126,7 @@ export function SettingsModal(props: Props) {
                           {m.title}
                           {m.id === "route" && <span className="tag tag-accent">Recommended</span>}
                         </span>
-                        <span className="d">{m.desc}</span>
+                        <span className="d">{m.desc(platform?.os)}</span>
                       </span>
                     </button>
                   ))}
@@ -215,16 +215,19 @@ export function SettingsModal(props: Props) {
   );
 }
 
-const CAPTURE_MODES: { id: CaptureMode; title: string; desc: string }[] = [
+// desc takes the platform's OS: route mode needs different rights on each.
+const CAPTURE_MODES: { id: CaptureMode; title: string; desc: (os?: string) => string }[] = [
   {
     id: "route",
     title: "Route mode",
-    desc: "Captures the game's traffic automatically, with nothing to change in the game. Needs administrator rights.",
+    desc: (os) =>
+      "Captures the game's traffic automatically, with nothing to change in the game. " +
+      (os === "linux" ? "Needs root rights or the CAP_NET_ADMIN and CAP_NET_RAW capabilities." : "Needs administrator rights."),
   },
   {
     id: "proxy",
     title: "Proxy mode",
-    desc: "Point the game at a local Lowpath port. Only works for games that let you type a server address.",
+    desc: () => "Point the game at a local Lowpath port. Only works for games that let you type a server address.",
   },
 ];
 
