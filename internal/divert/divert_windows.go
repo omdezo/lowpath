@@ -5,7 +5,6 @@ package divert
 import (
 	"bytes"
 	_ "embed"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -268,25 +267,31 @@ func (h *Handle) shutdown(how uintptr) error {
 //
 // Calls that are already running when Close starts finish first: Close
 // shuts down receiving so that a blocked Recv returns, and waits up to
-// releaseWait for them. A call still running after that is stuck in the
-// driver. Close releases the handle anyway, and reports how many calls it
-// left: a capture that is failing open must not hang on its own handle.
+// releaseWait for them. A call still running after that is stuck. Close
+// returns an error saying so, without waiting any longer, and the handle is
+// released when that call returns: releasing it under the call would let
+// the call reach whatever object Windows gives the value next, and a
+// shut-down handle no longer diverts anything (the driver passes new
+// packets straight on), so the capture fails open either way.
 func (h *Handle) Close() error {
 	inFlight, first := h.gate.shut()
 	if !first {
 		return nil
 	}
-	var stuck error
 	if inFlight > 0 {
 		syscall.SyscallN(h.procs.shutdown, h.h, shutdownRecv) // the caller may not have; the driver accepts a repeat
 		if n := h.gate.wait(releaseWait); n > 0 {
-			stuck = fmt.Errorf("divert: close: calls still running after %v: %d", releaseWait, n)
+			go func() {
+				<-h.gate.drained
+				syscall.SyscallN(h.procs.close, h.h)
+			}()
+			return fmt.Errorf("divert: close: %d calls still running after %v; the handle is released when they return", n, releaseWait)
 		}
 	}
 	if r, _, errno := syscall.SyscallN(h.procs.close, h.h); r == 0 {
-		return errors.Join(stuck, fmt.Errorf("divert: close: %w", errno))
+		return fmt.Errorf("divert: close: %w", errno)
 	}
-	return stuck
+	return nil
 }
 
 func (h *Handle) SetParam(p Param, v uint64) error {

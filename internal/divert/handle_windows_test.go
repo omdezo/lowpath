@@ -201,8 +201,9 @@ func TestCloseReleasesBlockedRecv(t *testing.T) {
 	}
 }
 
-// A call stuck in the driver can't keep the handle (and the diversion) alive:
-// Close gives up after releaseWait, releases it and says so.
+// A call stuck in the driver can't hold Close up: Close gives up after
+// releaseWait and says so, and the handle is released only once that call
+// has returned, never under it.
 func TestCloseGivesUpOnStuckCall(t *testing.T) {
 	old := releaseWait
 	releaseWait = 20 * time.Millisecond
@@ -224,12 +225,26 @@ func TestCloseGivesUpOnStuckCall(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "still running") {
 		t.Fatalf("Close with a stuck Send: %v", err)
 	}
-	if !f.released.Load() {
-		t.Fatal("handle not released")
+	if f.released.Load() {
+		t.Fatal("handle released while the stuck Send was still in the driver")
 	}
 	close(f.sendGate)
 	if err := <-sent; err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !f.released.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("handle never released after the stuck Send returned")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	want := []string{"shutdown", "send returned", "close"}
+	if got := f.events(); !slices.Equal(got, want) {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+	if n := f.closes.Load(); n != 1 {
+		t.Fatalf("WinDivertClose called %d times, want 1", n)
 	}
 }
 
