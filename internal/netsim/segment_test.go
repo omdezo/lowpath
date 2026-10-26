@@ -2,6 +2,7 @@ package netsim
 
 import (
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -11,25 +12,31 @@ type clockAt struct{ now time.Duration }
 
 func (c *clockAt) read() time.Duration { return c.now }
 
+// liveClock is a fake clock that timers may read while the test moves it.
+type liveClock struct{ now atomic.Int64 }
+
+func (c *liveClock) read() time.Duration  { return time.Duration(c.now.Load()) }
+func (c *liveClock) set(at time.Duration) { c.now.Store(int64(at)) }
+
 // testLink is a Link without sockets: send runs the real impairment path,
 // on the test's clock.
-func testLink(p Profile, c *clockAt) *Link {
-	l := &Link{clock: c.read, imp: newImpairer(p.Seed)}
+func testLink(p Profile, clock func() time.Duration) *Link {
+	l := &Link{clock: clock, imp: newImpairer(p.Seed)}
 	l.profile.Store(&p)
 	return l
 }
 
-func testSegment(p Profile, c *clockAt) *Segment {
+func testSegment(p Profile, clock func() time.Duration) *Segment {
 	s := NewSegment(p)
-	s.clock = c.read
+	s.clock = clock
 	return s
 }
 
-// delivered sends one packet over l and reports whether it got through
-// (zero-delay profiles deliver synchronously).
+// delivered sends one packet from the client over l and reports whether it
+// got through (zero-delay profiles deliver synchronously).
 func delivered(l *Link) bool {
 	got := false
-	l.send([]byte{1}, func([]byte) { got = true })
+	l.send([]byte{1}, false, func([]byte) { got = true })
 	return got
 }
 
@@ -46,13 +53,13 @@ func TestSharedSegmentCorrelatesLanes(t *testing.T) {
 	type result struct{ lostA, lostB, both float64 }
 	run := func(shift time.Duration, shared bool) result {
 		c := &clockAt{}
-		a, b := testLink(Profile{Seed: 21}, c), testLink(Profile{Seed: 22}, c)
-		segA := testSegment(wifi, c)
+		a, b := testLink(Profile{Seed: 21}, c.read), testLink(Profile{Seed: 22}, c.read)
+		segA := testSegment(wifi, c.read)
 		segB := segA
 		if !shared {
 			other := wifi
 			other.Seed = 12
-			segB = testSegment(other, c)
+			segB = testSegment(other, c.read)
 		}
 		a.SetSegment(segA)
 		b.SetSegment(segB)
@@ -124,8 +131,8 @@ func TestSharedSegmentCorrelatesLanes(t *testing.T) {
 // detached link no longer sees it.
 func TestSegmentAddsToLink(t *testing.T) {
 	c := &clockAt{}
-	l := testLink(Profile{Delay: 20 * time.Millisecond}, c)
-	seg := testSegment(Profile{Delay: 3 * time.Millisecond}, c)
+	l := testLink(Profile{Delay: 20 * time.Millisecond}, c.read)
+	seg := testSegment(Profile{Delay: 3 * time.Millisecond}, c.read)
 	l.SetSegment(seg)
 	if l.Segment() != seg {
 		t.Fatal("Segment() doesn't return the attached segment")
@@ -135,7 +142,7 @@ func TestSegmentAddsToLink(t *testing.T) {
 	}
 	sent := make(chan time.Time, 1)
 	start := time.Now()
-	l.send([]byte{1}, func([]byte) { sent <- time.Now() })
+	l.send([]byte{1}, false, func([]byte) { sent <- time.Now() })
 	if got := (<-sent).Sub(start); got < 23*time.Millisecond {
 		t.Errorf("delivered after %v, want at least link 20 ms + segment 3 ms", got)
 	}
@@ -153,6 +160,42 @@ func TestSegmentAddsToLink(t *testing.T) {
 	}
 	if seg.Profile().Loss != 1 {
 		t.Error("Profile() doesn't return the segment's profile")
+	}
+}
+
+// TestSegmentMeetsRepliesOnArrival: the segment is on the client's side,
+// so a packet from the client meets it when sent and a reply only once the
+// link's delay is over. The segment here loses everything in the first
+// 10 ms of each hour; the link takes 200 ms.
+func TestSegmentMeetsRepliesOnArrival(t *testing.T) {
+	const hold = 200 * time.Millisecond
+	fade := Profile{SpikeEvery: time.Hour, SpikeLen: 10 * time.Millisecond, SpikeLoss: 1}
+	c := &liveClock{}
+	l := testLink(Profile{Delay: hold}, c.read)
+	l.SetSegment(testSegment(fade, c.read))
+	got := func(reply bool, then time.Duration) bool {
+		done := make(chan struct{}, 1)
+		l.send([]byte{1}, reply, func([]byte) { done <- struct{}{} })
+		c.set(then) // well before the link's 200 ms are over
+		select {
+		case <-done:
+			return true
+		case <-time.After(hold + 300*time.Millisecond):
+			return false
+		}
+	}
+
+	c.set(0)
+	if got(false, 50*time.Millisecond) {
+		t.Error("a packet from the client crossed the segment during its fade")
+	}
+	c.set(0)
+	if !got(true, 50*time.Millisecond) {
+		t.Error("a reply sent during the fade was lost, though it reached the segment after it")
+	}
+	c.set(50 * time.Millisecond)
+	if got(true, time.Hour+5*time.Millisecond) {
+		t.Error("a reply that reached the segment during the next fade got through")
 	}
 }
 

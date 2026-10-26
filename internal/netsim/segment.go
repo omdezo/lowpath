@@ -8,11 +8,12 @@ import (
 // Segment is a hop that several links share, such as the player's Wi-Fi or
 // home router in front of every lane. Its profile applies to each packet of
 // every link behind it, in both directions, from one shared state, on top
-// of the link's own profile. So two lanes behind one bursty Segment lose
-// packets together, as they do at home: duplicates sent at the same
-// instant don't survive a Wi-Fi fade, and a copy shifted in time gets
-// through only once the shift spans a few mean bursts (roadmap L2; see
-// GilbertElliott.JointLoss).
+// of the link's own profile. It stands on the client's side of each link,
+// so replies meet it once the link's delay is over. Two lanes behind one
+// bursty Segment lose packets together, as they do at home: duplicates
+// sent at the same instant don't survive a Wi-Fi fade, and a copy shifted
+// in time gets through only once the shift spans a few mean bursts
+// (roadmap L2; see GilbertElliott.JointLoss).
 //
 // Use a time-stepped Burst (GilbertTime) for a shared radio: a per-packet
 // chain would step on each lane's packets in turn.

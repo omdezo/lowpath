@@ -72,6 +72,8 @@ func (l *Link) SetProfile(p Profile) { l.profile.Store(&p) }
 
 // SetSegment puts the link behind a shared hop, or takes it out with nil.
 // Packets in both directions then cross the segment as well as the link.
+// The segment is on the client's side (the address Listen took): packets
+// from the client cross it first, replies once the link's delay is over.
 func (l *Link) SetSegment(s *Segment) { l.segment.Store(s) }
 
 func (l *Link) Segment() *Segment { return l.segment.Load() }
@@ -100,7 +102,7 @@ func (l *Link) Serve(ctx context.Context) error {
 			continue
 		}
 		pkt := append([]byte(nil), buf[:n]...)
-		l.send(pkt, func(b []byte) { up.Write(b) })
+		l.send(pkt, false, func(b []byte) { up.Write(b) })
 	}
 }
 
@@ -123,29 +125,48 @@ func (l *Link) peer(src netip.AddrPort) *net.UDPConn {
 				return
 			}
 			pkt := append([]byte(nil), buf[:n]...)
-			l.send(pkt, func(b []byte) { l.listen.WriteToUDPAddrPort(b, src) })
+			l.send(pkt, true, func(b []byte) { l.listen.WriteToUDPAddrPort(b, src) })
 		}
 	}()
 	return c
 }
 
-func (l *Link) send(pkt []byte, write func([]byte)) {
+// send impairs one packet; reply is true for the target's direction. A
+// reply meets the segment when it gets there, after the link's delay: two
+// lanes' copies sent at once with different delays reach the Wi-Fi apart
+// and don't share a fade.
+func (l *Link) send(pkt []byte, reply bool, write func([]byte)) {
 	drop, delay := l.imp.decide(l.profile.Load(), l.clock())
-	if s := l.segment.Load(); s != nil {
+	s := l.segment.Load()
+	if s != nil && (!reply || drop) {
 		// Decided even when the link already drops the packet, so the
 		// segment's state moves the same way whatever the link does.
 		segDrop, segDelay := s.decide()
 		drop = drop || segDrop
 		delay += segDelay
+		s = nil
 	}
 	if drop {
 		return
 	}
-	if delay <= 0 {
-		write(pkt)
+	after(delay, func() {
+		if s == nil {
+			write(pkt)
+			return
+		}
+		if segDrop, segDelay := s.decide(); !segDrop {
+			after(segDelay, func() { write(pkt) })
+		}
+	})
+}
+
+// after runs f once d has passed, at once when d isn't positive.
+func after(d time.Duration, f func()) {
+	if d <= 0 {
+		f()
 		return
 	}
-	time.AfterFunc(delay, func() { write(pkt) })
+	time.AfterFunc(d, f)
 }
 
 // sinceNow is a clock that starts now (monotonic).
