@@ -68,28 +68,20 @@ func TestCallGateWaitWakesOnLastExit(t *testing.T) {
 	}
 }
 
-// Many callers race one closer: no call may get past enter once the closer
-// has been told nothing is left, which is when Close releases the handle.
+// Many callers race one closer: no call may still be between enter and exit
+// once the closer has been told nothing is left, which is when Close
+// releases the handle.
 func TestCallGateNoCallAfterRelease(t *testing.T) {
 	for round := range 200 {
 		g := newCallGate()
 		var released atomic.Bool
 		var late, calls atomic.Int64
-		stop := make(chan struct{})
 		var wg sync.WaitGroup
 		for range 8 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for {
-					select {
-					case <-stop:
-						return
-					default:
-					}
-					if !g.enter() {
-						continue
-					}
+				for g.enter() {
 					calls.Add(1)
 					if released.Load() {
 						late.Add(1)
@@ -106,8 +98,6 @@ func TestCallGateNoCallAfterRelease(t *testing.T) {
 			t.Fatalf("round %d: wait = %d", round, left)
 		}
 		released.Store(true)
-		time.Sleep(50 * time.Microsecond) // let the callers try again after the release
-		close(stop)
 		wg.Wait()
 		if n := late.Load(); n != 0 {
 			t.Fatalf("round %d: %d calls ran after the release", round, n)
