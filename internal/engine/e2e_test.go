@@ -182,10 +182,12 @@ func TestPicksBestPathsAndMeasures(t *testing.T) {
 
 	// Degrade the fast path badly: auto-switch must replace it with "slow".
 	// It takes a few seconds of probes for the loss to show; how many
-	// depends on how busy the machine is, so wait for the switch.
+	// depends on how busy the machine is, so wait for the switch. Only a
+	// switch logged after the degrade counts.
+	degraded := time.Now()
 	net.Links["fast"].SetProfile(netsim.Profile{Delay: 5 * time.Millisecond, Loss: 0.6})
 	switched := func(s engine.Snapshot) bool {
-		return slices.ContainsFunc(s.Events, func(ev engine.Event) bool { return ev.Kind == "switch" })
+		return slices.ContainsFunc(s.Events, func(ev engine.Event) bool { return ev.Kind == "switch" && !ev.TS.Before(degraded) })
 	}
 	waitFor(t, 15*time.Second, func() bool {
 		s = e.Snapshot()
@@ -195,7 +197,7 @@ func TestPicksBestPathsAndMeasures(t *testing.T) {
 		t.Errorf("active paths %v after degrading fast, want ok+slow", a)
 	}
 	if !switched(s) {
-		t.Errorf("no switch event: %+v", s.Events)
+		t.Errorf("no switch event after degrading fast: %+v", s.Events)
 	}
 }
 
