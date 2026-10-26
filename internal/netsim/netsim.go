@@ -32,7 +32,9 @@ type Profile struct {
 	Burst GilbertElliott `json:"burst,omitzero"`
 
 	// Seed makes the random choices (loss, bursts, jitter) repeat exactly
-	// from run to run, for tests; 0 picks a random one.
+	// from run to run, for tests; 0 picks a random one. Give each link and
+	// segment its own: two with the same Seed make the same choices, so
+	// their losses would line up.
 	Seed uint64 `json:"seed,omitempty"`
 }
 
