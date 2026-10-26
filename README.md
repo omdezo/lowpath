@@ -44,6 +44,7 @@ paths at once** so a loss on one path never reaches you, and shows you
 | **Kill switch** | If every route fails, block the game's traffic or fall back to the direct route — your choice. |
 | **Honest measurements** | Before = your direct ping to the real game server. After = relay path + the relay's own ping to the server. No made-up numbers. |
 | **Bufferbloat test** | Settings → Diagnostics grades how much your ping rises when the line is full (A+ to F); during a boost a banner says when a download or stream is filling your connection. |
+| **Route trace (MTR)** | Settings → Diagnostics measures loss and delay at every router to a relay or server, 200 times each, and says where loss that reaches the destination starts; routers that only skip answering aren't blamed. Over ICMP, or UDP to your relay's port. Exports a text report. |
 | **Live route map** | See *You → Relay → Game server* with the latency of each leg, plus a 60 s live graph. |
 | **Real game art** | Covers, banners and logos from your Steam library, and icons from your installed games. |
 | **Any game** | 22 popular games built in; add any other program that uses UDP in two clicks. |
