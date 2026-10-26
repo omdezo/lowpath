@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -158,9 +159,18 @@ func isDir(p string) bool {
 
 // dirKey identifies a folder for de-duplication: ~/.steam/steam is a link
 // to ~/.local/share/Steam, and Windows paths differ in case.
-func dirKey(p string) string {
+func dirKey(p string) string { return foldKey(runtime.GOOS, p) }
+
+// foldKey is dirKey for goos. Only Windows and macOS file systems ignore
+// case by default; on Linux "Games/Overwatch" and "Games/overwatch" are two
+// folders and both must be kept.
+func foldKey(goos, p string) string {
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		p = r
 	}
-	return strings.ToLower(filepath.Clean(p))
+	p = filepath.Clean(p)
+	if goos == "windows" || goos == "darwin" {
+		p = strings.ToLower(p)
+	}
+	return p
 }

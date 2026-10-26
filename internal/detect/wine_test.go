@@ -238,3 +238,14 @@ func TestSteamLinkedTwiceListedOnce(t *testing.T) {
 		t.Errorf("SteamRoots = %q", got)
 	}
 }
+
+// Folders that differ only in case are one folder on Windows and macOS but
+// two on Linux, where both must be kept.
+func TestFoldKeyCase(t *testing.T) {
+	a, b := filepath.Join("no", "such", "Games", "Overwatch"), filepath.Join("no", "such", "Games", "overwatch")
+	for goos, same := range map[string]bool{"windows": true, "darwin": true, "linux": false} {
+		if got := foldKey(goos, a) == foldKey(goos, b); got != same {
+			t.Errorf("%s: same key = %v, want %v", goos, got, same)
+		}
+	}
+}

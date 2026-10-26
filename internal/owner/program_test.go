@@ -33,6 +33,16 @@ func TestProgramNames(t *testing.T) {
 			Program{PID: 8, Name: "game", Names: []string{"game"}, Exe: "/g/game"}},
 		{"a name with spaces under Wine", procFacts{pid: 9, comm: "League of Legen", argv0: `C:\Riot Games\League of Legends\League of Legends.exe`},
 			Program{PID: 9, Name: "League of Legends.exe", Names: []string{"League of Legends.exe", "League of Legen"}}},
+		{"wine started with a Unix path that has spaces (Lutris)", procFacts{pid: 10, comm: "VALORANT-Win64-", exe: "/usr/bin/wine64-preloader",
+			argv0: "/home/player/Games/valorant/drive_c/Riot Games/VALORANT/live/ShooterGame/Binaries/Win64/VALORANT-Win64-Shipping.exe"},
+			Program{PID: 10, Name: "VALORANT-Win64-Shipping.exe", Names: []string{"VALORANT-Win64-Shipping.exe", "VALORANT-Win64-", "wine64-preloader"},
+				Exe: "/home/player/Games/valorant/drive_c/Riot Games/VALORANT/live/ShooterGame/Binaries/Win64/VALORANT-Win64-Shipping.exe"}},
+		{"wine with a bare name in argv0", procFacts{pid: 11, comm: "TslGame.exe", exe: "/opt/proton/files/bin/wine-preloader", argv0: "TslGame.exe"},
+			Program{PID: 11, Name: "TslGame.exe", Names: []string{"TslGame.exe", "wine-preloader"}}},
+		{"wine loader with nothing to run", procFacts{pid: 12, comm: "wine64", exe: "/usr/bin/wine64"},
+			Program{PID: 12, Name: "wine64", Names: []string{"wine64"}, Exe: "/usr/bin/wine64"}},
+		{"not a loader: a space still means a rewritten command line", procFacts{pid: 13, comm: "helper", exe: "/usr/bin/winetool", argv0: "/usr/bin/winetool --opt x"},
+			Program{PID: 13, Name: "winetool", Names: []string{"winetool", "helper"}, Exe: "/usr/bin/winetool"}},
 	} {
 		if got := c.in.program(); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)

@@ -39,21 +39,43 @@ func lastElem(s string) string {
 	return s
 }
 
+// wineLoader reports whether file is a program a Windows program runs from
+// under Wine, Proton, CrossOver or Whisky.
+func wineLoader(file string) bool {
+	switch file {
+	case "wine", "wine64", "wine-preloader", "wine64-preloader", "wineloader", "wineloader64":
+		return true
+	}
+	return false
+}
+
 func (f procFacts) program() Program {
 	p := Program{PID: f.pid, Exe: f.exe}
+	file := lastElem(f.exe)
 	wine := winePath(f.argv0)
+	// Wine's argv[0] is one token of the Windows command line, or what was
+	// passed to wine for the first process, so it may hold spaces: a drive
+	// path, a Unix path ("wine /home/p/Games/x/drive_c/Program
+	// Files/X/x.exe", as Lutris runs games) or a bare name ("x.exe").
+	loaded := !wine && f.argv0 != "" && wineLoader(file)
 	arg := lastElem(f.argv0)
-	if !wine && strings.ContainsAny(f.argv0, " \t") {
+	if !wine && !loaded && strings.ContainsAny(f.argv0, " \t") {
 		// A program that rewrote its command line into one string
 		// ("/opt/app/app --type=zygote"): the last element is not a name.
 		arg = ""
 	}
-	file := lastElem(f.exe)
 	switch {
 	case wine && arg != "":
 		// A Windows program under Wine or Proton: the program file is the
 		// Wine loader, argv[0] the game.
 		p.Name, p.Exe = arg, f.wineFile()
+	case loaded && arg != "":
+		// The same with a Unix path or a bare name in argv[0]. The game's
+		// file is known only from an absolute path; the loader's is not it.
+		p.Name, p.Exe = arg, ""
+		if path.IsAbs(f.argv0) {
+			p.Exe = path.Clean(f.argv0)
+		}
 	case file != "":
 		p.Name = file
 	case arg != "" && f.comm != "" && strings.HasPrefix(arg, f.comm):
