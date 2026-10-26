@@ -390,14 +390,29 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `network-info` (prefix, origin ASNs), then `as-overview` (holder, split
   into handle and ISP name) and `maxmind-geo-lite` (country, city) in
   parallel; those two may fail alone (`partial`). `CachedLookup` keeps an
-  answer per address for 24 h, a partial one 10 min, a failure 30 s.
+  answer per address for 24 h, a partial one 10 min, a failure 30 s, and a
+  failure or missing part caused by a timeout or a busy server 3 s.
   Private, CGNAT and loopback answers are never sent to the registry.
-- One lookup runs at a time, with a 12 s budget that does not depend on a
+- RIPEstat's proxy sometimes holds a request for 5 to 20 s and then
+  answers 502, while the same query sent again answers in 0.4 s (its
+  `process_time` is about 10 ms either way). So each registry call is
+  hedged ("The Tail at Scale"; gRPC's `hedgingDelay`): a second copy goes
+  out on a fresh connection after 2.5 s without a reply, or at once after a
+  timeout, reset or HTTP 500/502/503/504, and the first good reply wins.
+  At most two copies; a 429, an error status, a certificate that does not
+  verify or a DNS "no such host" is never repeated; at most 6 requests in
+  flight (RIPEstat allows 8 per address) for the whole app, since the
+  Network card and the Current server card share one client, and a hedge
+  is skipped when none is free. `whats-my-ip` is not hedged.
+- One lookup runs at a time, with a 15 s budget that does not depend on a
   caller who gives up; a result is reused for 2 min (an offline or partial
-  one for 15 s) unless `refresh=1`.
+  one for 15 s, one spoiled by a slow or busy registry 4 s) unless
+  `refresh=1`.
   States: `ok`; `partial` (IP known, ISP not: `message` says why);
   `offline` (no IP: `message` says why). No IPv6 is normal and only sets
-  `ipv6_note`.
+  `ipv6_note`. `retry_after_s` is set when the ISP is unknown only because
+  the registry was slow or busy; the Network pane then asks once more by
+  itself after that wait (without `refresh`), and says "Trying again…".
 - Lowpath never captures its own process, so this is the user's own line
   even while a game is routed through a relay.
 - `/api/diagnostics` includes the last location with addresses cut to /24
@@ -652,7 +667,7 @@ Game view adds `"custom": bool` and keeps `"processes": string[]`.
 | POST | /api/games/custom | `{name, process}` | `Game` (id `custom-<slug>`) |
 | DELETE | /api/games/custom/{id} | | `{ok: true}` |
 | POST | /api/elevate | | `{ok: true}` then the app restarts elevated |
-| GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
+| GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note, retry_after_s}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
 | GET | /api/games/{id}/servers | | `ServerList` (below); starts a download/ping round when due |
 | POST | /api/games/{id}/servers/ping | | `ServerList`; pings every POP again now |
 

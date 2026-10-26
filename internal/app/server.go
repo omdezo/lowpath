@@ -206,11 +206,18 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 		cfg.BloatLoader = l
 	}
+	// One RIPEstat client for the Network card and the Current server card,
+	// so its cap on requests in flight holds for the whole app (RIPEstat
+	// allows 8 at once per address).
+	var ripe *diag.RIPEstat
+	if cfg.Locator == nil || cfg.ServerLookup == nil {
+		ripe = diag.NewRIPEstat(diag.RIPEstatOptions{})
+	}
 	if cfg.Locator == nil {
-		cfg.Locator = diag.NewInternetLocator()
+		cfg.Locator = diag.NewInternetLocator(ripe)
 	}
 	if cfg.ServerLookup == nil {
-		cfg.ServerLookup = diag.NewCachedLookup(diag.NewRIPEstat(diag.RIPEstatOptions{}), diag.CacheOptions{Max: 256})
+		cfg.ServerLookup = diag.NewCachedLookup(ripe, diag.CacheOptions{Max: 256})
 	}
 	life, endLife := context.WithCancel(context.Background())
 	s := &Server{

@@ -421,6 +421,10 @@ export interface NetLocation {
   ipv4: Endpoint | null;
   ipv6: Endpoint | null;
   ipv6_note?: string;
+  // Set when the ISP is unknown only because the registry was slow or
+  // busy: asking again (without refresh) after this many seconds usually
+  // gets it.
+  retry_after_s?: number;
 }
 
 // GET /api/games/{id}/current-server: the server the game is talking to
