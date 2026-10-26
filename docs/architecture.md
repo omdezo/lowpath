@@ -194,6 +194,54 @@ How it works:
 - Several receive goroutines (2–4) on the handle for throughput.
 - Packet parse/build lives in a platform-neutral file with unit tests.
 
+### Fail-open (C5)
+
+A capture that stops working must never leave the game (or the rest of the
+PC's UDP) stuck in the driver's queue. Three layers make sure it doesn't:
+
+- **The OS.** When the process ends for any reason (`taskkill /F`, a
+  crash, a Go panic) Windows closes its handles; WinDivert's cleanup
+  callback then reinjects the packets still queued and its destroy
+  callback deletes the handle's WFP filters, so matching traffic goes out
+  directly again with nothing left behind. The driver service itself is
+  removed by WinDivert at the next reboot.
+- **The capture watchdog**, inside `capture.Capture`. Each receive worker
+  flips a counter when it starts and finishes a packet (two atomic adds, no
+  clock in the hot path); a watchdog goroutine checks every 100 ms and,
+  when one packet has been in the handler for `Config.StallLimit` (500 ms),
+  stops the capture: shut down receiving, wait at most 200 ms for the
+  workers, close the handle. A panic in the packet path (the engine's
+  `Send`, owner lookup) is recovered and does the same, and so do 100
+  receive errors in a row (driver stopped). Worst case from a stuck engine
+  to direct traffic: about 0.8 s. A tick that arrives late (the PC slept)
+  restarts the clock instead of counting the sleep.
+- **The app.** `Session.Done()` closes when the capture has stopped, and
+  `Session.Err()` says why when it stopped on its own. The app then ends the
+  session (stopping the engine with a 2 s bound, since a stuck engine may
+  never return), and the live view's `failsafe` says what happened.
+
+Leftovers from a run that never got to clean up are handled at the next
+start: the app keeps `<data>\capture-session.json` (`capture.MarkerFile`:
+backend, PID, image name, game, start time) while a route-mode session runs
+and removes it on Stop. If the file is there at start and its PID is not a
+running process of that name, the app calls `Backend.Recover(marker)`,
+removes the file and shows a notice. WinDivert has nothing to undo (see
+above); TUN routes and WFP filters from future backends are undone there. A
+marker whose process is still running is left alone. A Go crash also writes
+its stack to `<data>\crash.log` (`debug.SetCrashOutput`).
+
+```go
+type Session interface {
+    ...
+    Done() <-chan struct{} // closed once capture has stopped, by Close or on its own
+    Err() error            // why it stopped on its own; nil after Close
+}
+type Backend interface {
+    ...
+    Recover(m Marker) error // undo what a session that never closed left behind
+}
+```
+
 ## Engine — capture mode
 
 Keep proxy mode and every existing test passing. Additions:

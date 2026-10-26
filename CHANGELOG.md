@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Fail-open watchdog: a stuck or crashed packet handler, a stopped driver
+  or a killed app puts the game back on the direct connection within a
+  second; the app ends the session and says why, and the next start cleans
+  up after a run that never closed (#7).
 - Valve server list: Counter-Strike 2, Dota 2 and Deadlock show their Steam
   Datagram Relay data centers with live ping and loss on the game page,
   refreshed in the background and cached for offline starts (#16).
