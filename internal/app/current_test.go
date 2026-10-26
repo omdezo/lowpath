@@ -491,13 +491,31 @@ func TestCurrentServerResetDoesNotHoldUpStartUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(Config{
+	cfg := Config{
 		Store: openTestStore(t), Games: games, Platform: fp.Platform(), Log: discard, Session: testSession,
 		Locator: &fakeLocator{}, ServerLookup: &fakeLookup{},
 		Ping: func(netip.Addr, time.Duration) (time.Duration, error) { return 0, icmp.ErrTimeout },
-	})
-	if err != nil {
-		t.Fatal(err)
+	}
+	// Built on its own goroutine: a NewServer that waited for the reset
+	// would otherwise hang the test instead of failing it.
+	type built struct {
+		srv *Server
+		err error
+	}
+	ch := make(chan built, 1)
+	go func() {
+		srv, err := NewServer(cfg)
+		ch <- built{srv, err}
+	}()
+	var srv *Server
+	select {
+	case b := <-ch:
+		if b.err != nil {
+			t.Fatal(b.err)
+		}
+		srv = b.srv
+	case <-time.After(5 * time.Second):
+		t.Fatal("NewServer waited for the reset")
 	}
 	t.Cleanup(srv.Close)
 	ts := httptest.NewServer(srv.Handler())
@@ -515,7 +533,7 @@ func TestCurrentServerResetDoesNotHoldUpStartUp(t *testing.T) {
 	}
 
 	release()
-	<-srv.current.resetDone
+	waitReset(t, srv)
 	if fp.Flows.Leftover() {
 		t.Fatal("the leftover is still there")
 	}
