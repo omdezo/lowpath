@@ -38,6 +38,8 @@ type Fake struct {
 	Paths      *Paths
 	Flows      *Flows
 	Inventory  *Inventory
+	Service    *Service
+	ServiceAPI *ServiceAPI
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -54,6 +56,8 @@ func New(dir string) *Fake {
 		Paths:      &Paths{dir: dir},
 		Flows:      &Flows{},
 		Inventory:  &Inventory{},
+		Service:    &Service{},
+		ServiceAPI: NewServiceAPI(),
 	}
 }
 
@@ -62,6 +66,7 @@ func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
 		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory,
+		Service: f.Service, ServiceAPI: f.ServiceAPI,
 	}
 }
 
@@ -498,6 +503,9 @@ type Paths struct{ dir string }
 
 func (p *Paths) DataDir() (string, error)  { return filepath.Join(p.dir, "data"), nil }
 func (p *Paths) CacheDir() (string, error) { return filepath.Join(p.dir, "cache"), nil }
+func (p *Paths) ServiceDataDir() (string, error) {
+	return filepath.Join(p.dir, "service"), nil
+}
 func (p *Paths) DriverDirs(bool) ([]string, []error) {
 	return []string{filepath.Join(p.dir, "driver")}, nil
 }

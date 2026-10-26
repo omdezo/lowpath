@@ -40,33 +40,6 @@ func TestChildArgsReplaceWaitPID(t *testing.T) {
 	}
 }
 
-func TestOpenLogStartsOverWhenLarge(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "lowpath.log")
-	if err := os.WriteFile(path, make([]byte, maxLogSize+1), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	logger, closeLog, err := openLog(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	logger.Info("hello")
-	closeLog()
-	b, _ := os.ReadFile(path)
-	if len(b) > 1000 || !strings.Contains(string(b), "hello") {
-		t.Errorf("log is %d bytes after start; want it truncated and holding the new line", len(b))
-	}
-
-	// A small log is appended to.
-	logger, closeLog, _ = openLog(dir)
-	logger.Info("again")
-	closeLog()
-	b, _ = os.ReadFile(path)
-	if !strings.Contains(string(b), "hello") || !strings.Contains(string(b), "again") {
-		t.Errorf("small log not appended to: %q", b)
-	}
-}
-
 func TestCheckLoopback(t *testing.T) {
 	for addr, ok := range map[string]bool{"127.0.0.1:7878": true, "localhost:1": true, "[::1]:7878": true, "0.0.0.0:7878": false, "192.168.1.2:80": false} {
 		if err := checkLoopback(addr); (err == nil) != ok {

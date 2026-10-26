@@ -17,6 +17,7 @@ func Native() *Platform {
 	priv := NewUAC()
 	paths := NewWindowsPaths()
 	games := detect.New()
+	service := NewWindowsService()
 	return &Platform{
 		OS:         "windows",
 		Capture:    capture.NewWinDivert(owners, priv, paths),
@@ -27,5 +28,8 @@ func Native() *Platform {
 		Paths:      paths,
 		Flows:      detect.NewKernelNetwork(),
 		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
+		Service:    service,
+		// The window talks only to the installed service's process.
+		ServiceAPI: NewPipe(PipeName, service.PID),
 	}
 }

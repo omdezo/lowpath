@@ -1,7 +1,9 @@
 package platform
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
@@ -13,6 +15,7 @@ import (
 type WindowsPaths struct {
 	userDirs
 	programFiles func() (string, error)
+	programData  func() (string, error)
 	executable   func() (string, error)
 }
 
@@ -20,10 +23,21 @@ func NewWindowsPaths() *WindowsPaths {
 	return &WindowsPaths{
 		userDirs:     newUserDirs(),
 		programFiles: func() (string, error) { return windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0) },
+		programData:  func() (string, error) { return windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0) },
 		executable:   os.Executable,
 	}
 }
 
 func (p *WindowsPaths) DriverDirs(elevated bool) ([]string, []error) {
 	return driverDirs(elevated, p.programFiles, p.executable)
+}
+
+// ServiceDataDir is %ProgramData%\Lowpath, resolved through the known
+// folder for the same reason as Program Files.
+func (p *WindowsPaths) ServiceDataDir() (string, error) {
+	d, err := p.programData()
+	if err != nil {
+		return "", fmt.Errorf("platform: no ProgramData folder: %w", err)
+	}
+	return filepath.Join(d, appDir), nil
 }

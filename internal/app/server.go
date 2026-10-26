@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -98,6 +97,9 @@ type Config struct {
 	// end-to-end run); zero: 200 probes per hop, one per second.
 	TraceCount    int
 	TraceInterval time.Duration
+	// InService: this server runs inside the background service
+	// (cmd/lowpathsvc) and the window reaches it through a Frontend.
+	InService bool
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -132,6 +134,7 @@ type Server struct {
 	conflicts *conflictWatch
 	verdict   *verdicts
 	marker    SessionMarker // nil: none
+	inService bool
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -234,9 +237,10 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:    newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
-		verdict: newVerdicts(cfg.NetStats),
-		marker:  cfg.Marker,
+		line:      newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		verdict:   newVerdicts(cfg.NetStats),
+		marker:    cfg.Marker,
+		inService: cfg.InService,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -387,7 +391,24 @@ func (s *Server) scanRunning() {
 	}
 }
 
+// Handler serves the UI and the API to the app's window over loopback HTTP,
+// behind the per-launch session (see auth.go).
 func (s *Server) Handler() http.Handler {
+	mux := s.routes()
+	mux.HandleFunc("GET "+pathSession, s.auth.handleSession)
+	if s.ui != nil {
+		mux.Handle("/", spa(s.ui))
+	}
+	return s.auth.guard(mux)
+}
+
+// ServiceHandler serves the API alone, without the session check, for the
+// background service's pipe: the pipe's access list already limits it to
+// users signed in at this PC, and the window in front of it (Frontend)
+// keeps its own session for the browser side.
+func (s *Server) ServiceHandler() http.Handler { return s.routes() }
+
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /api/mapping", s.handleMapping)
@@ -424,42 +445,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
 	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
-	mux.HandleFunc("GET "+pathSession, s.handleSession)
-	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
-	if s.ui != nil {
-		mux.Handle("/", spa(s.ui))
-	}
-	return s.guard(mux)
-}
-
-// guard keeps the API to the app's own window: requests must target a
-// loopback Host (blocks DNS rebinding), mutating calls must carry a custom
-// header, which a cross-origin page cannot send without a CORS preflight we
-// never answer, and /api needs the session cookie (see auth.go). The UI's
-// static files are served to anyone; they hold nothing secret.
-func (s *Server) guard(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.Host)
-		if err != nil {
-			host = r.Host
-		}
-		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-			http.Error(w, "forbidden host", http.StatusForbidden)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if r.Method != http.MethodGet && r.Header.Get("X-Lowpath") != "1" {
-				http.Error(w, "missing X-Lowpath header", http.StatusForbidden)
-				return
-			}
-			if r.URL.Path != pathSession && r.URL.Path != pathVersion && !s.auth.ok(r) {
-				writeErr(w, http.StatusUnauthorized, "unauthorized",
-					errors.New("this page is not signed in to Lowpath: use the Lowpath window, or close Lowpath and start it again"))
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
+	mux.HandleFunc("GET "+pathVersion, handleVersion)
+	return mux
 }
 
 // spa serves the built UI and falls back to index.html for client routes.

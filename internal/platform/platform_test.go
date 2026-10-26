@@ -91,6 +91,7 @@ func newUnixLikePaths() Paths { return fakePaths{} }
 type fakePaths struct{ userDirs }
 
 func (fakePaths) DriverDirs(bool) ([]string, []error) { return nil, nil }
+func (fakePaths) ServiceDataDir() (string, error)     { return "", nil }
 
 func TestUserDirs(t *testing.T) {
 	u := userDirs{
