@@ -28,15 +28,52 @@ cd lowpath
 See [docs/development.md](docs/development.md) for the project layout, the
 test suites and how to run the app while working on it.
 
-## Pull requests
+## Pull request process
 
-1. Keep changes focused; one topic per pull request.
-2. Run `go vet ./...`, `go test ./...` and `cd ui && npm run build`. For UI
-   or app changes also run the end-to-end test (`cd e2e && node run.mjs`).
-3. Match the surrounding style: small functions, comments that explain *why*,
-   `gofmt`'d Go, LF line endings.
-4. Be honest in the UI: never show a number that wasn't measured, and say so
-   when something can't be measured.
+Every change, including maintainers' own, goes through a pull request.
+
+1. **Start from an issue.** Comment on it so work isn't duplicated. Small
+   fixes can open a PR directly.
+2. **Branch** from `main` as `<type>/<short-name>`, for example
+   `feat/valve-server-list` or `fix/inject-ipv6`.
+3. **Commit** with [Conventional Commits](https://www.conventionalcommits.org/):
+   `feat(catalog): …`, `fix(capture): …`, `docs: …`, `chore: …`. Reference the
+   issue (`#16`).
+4. **Open a draft PR early** using the template. Add the issue's milestone and
+   area labels, and write `Closes #N` in the body.
+5. **Run the local CI and publish its result** as the `local-ci` check:
+
+   ```powershell
+   .\scripts\ci.ps1 -Report          # add -E2E when the UI or app flow changed
+   ```
+
+   It refuses to report from a dirty tree (untracked files included), so the
+   check always describes the pushed commit. CI runs on contributors'
+   machines; GitHub Actions is manual-only. Publishing a status needs write
+   access to the repository and Windows, so for pull requests from forks, or
+   from Linux and macOS (`scripts/ci.sh`), a maintainer runs `-Report` on the
+   PR's head commit.
+6. **Mark the PR ready** when the check is green, the template's testing
+   section is filled in, and `CHANGELOG.md` has a line under *Unreleased*.
+7. **Review.** At least one review by someone other than the author, with
+   inline comments for anything to change and a final verdict
+   (*Ready to merge* or *Needs changes*). Follow-up work becomes new issues.
+8. **Merge** with *Squash and merge* once the review says *Ready to merge* and
+   `local-ci` is green on the latest commit. `main` is protected: it only
+   accepts pull requests whose `local-ci` check passed.
+
+### Style
+
+- Match the surrounding code: small types and functions with clear
+  responsibilities, interfaces at OS and network boundaries, comments that
+  explain *why*, `gofmt`'d Go, LF line endings.
+- Code must build for Windows, Linux and macOS; OS-specific code goes in
+  build-tagged files behind an interface.
+- Networking code handles timeouts, offline, IPv4/IPv6, NAT, loss and
+  permission errors, and always fails open: Lowpath must never leave a
+  player's connection broken.
+- Be honest in the UI: never show a number that wasn't measured, and say so
+  when something can't be measured.
 
 ## Ground rules
 
