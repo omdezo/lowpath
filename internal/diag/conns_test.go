@@ -217,6 +217,41 @@ func TestConnWatchUnknownNamesAndReusedIDs(t *testing.T) {
 	}
 }
 
+// A cached name lasts a minute and a session: then the PID may belong to
+// another program.
+func TestConnWatchNamesExpire(t *testing.T) {
+	f := &fakeConns{owners: map[uint64]uint32{1: 77}}
+	names := map[uint32]string{77: "firefox"}
+	w := NewConnWatch(f, func() (map[uint32]string, error) { return names, nil }, func(int) (LinkAddrs, error) { return home, nil })
+	at := time.Unix(0, 0)
+	f.conns = []TCPConn{conn(1, "192.0.2.10:50001", "203.0.113.5:443", 0, 0)}
+	sample := func(sec int) string {
+		f.conns[0].Received += 100e6
+		s, ok := w.Sample(at.Add(time.Duration(sec)*time.Second), 7)
+		if !ok || len(s.Talkers) != 1 {
+			t.Fatalf("at %d s: %+v %v", sec, s, ok)
+		}
+		return s.Talkers[0].Name
+	}
+	w.Sample(at, 7)
+	if n := sample(1); n != "firefox" {
+		t.Fatalf("name %q", n)
+	}
+	names = map[uint32]string{77: "updater"} // firefox exited, its PID reused
+	if n := sample(30); n != "firefox" {
+		t.Errorf("within the minute: %q, want the cached name", n)
+	}
+	if n := sample(62); n != "updater" {
+		t.Errorf("a minute after the read: %q, want the process list read again", n)
+	}
+	names = map[uint32]string{77: "editor"}
+	w.Reset()
+	w.Sample(at.Add(63*time.Second), 7)
+	if n := sample(64); n != "editor" {
+		t.Errorf("after Reset: %q, want a fresh read", n)
+	}
+}
+
 func TestConnWatchStartsOver(t *testing.T) {
 	f := &fakeConns{}
 	w, _ := newTestConnWatch(f, nil)

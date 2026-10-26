@@ -183,6 +183,10 @@ const (
 	// lifetime as new when it shows up again. IDs are never reused, so a
 	// remembered one can't be mistaken for a new socket.
 	connGrace = 10 * time.Second
+	// namesRefresh is how long one read of the process list names the
+	// talkers: PIDs are reused (after 32768 processes with Linux's default
+	// pid_max), so a cached name mustn't outlive its process for long.
+	namesRefresh = time.Minute
 )
 
 type connBytes struct {
@@ -206,6 +210,7 @@ type ConnWatch struct {
 	prev    map[uint64]connBytes
 	prevAt  time.Time
 	pidName map[uint32]string
+	namesAt time.Time
 }
 
 // NewConnWatch reads conns; names maps PIDs to program names
@@ -219,7 +224,7 @@ func NewConnWatch(conns ConnStats, names func() (map[uint32]string, error), addr
 }
 
 // Reset forgets the last reading (a session ended; the next starts over).
-func (w *ConnWatch) Reset() { w.prev, w.prevAt, w.linkOK = nil, time.Time{}, false }
+func (w *ConnWatch) Reset() { w.prev, w.prevAt, w.linkOK, w.pidName = nil, time.Time{}, false, nil }
 
 // Sample reads the counters and returns the rates since the previous
 // Sample on the same interface. ok is false for the first reading, while
@@ -314,7 +319,7 @@ func (w *ConnWatch) Sample(now time.Time, index int) (ConnSample, bool) {
 		t.Rx += float64(b.rx) / dt
 	}
 	for pid, t := range byPID {
-		t.Name = w.name(pid)
+		t.Name = w.name(pid, now)
 		out.Talkers = append(out.Talkers, *t)
 	}
 	slices.SortFunc(out.Talkers, func(a, b Talker) int {
@@ -324,15 +329,15 @@ func (w *ConnWatch) Sample(now time.Time, index int) (ConnSample, bool) {
 	return out, true
 }
 
-// name is a PID's program name; the process list is read again only for a
-// PID it hasn't seen.
-func (w *ConnWatch) name(pid uint32) string {
-	if n, ok := w.pidName[pid]; ok {
+// name is a PID's program name; the process list is read again for a PID
+// it hasn't seen, or once its last read is namesRefresh old.
+func (w *ConnWatch) name(pid uint32, now time.Time) string {
+	if n, ok := w.pidName[pid]; ok && now.Sub(w.namesAt) < namesRefresh && !now.Before(w.namesAt) {
 		return n
 	}
 	if w.names != nil {
 		if m, err := w.names(); err == nil {
-			w.pidName = m
+			w.pidName, w.namesAt = m, now
 		}
 	}
 	if n := w.pidName[pid]; n != "" {
