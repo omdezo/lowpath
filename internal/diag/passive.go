@@ -267,29 +267,39 @@ func (d *PassiveDetector) Observe(s PassiveSample) PassiveState {
 		since := d.since
 		st.Since = &since
 	}
-	st.Top = topTalker(s.Talkers, st.Direction)
+	if s.RateKnown {
+		st.Top = topTalker(s.Talkers, st.Direction, otherRx, otherTx)
+	}
 	return st
 }
 
+// topShare is how much of the other traffic a program must move to be
+// named as "most of it".
+const topShare = 0.5
+
 // topTalker is the program moving the most in the direction that fills the
-// line, or in both directions together while nothing does.
-func topTalker(ts []Talker, dir string) *TopTalker {
-	score := func(t Talker) float64 {
+// line, or in both directions together while nothing does. It is named
+// only when it moves at least topShare of the other traffic (bytes/s) in
+// that direction: the counters cover TCP alone, so a QUIC download they
+// can't see must not be pinned on a chat client that is merely the busiest
+// TCP user.
+func topTalker(ts []Talker, dir string, otherRx, otherTx float64) *TopTalker {
+	score := func(rx, tx float64) float64 {
 		switch dir {
 		case "download":
-			return t.Rx
+			return rx
 		case "upload":
-			return t.Tx
+			return tx
 		}
-		return t.Rx + t.Tx
+		return rx + tx
 	}
 	best := -1
 	for i, t := range ts {
-		if score(t) > 0 && (best < 0 || score(t) > score(ts[best])) {
+		if v := score(t.Rx, t.Tx); v > 0 && (best < 0 || v > score(ts[best].Rx, ts[best].Tx)) {
 			best = i
 		}
 	}
-	if best < 0 {
+	if best < 0 || score(ts[best].Rx, ts[best].Tx) < topShare*score(otherRx, otherTx) {
 		return nil
 	}
 	t := ts[best]

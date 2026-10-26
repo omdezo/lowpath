@@ -275,6 +275,15 @@ func TestPassiveLeavesLANOutAndNamesTheTopProgram(t *testing.T) {
 	if !st.Active || st.Direction != "download" || st.Top == nil || st.Top.Name != "steam" || st.Top.DownMbps != 80 {
 		t.Fatalf("download by steam: %+v (top %+v)", st, st.Top)
 	}
+	// A download the TCP counters can't see (QUIC in a browser) isn't
+	// pinned on the busiest TCP program when that moves only a little of it.
+	chat := Talker{PID: 500, Name: "chat", Rx: 2e6 / 8, Tx: 0.2e6 / 8}
+	for range 3 {
+		st = step(85, 400, 0, chat)
+	}
+	if !st.Active || st.Top != nil {
+		t.Fatalf("QUIC download, a chat client on TCP: %+v (top %+v)", st, st.Top)
+	}
 	// Not active: the program moving the most in both directions together.
 	d2 := NewPassiveDetector(PassiveConfig{}, LineRate{})
 	st = d2.Observe(PassiveSample{At: at, RateKnown: true, Rx: 1e6, Talkers: []Talker{backup, {Name: "idle"}}})
@@ -283,6 +292,9 @@ func TestPassiveLeavesLANOutAndNamesTheTopProgram(t *testing.T) {
 	}
 	if st = d2.Observe(PassiveSample{At: at, RateKnown: true, Talkers: []Talker{{Name: "idle"}}}); st.Top != nil {
 		t.Errorf("a program moving nothing is no top talker: %+v", st.Top)
+	}
+	if st = d2.Observe(PassiveSample{At: at, Rx: 1e6, Talkers: []Talker{backup}}); st.Top != nil {
+		t.Errorf("unreadable adapter counters: nothing to be most of, yet top %+v", st.Top)
 	}
 	// Without per-connection counters nothing is claimed about LAN traffic.
 	if st = d2.Observe(PassiveSample{At: at, RateKnown: true, Rx: 1e6}); st.LANDownMbps != nil || st.LANUpMbps != nil {

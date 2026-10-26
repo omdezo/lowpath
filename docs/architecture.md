@@ -839,7 +839,9 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   counts as other traffic), and while internet traffic is ≥ 1 Mbit/s the 32
   busiest connections are matched to processes and the top 3 programs
   passed on; the state's `top` is the biggest in the direction that fills
-  the line. Where `Conns` reports `ErrUnsupported` (Windows, macOS) it is
+  the line, named only when it moves at least half of the other traffic
+  there (UDP, QUIC downloads included, has no counters, so the busiest TCP
+  program isn't always "most of it"). Where `Conns` reports `ErrUnsupported` (Windows, macOS) it is
   asked once; LAN traffic then counts as other traffic and no program is
   named (`lan_*_mbps` null).
 - The app keeps the last result in `state.json` (`bloat`), refuses the test
