@@ -231,8 +231,12 @@ func TestCaptureModeFlowPerRemote(t *testing.T) {
 	// This test is about flows, not route selection: send once every path
 	// has answered a probe, so a machine busy enough to delay the first
 	// replies past a selection tick can't make the engine fall back mid-test.
-	if !waitFor(t, 10*time.Second, func() bool { return allPathsUp(e.Snapshot()) }) {
-		t.Fatalf("paths %+v never all came up over a lossless network", e.Snapshot().Paths)
+	// A fallback taken before the replies were read lasts until the next
+	// tick, however up the paths look, so wait that out too.
+	ready := func() bool { s := e.Snapshot(); return allPathsUp(s) && !s.Fallback }
+	if !waitFor(t, 10*time.Second, ready) {
+		s := e.Snapshot()
+		t.Fatalf("paths %+v (fallback %v) never all came up over a lossless network", s.Paths, s.Fallback)
 	}
 
 	// One game socket talks to three servers; the middle one is busiest and
