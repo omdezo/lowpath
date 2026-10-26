@@ -32,10 +32,12 @@ import (
 //
 // The routers forward, answer TTL 1 with "time exceeded" and have no route
 // to 203.0.113.0/24 or 2001:db8:ffff::/48, so a probe there gets
-// "unreachable" from router1. The client probes as root (raw socket), then as nobody
-// with only net.ipv4.ping_group_range open (ping socket and its error
-// queue), then as nobody with it closed. All namespaces vanish with their
-// processes, so nothing is left behind even when the test fails.
+// "unreachable" from router1. The client itself refuses to send to
+// 198.51.100.0/24 and 2001:db8:fffe::/48 ("prohibit" routes). It probes as
+// root (raw socket), then as nobody with only net.ipv4.ping_group_range
+// open (ping socket and its error queue), then as nobody with it closed.
+// All namespaces vanish with their processes, so nothing is left behind
+// even when the test fails.
 //
 //	sudo go test -run TestPingTTLRouteLab -v ./internal/icmp
 
@@ -170,6 +172,19 @@ func labNodeRun(t *testing.T, i int) {
 // nobody with the ping socket allowed, then with it refused.
 func labClient(t *testing.T) {
 	labNodeRun(t, 0)
+	// The client refuses to send to these (EACCES, as a firewall rule
+	// dropping the probe gives EPERM); labProbes starts with them.
+	rt, err := netlink.Dial(netlink.Route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"198.51.100.0/24", "2001:db8:fffe::/48"} {
+		labDo(t, rt, labProhibit(netip.MustParsePrefix(p)), nil)
+	}
+	rt.Close()
+	// Closed, so a raw socket given up on after a refused send would fail
+	// every probe after it instead of falling back.
+	labSysctl(t, "ipv4/ping_group_range", "1 0")
 	t.Log("as root (raw socket):")
 	labProbes(t)
 
@@ -208,12 +223,17 @@ func labClosed(t *testing.T) {
 // labProbes checks every hop over IPv4 and IPv6, then many probes at once.
 func labProbes(t *testing.T) {
 	for _, fam := range []struct {
-		dst, unreachable string
-		hops             [][]string // per TTL, the node's addresses
+		dst, unreachable, prohibited string
+		hops                         [][]string // per TTL, the node's addresses
 	}{
-		{"192.0.2.34", "203.0.113.9", [][]string{{"192.0.2.1", "192.0.2.17"}, {"192.0.2.18", "192.0.2.33"}, {"192.0.2.34"}, {"192.0.2.34"}}},
-		{"2001:db8:0:3::2", "2001:db8:ffff::9", [][]string{{"2001:db8:0:1::1", "2001:db8:0:2::1"}, {"2001:db8:0:2::2", "2001:db8:0:3::1"}, {"2001:db8:0:3::2"}, {"2001:db8:0:3::2"}}},
+		{"192.0.2.34", "203.0.113.9", "198.51.100.9", [][]string{{"192.0.2.1", "192.0.2.17"}, {"192.0.2.18", "192.0.2.33"}, {"192.0.2.34"}, {"192.0.2.34"}}},
+		{"2001:db8:0:3::2", "2001:db8:ffff::9", "2001:db8:fffe::9", [][]string{{"2001:db8:0:1::1", "2001:db8:0:2::1"}, {"2001:db8:0:2::2", "2001:db8:0:3::1"}, {"2001:db8:0:3::2"}, {"2001:db8:0:3::2"}}},
 	} {
+		// A send the system refuses is that probe's answer, not a
+		// permission problem: the socket must carry the probes after it.
+		if _, err := PingTTL(netip.MustParseAddr(fam.prohibited), 1, time.Second); err == nil || errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "refused to send") {
+			t.Fatalf("%s: %v, want a refused send that isn't a permission error", fam.prohibited, err)
+		}
 		dst := netip.MustParseAddr(fam.dst)
 		check := func(ttl int, r Reply, err error) error {
 			want := TimeExceeded
@@ -340,13 +360,14 @@ func labWait(t *testing.T, r io.Reader, name string) {
 
 // rtnl builds IPv4 requests only; the lab needs IPv6 too.
 const (
-	labAFInet6   = 10
-	labNewAddr   = 20
-	labNewRoute  = 24
-	labIfaNoDAD  = 0x02 // IFA_F_NODAD: usable at once, no duplicate detection
-	labRtaDst    = 1
-	labRtaGW     = 5
-	labTableMain = 254
+	labAFInet6     = 10
+	labNewAddr     = 20
+	labNewRoute    = 24
+	labIfaNoDAD    = 0x02 // IFA_F_NODAD: usable at once, no duplicate detection
+	labRtaDst      = 1
+	labRtaGW       = 5
+	labTableMain   = 254
+	labRtnProhibit = 8 // RTN_PROHIBIT
 )
 
 func labAddr(idx int, p netip.Prefix) (netlink.Message, error) {
@@ -359,6 +380,21 @@ func labAddr(idx int, p netip.Prefix) (netlink.Message, error) {
 	a.Add(2, p.Addr().AsSlice()) // IFA_LOCAL
 	a.Add(1, p.Addr().AsSlice()) // IFA_ADDRESS
 	return netlink.Message{Type: labNewAddr, Flags: netlink.FlagAck | netlink.FlagCreate | netlink.FlagExcl, Op: "add an IPv6 address", Data: append(b, a.Bytes()...)}, nil
+}
+
+// labProhibit is a "prohibit" route to dst in the main table: a send there
+// fails with EACCES (RTN_PROHIBIT, no gateway, no device).
+func labProhibit(dst netip.Prefix) netlink.Message {
+	family := byte(2) // AF_INET
+	if dst.Addr().Is6() {
+		family = labAFInet6
+	}
+	// struct rtmsg: family, dst_len, src_len, tos, table, protocol
+	// (static), scope (universe), type (prohibit), flags.
+	b := []byte{family, byte(dst.Bits()), 0, 0, labTableMain, 4, 0, labRtnProhibit, 0, 0, 0, 0}
+	var a netlink.Attrs
+	a.Add(labRtaDst, dst.Masked().Addr().AsSlice())
+	return netlink.Message{Type: labNewRoute, Flags: netlink.FlagAck | netlink.FlagCreate | netlink.FlagExcl, Op: "add a prohibit route", Data: append(b, a.Bytes()...)}
 }
 
 func labRoute(dst netip.Prefix, gw netip.Addr) (netlink.Message, error) {
