@@ -87,7 +87,8 @@ bin\lowpathsvc.exe run -data .svc -pipe \\.\pipe\lowpath-dev
 bin\lowpath.exe -headless -no-elevate -addr 127.0.0.1:7880 -data .ui -service-pipe \\.\pipe\lowpath-dev
 ```
 
-On Linux, `sudo ./lowpathsvc run` serves on `/run/lowpath/api.sock` and
+On Linux, `sudo ./lowpathsvc run` serves on `/run/lowpath/api.sock` (on
+macOS `/var/run/lowpath/api.sock`) and
 `./lowpath -headless` uses it when it answers; there is no `install` there
 yet.
 
@@ -248,8 +249,10 @@ go test ./...
   the Unix socket (stale file taken over, a running one and a plain file
   left alone); the service manager read for a service that isn't installed
   and for the event log, install and uninstall refused without rights, the
-  service's and data folder's access lists, a user-made data folder moved
-  aside, the settings copy never overwriting; the stop handler (Running,
+  service's and data folder's access lists, the data folder created with
+  its access list in one call, only an admins-only folder kept and any
+  other moved aside, the service securing its data folder at every start
+  before its log, the settings copy never overwriting; the stop handler (Running,
   Interrogate, Stop ends the run, a failing run exits non-zero for the
   restart). In the app on `fakeplatform`: the window's API through the
   service (Boost in route mode starts capture in the service, the session

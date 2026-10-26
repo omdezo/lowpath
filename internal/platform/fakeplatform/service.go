@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"slices"
 	"sync"
 
@@ -23,6 +24,15 @@ type Service struct {
 	starts     int
 	installs   []platform.ServiceConfig
 	uninstalls int
+	secureErr  error
+	secured    []SecuredDir
+}
+
+// SecuredDir is one SecureDataDir call.
+type SecuredDir struct {
+	Dir string
+	// Empty: the folder held nothing yet when it was secured.
+	Empty bool
 }
 
 // Set replaces what State reports, and err its error.
@@ -100,6 +110,29 @@ func (s *Service) Uninstall() error {
 	s.uninstalls++
 	s.state = platform.ServiceState{}
 	return nil
+}
+
+// SetSecureErr is what SecureDataDir returns.
+func (s *Service) SetSecureErr(err error) { s.mu.Lock(); s.secureErr = err; s.mu.Unlock() }
+
+// SecureDataDir records the call and makes the folder (with no access
+// list: tests run unelevated).
+func (s *Service) SecureDataDir(dir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.secureErr != nil {
+		return s.secureErr
+	}
+	entries, _ := os.ReadDir(dir)
+	s.secured = append(s.secured, SecuredDir{Dir: dir, Empty: len(entries) == 0})
+	return os.MkdirAll(dir, 0o700)
+}
+
+// Secured lists every SecureDataDir call.
+func (s *Service) Secured() []SecuredDir {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.secured)
 }
 
 // Uninstalls counts Uninstall calls.

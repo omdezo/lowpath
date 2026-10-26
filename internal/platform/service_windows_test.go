@@ -107,25 +107,126 @@ func TestCommandLine(t *testing.T) {
 // install) or a link is not trusted; the install moves it aside.
 func TestTrustedDir(t *testing.T) {
 	dir := t.TempDir()
-	fi, _ := os.Lstat(dir)
-	trusted, err := trustedDir(dir, fi)
+	trusted, err := trustedDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trusted && !windows.GetCurrentProcessToken().IsElevated() {
-		t.Error("a folder owned by this (unelevated) user is trusted")
+	if trusted {
+		t.Error("a folder this user owns is trusted")
 	}
-	if sys, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0); err == nil { // owned by SYSTEM
-		fi, _ := os.Lstat(sys)
-		if ok, err := trustedDir(sys, fi); err != nil || !ok {
-			t.Errorf("%s: trusted %v, %v; want trusted", sys, ok, err)
+	// ProgramData is SYSTEM's, but every user may create folders and files
+	// in the folders under it: a folder that inherited that is not trusted.
+	if sys, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0); err == nil {
+		if ok, err := trustedDir(sys); err != nil || ok {
+			t.Errorf("%s: trusted %v, %v; want not trusted", sys, ok, err)
 		}
 	}
 	file := filepath.Join(dir, "f")
 	os.WriteFile(file, nil, 0o600)
-	fi, _ = os.Lstat(file)
-	if ok, _ := trustedDir(file, fi); ok {
+	if ok, _ := trustedDir(file); ok {
 		t.Error("a file is trusted as a folder")
+	}
+	if _, err := trustedDir(filepath.Join(dir, "missing")); err == nil {
+		t.Error("a missing folder checked without an error")
+	}
+}
+
+// Only a folder that SYSTEM or Administrators own and only they can change
+// is kept as the service's data folder.
+func TestAdminsOnly(t *testing.T) {
+	user := windows.GetCurrentProcessToken()
+	tu, err := user.GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := tu.User.Sid.String()
+	for _, tc := range []struct {
+		sddl string
+		want bool
+	}{
+		{"O:BA" + dataDirSDDL, true},
+		{"O:SY" + dataDirSDDL, true},
+		{"O:BAD:P(A;OICI;FA;;;SY)(D;OICI;FA;;;WD)(A;OICI;FA;;;BA)", true},   // a deny ACE opens nothing
+		{"O:" + me + dataDirSDDL, false},                                    // a user's folder
+		{"O:BAD:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", false},                   // inherits from its parent
+		{"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;CI;0x116;;;BU)", false}, // ProgramData's "Users may create"
+		{"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + me + ")", false},
+		{"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;CO)", false},
+		{"O:BAD:P", true}, // nobody at all but the owner's implicit rights
+		{"O:BA", false},   // no DACL: everyone has full access
+	} {
+		sd, err := windows.SecurityDescriptorFromString(tc.sddl)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.sddl, err)
+		}
+		if got := adminsOnly(sd); got != tc.want {
+			t.Errorf("%s: adminsOnly = %v, want %v", tc.sddl, got, tc.want)
+		}
+	}
+}
+
+// The data folder is created with its access list in the same call, never
+// first with the one it would inherit; a folder already there is reported,
+// not adopted.
+func TestCreateDir(t *testing.T) {
+	// The test's own access list keeps the owner (this user) able to clean
+	// up; the real one names only SYSTEM and Administrators.
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	// Make the parent grant Users "create files" the way ProgramData does.
+	psd, _ := windows.SecurityDescriptorFromString("D:(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;CI;0x116;;;BU)")
+	pdacl, _, _ := psd.DACL()
+	if err := windows.SetNamedSecurityInfo(parent, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, pdacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "Lowpath")
+	created, err := createDir(dir, sd)
+	if err != nil || !created {
+		t.Fatalf("createDir = %v, %v", created, err)
+	}
+	got, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl, _, _ := got.Control()
+	if ctl&windows.SE_DACL_PROTECTED == 0 {
+		t.Error("the new folder's access list is not protected")
+	}
+	if s := got.String(); strings.Contains(s, ";;;BU)") {
+		t.Errorf("the new folder inherited Users' rights: %s", s)
+	}
+	if created, err := createDir(dir, sd); err != nil || created {
+		t.Errorf("second createDir = %v, %v; want not created", created, err)
+	}
+	if created, err := createDir(filepath.Join(parent, "no", "such"), sd); err == nil || created {
+		t.Errorf("createDir in a missing folder = %v, %v", created, err)
+	}
+}
+
+// Securing a folder somebody else made first moves it aside instead of
+// taking it over. Unelevated, setting the Administrators owner then fails,
+// but only after the move.
+func TestSecureDirMovesUntrustedAside(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("elevated: this would secure a temporary folder for real")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "Lowpath")
+	os.Mkdir(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte("planted"), 0o600)
+	err := secureDirWith(dir, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+	if err == nil {
+		t.Fatal("an unelevated process made Administrators an owner")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state.json")); err == nil {
+		t.Error("the planted state.json is still in the data folder")
+	}
+	moved, _ := filepath.Glob(dir + ".untrusted-*")
+	if len(moved) != 1 {
+		t.Errorf("moved aside: %v", moved)
 	}
 }
 

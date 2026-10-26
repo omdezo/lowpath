@@ -33,16 +33,24 @@ function describe(state: string, message: string | undefined, demo: boolean): { 
         tag: "tag-accent",
         text: "Routing runs in the Lowpath service, which has the rights packet capture needs, so this window never asks for administrator rights, after a restart of the PC too.",
       };
+    // For running and stopped, message is the window's own reason for not
+    // using the service (it wouldn't start, didn't answer, -no-service).
     case "running":
       return {
         label: "Not used",
         tag: "",
         text: demo
           ? "The service is installed and running, but the demo runs its own simulated network in this window."
-          : "The service is installed and running, but this window was started with -no-service and runs its own engine.",
+          : `The service is installed and running, but this window runs its own engine${message ? `: ${message}` : ""}.`,
       };
     case "stopped":
-      return { label: "Stopped", tag: "", text: "The service is installed but stopped. Lowpath starts it the next time it opens." };
+      return {
+        label: "Stopped",
+        tag: "",
+        text: message
+          ? `The service is installed but stopped, and this window runs its own engine: ${message}.`
+          : "The service is installed but stopped. Lowpath starts it the next time it opens.",
+      };
     case "not_installed":
       return {
         label: "Not installed",

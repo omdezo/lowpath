@@ -27,6 +27,9 @@ func (m NoServiceManager) State() (ServiceState, error) {
 func (m NoServiceManager) Start() error                { return m.unsupported("starting") }
 func (m NoServiceManager) Install(ServiceConfig) error { return m.unsupported("installing") }
 func (m NoServiceManager) Uninstall() error            { return m.unsupported("removing") }
+func (m NoServiceManager) SecureDataDir(string) error {
+	return m.unsupported("securing the data folder of")
+}
 
 // ForegroundRunner is the ServiceRunner where init systems run services as
 // plain processes (systemd and launchd stop them with SIGTERM): it never

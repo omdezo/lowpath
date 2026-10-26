@@ -33,6 +33,8 @@ type serviceView struct {
 	// and running, but this window runs its own engine, as with -demo),
 	// "stopped", "not_installed", "unsupported" (none on this OS yet) or
 	// "unknown" (the service manager didn't answer; Message says why).
+	// For "running" and "stopped", Message says why this window doesn't
+	// use the service, when the window knows.
 	State   string `json:"state"`
 	Message string `json:"message,omitempty"`
 }
@@ -73,9 +75,9 @@ func (s *Server) serviceView() serviceView {
 	case !st.Installed:
 		return serviceView{State: "not_installed"}
 	case st.Running:
-		return serviceView{State: "running"}
+		return serviceView{State: "running", Message: s.serviceNote}
 	default:
-		return serviceView{State: "stopped"}
+		return serviceView{State: "stopped", Message: s.serviceNote}
 	}
 }
 

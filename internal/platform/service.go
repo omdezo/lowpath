@@ -32,6 +32,13 @@ type ServiceManager interface {
 	// Uninstall stops and removes the service. It needs administrator
 	// rights. Removing a service that isn't installed is not an error.
 	Uninstall() error
+	// SecureDataDir creates the service's data folder, or checks the one
+	// there, so that only the system account and administrators can change
+	// it, as Install does. The service calls it at every start: a folder
+	// that was deleted and made again would otherwise inherit an access
+	// list that lets users plant links where the service writes. It needs
+	// administrator rights.
+	SecureDataDir(dir string) error
 }
 
 // ServiceState is what the service manager knows about the service.

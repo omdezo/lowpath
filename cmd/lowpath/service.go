@@ -36,13 +36,18 @@ func serviceAPI(o options, plat *platform.Platform) platform.ServiceAPI {
 
 // connectService returns the window's frontend for the background service,
 // or nil when this process should run the engine itself: with -demo or
-// -no-service, when no service is installed, or when it doesn't answer
-// (the log says why). A stopped service is started first; the install lets
-// signed-in users do that without a prompt. It fails only when
-// -service-pipe names a service that doesn't answer.
-func connectService(ctx context.Context, o options, plat *platform.Platform, logger *slog.Logger) (*app.Frontend, error) {
-	if o.demo || o.noService {
-		return nil, nil
+// -no-service, when no service is installed, or when it doesn't answer.
+// With nil, note says why an installed service isn't used, for the
+// Settings row and the log ("" for -demo, whose row says so itself, and
+// when there is no service). A stopped service is started first; the
+// install lets signed-in users do that without a prompt. It fails only
+// when -service-pipe names a service that doesn't answer.
+func connectService(ctx context.Context, o options, plat *platform.Platform, logger *slog.Logger) (fe *app.Frontend, note string, err error) {
+	if o.demo {
+		return nil, "", nil
+	}
+	if o.noService {
+		return nil, "it was started with -no-service", nil
 	}
 	api := serviceAPI(o, plat)
 	var wait time.Duration // 0: one check
@@ -59,12 +64,12 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		case err != nil:
 			logger.Warn("can't ask the service manager about the Lowpath service", "err", err)
 		case !st.Installed:
-			return nil, nil
+			return nil, "", nil
 		case !st.Running:
 			logger.Info("starting the Lowpath service")
 			if err := plat.Service.Start(); err != nil {
 				logger.Warn("can't start the Lowpath service; running the engine in this window", "err", err)
-				return nil, nil
+				return nil, fmt.Sprintf("Lowpath couldn't start it (%v)", err), nil
 			}
 			wait = serviceStartWait
 		}
@@ -73,12 +78,12 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 	dist, err := fs.Sub(ui.Dist, "dist")
 	if err != nil {
 		logger.Warn("no UI to serve in front of the service", "err", err)
-		return nil, nil
+		return nil, fmt.Sprintf("this build has no UI to show in front of it (%v)", err), nil
 	}
-	fe, err := app.NewFrontend(app.FrontendConfig{Dial: api.Dial, UI: dist, Log: logger})
+	fe, err = app.NewFrontend(app.FrontendConfig{Dial: api.Dial, UI: dist, Log: logger})
 	if err != nil {
 		logger.Warn("can't use the Lowpath service", "err", err)
-		return nil, nil
+		return nil, fmt.Sprintf("Lowpath couldn't connect to it (%v)", err), nil
 	}
 	ver, err := waitForService(ctx, fe, wait)
 	if err != nil {
@@ -86,19 +91,22 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		if api != plat.ServiceAPI {
 			// Asked for by name: running an engine here instead would
 			// hide that the service the caller wanted isn't there.
-			return nil, fmt.Errorf("no Lowpath service answers on %s: %w", api.String(), err)
+			return nil, "", fmt.Errorf("no Lowpath service answers on %s: %w", api.String(), err)
 		}
 		if !expected && errors.Is(err, platform.ErrServiceNotRunning) {
-			return nil, nil // nothing listens: the usual case without a service
+			return nil, "", nil // nothing listens: the usual case without a service
 		}
 		logger.Warn("the Lowpath service isn't answering; running the engine in this window", "api", api.String(), "err", err)
-		return nil, nil
+		if errors.Is(err, platform.ErrNotService) {
+			return nil, "the program answering on its pipe is not the installed service, so Lowpath won't talk to it", nil
+		}
+		return nil, fmt.Sprintf("it isn't answering (%v)", err), nil
 	}
 	if ver != app.Version {
 		logger.Warn("the Lowpath service is another version; reinstall it from this build (lowpathsvc install)", "service", ver, "app", app.Version)
 	}
 	logger.Info("using the Lowpath service", "api", api.String(), "version", ver)
-	return fe, nil
+	return fe, "", nil
 }
 
 // waitForService checks the service's version until it answers or wait

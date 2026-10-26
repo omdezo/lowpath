@@ -59,6 +59,9 @@ type options struct {
 	compatInventory        string
 	noService              bool
 	servicePipe            string
+	// serviceNote is set by run, not a flag: why the installed service
+	// isn't used (connectService).
+	serviceNote string
 }
 
 func main() {
@@ -130,7 +133,8 @@ func run(o options, plat *platform.Platform) error {
 
 	// The background service holds the rights route mode needs, so with it
 	// this process needs none and shows no prompt.
-	fe, err := connectService(ctx, o, plat, logger)
+	fe, note, err := connectService(ctx, o, plat, logger)
+	o.serviceNote = note
 	if err != nil {
 		ln.Close()
 		return err
@@ -251,6 +255,7 @@ func buildServer(ctx context.Context, o options, plat *platform.Platform, logger
 	so := shell.Options{
 		Data: o.data, Relays: o.relays, BloatServer: o.bloatServer, Demo: o.demo,
 		TraceCount: o.traceCount, TraceInterval: o.traceInterval, UI: dist,
+		ServiceNote: o.serviceNote,
 	}
 	if plat.Privileges.CanElevate() {
 		so.Elevate = func() error { return plat.Privileges.Relaunch(childArgs(o)) }

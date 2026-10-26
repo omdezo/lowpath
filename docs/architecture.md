@@ -126,7 +126,7 @@ type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platf
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
-| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
+| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -819,9 +819,13 @@ Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (Loca
   Files>\Lowpath\lowpathsvc.exe` (a service running as SYSTEM from a
   user-writable folder would let any program replace it, MITRE T1574.010),
   makes `%ProgramData%\Lowpath` SYSTEM- and Administrators-only (owner
-  Administrators, protected DACL `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`; a
-  folder a user made first, or a link, is moved aside to
-  `Lowpath.untrusted-<time>`), writes the user's `state.json` into it if it
+  Administrators, protected DACL `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`,
+  set in the same `CreateDirectory` call that makes it, so it never exists
+  with ProgramData's inherited "Users may create files and folders"; a
+  folder already there is kept only when SYSTEM or Administrators own it
+  and its protected DACL allows nobody else, and anything else, such as a
+  folder a user made first, one that inherited ProgramData's access list, a
+  file or a link, is moved aside to `Lowpath.untrusted-<time>`), writes the user's `state.json` into it if it
   has none (relays, keys, settings, custom games), and creates or updates
   the service: automatic start, `LocalSystem`, unrestricted service SID,
   restart after 2 s, 5 s and 30 s on failure (also when `run` returns an
@@ -831,7 +835,12 @@ Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (Loca
   reconfigure. Then it starts the service. `lowpathsvc uninstall` stops and
   deletes it and keeps the data folder; `lowpathsvc status` needs no rights.
 - **The service** is started by the service manager with `-data
-  %ProgramData%\Lowpath`. It takes the pipe first (failing fast if another
+  %ProgramData%\Lowpath`. Before it opens anything there, it secures that
+  folder the same way (`ServiceManager.SecureDataDir`), on every start: a
+  data folder deleted since the install would otherwise come back with
+  ProgramData's access list, and a user could plant a junction where this
+  SYSTEM process writes its log and caches. If that fails, it stops before
+  serving, and the service manager retries. It takes the pipe first (failing fast if another
   process holds it), builds the same `app.Server` as the window would
   (`internal/shell.Build`, `Config.InService`), and serves
   `Server.ServiceHandler()`: the API without the session check, since the
@@ -1009,7 +1018,9 @@ prints that URL to stderr only, never to the log.
   (`POST /api/elevate`), and, when the service isn't installed, the
   one-time `lowpathsvc install` instead.
 - Settings → Network: **Background service** row: In use, Not used
-  (`-demo`, `-no-service`), Stopped, Not installed (with the install
+  (`-demo`, or the window's own reason: `-no-service`, the service isn't
+  answering, isn't the installed process, or wouldn't start, from
+  `platform.service.message`), Stopped, Not installed (with the install
   command) or "—" with the service manager's error; hidden where the OS has
   no service yet.
 - `live.conflicts` → a banner above every page: running ones in red

@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// DefaultSocketPath is the service's API socket on Linux and macOS. /run is
-// writable only by root, so no other user can take the name first.
-const DefaultSocketPath = "/run/lowpath/api.sock"
-
 // SocketAPI is the service's API on a Unix domain socket: the Linux and
 // macOS ServiceAPI, and on every OS (Windows 10 has AF_UNIX too) a stand-in
 // for the named pipe in tests.

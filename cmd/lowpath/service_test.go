@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"lowpath/internal/app"
@@ -42,50 +43,56 @@ func TestConnectService(t *testing.T) {
 		setup  setup
 		use    bool // the window goes through the service
 		starts int
+		// note is part of the reason given for not using an installed
+		// service; "" wants none.
+		note string
 	}{
-		{"not installed", options{}, func(t *testing.T, fp *fakeplatform.Fake) {}, false, 0},
+		{"not installed", options{}, func(t *testing.T, fp *fakeplatform.Fake) {}, false, 0, ""},
 		{"running", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true, Running: true, PID: 7}, nil)
 			answer(t, fp)
-		}, true, 0},
+		}, true, 0, ""},
 		{"stopped: started, no prompt", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true}, nil)
 			fp.Service.OnStart(func() { answer(t, fp) })
-		}, true, 1},
+		}, true, 1, ""},
 		{"won't start", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true}, nil)
 			fp.Service.SetStartErr(errors.New("access denied"))
-		}, false, 0},
+		}, false, 0, "couldn't start it (access denied)"},
 		{"running but not answering", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true, Running: true, PID: 7}, nil)
-		}, false, 0},
+		}, false, 0, "isn't answering"},
 		{"impostor on the pipe", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true, Running: true, PID: 7}, nil)
 			answer(t, fp)
 			fp.ServiceAPI.SetDialErr(platform.ErrNotService)
-		}, false, 0},
+		}, false, 0, "not the installed service"},
 		{"no service manager, started by hand", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{}, errors.ErrUnsupported)
 			answer(t, fp)
-		}, true, 0},
+		}, true, 0, ""},
 		{"no service manager, nothing listens", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{}, errors.ErrUnsupported)
-		}, false, 0},
+		}, false, 0, ""},
 		{"demo never uses it", options{demo: true}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true, Running: true}, nil)
 			answer(t, fp)
-		}, false, 0},
+		}, false, 0, ""},
 		{"-no-service", options{noService: true}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{Installed: true, Running: true}, nil)
 			answer(t, fp)
-		}, false, 0},
+		}, false, 0, "-no-service"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fp := fakeplatform.New(t.TempDir())
 			tc.setup(t, fp)
-			fe, err := connectService(t.Context(), tc.o, fp.Platform(), quiet)
+			fe, note, err := connectService(t.Context(), tc.o, fp.Platform(), quiet)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if (tc.note == "") != (note == "") || !strings.Contains(note, tc.note) {
+				t.Errorf("note %q, want one with %q", note, tc.note)
 			}
 			if (fe != nil) != tc.use {
 				t.Errorf("frontend %v, want use=%v", fe != nil, tc.use)
@@ -116,7 +123,7 @@ func TestConnectServiceNamedPipeMissing(t *testing.T) {
 		name = filepath.Join(t.TempDir(), "api.sock")
 	}
 	fp := fakeplatform.New(t.TempDir())
-	fe, err := connectService(t.Context(), options{servicePipe: name}, fp.Platform(), quiet)
+	fe, _, err := connectService(t.Context(), options{servicePipe: name}, fp.Platform(), quiet)
 	if err == nil || fe != nil {
 		t.Fatalf("connectService = %v, %v; want an error", fe, err)
 	}

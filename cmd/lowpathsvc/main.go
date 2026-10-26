@@ -1,7 +1,7 @@
 // Lowpathsvc is the background service, LowpathSvc: it runs the engine and
 // packet capture with the rights capture needs, and serves the app's API on
-// a named pipe (\\.\pipe\lowpath on Windows, /run/lowpath/api.sock
-// elsewhere) instead of a loopback port. The Lowpath window then runs
+// a named pipe (\\.\pipe\lowpath on Windows, /run/lowpath/api.sock on
+// Linux, /var/run/lowpath/api.sock on macOS) instead of a loopback port. The Lowpath window then runs
 // unelevated and talks to it (see cmd/lowpath and app.Frontend), so after the
 // one-time install nobody has to answer an administrator prompt, a reboot
 // included. This is the development version of the service the roadmap's
@@ -139,7 +139,17 @@ func (c *cli) run(args []string, asService bool) error {
 	}
 	svc := newService(c.plat, o)
 	if asService {
-		ok, err := c.runner.Run(platform.ServiceName, svc.serve)
+		ok, err := c.runner.Run(platform.ServiceName, func(ctx context.Context) error {
+			// Before anything is opened in the data folder: if it was
+			// deleted since the install, it would come back with
+			// ProgramData's access list, which lets users plant links
+			// where this SYSTEM process writes. Failing here leaves
+			// networking untouched, and the service manager retries.
+			if err := c.plat.Service.SecureDataDir(o.data); err != nil && !errors.Is(err, errors.ErrUnsupported) {
+				return fmt.Errorf("service data folder: %w", err)
+			}
+			return svc.serve(ctx)
+		})
 		if ok {
 			return err
 		}

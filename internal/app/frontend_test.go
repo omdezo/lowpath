@@ -243,8 +243,24 @@ func TestNewFrontendNeedsDial(t *testing.T) {
 	}
 }
 
-// Bootstrap tells the UI whether a background service is there to use.
+// Bootstrap tells the UI whether a background service is there to use,
+// and why the window doesn't use an installed one when it knows.
 func TestPlatformServiceView(t *testing.T) {
+	t.Run("the window's reason", func(t *testing.T) {
+		for _, st := range []platform.ServiceState{{Installed: true}, {Installed: true, Running: true, PID: 7}} {
+			fp := newFake(t)
+			fp.Service.Set(st, nil)
+			_, srv := newRealServer(t, fp, func(c *Config) { c.ServiceNote = "it isn't answering (timeout)" })
+			if got := srv.platform().Service; got.Message != "it isn't answering (timeout)" {
+				t.Errorf("%+v: service view %+v, want the window's reason", st, got)
+			}
+		}
+		fp := newFake(t)
+		_, srv := newRealServer(t, fp, func(c *Config) { c.ServiceNote = "stale" })
+		if got := srv.platform().Service; got.State != "not_installed" || got.Message != "" {
+			t.Errorf("not installed: %+v, want no reason", got)
+		}
+	})
 	for _, tc := range []struct {
 		name  string
 		state platform.ServiceState

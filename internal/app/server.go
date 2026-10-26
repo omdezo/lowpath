@@ -100,6 +100,10 @@ type Config struct {
 	// InService: this server runs inside the background service
 	// (cmd/lowpathsvc) and the window reaches it through a Frontend.
 	InService bool
+	// ServiceNote says why this window runs its own engine although the
+	// background service is installed (it wouldn't start, didn't answer,
+	// or -no-service); the Settings row shows it instead of guessing.
+	ServiceNote string
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -135,6 +139,8 @@ type Server struct {
 	verdict   *verdicts
 	marker    SessionMarker // nil: none
 	inService bool
+	// serviceNote: see Config.ServiceNote.
+	serviceNote string
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -237,10 +243,11 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:      newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
-		verdict:   newVerdicts(cfg.NetStats),
-		marker:    cfg.Marker,
-		inService: cfg.InService,
+		line:        newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		verdict:     newVerdicts(cfg.NetStats),
+		marker:      cfg.Marker,
+		inService:   cfg.InService,
+		serviceNote: cfg.ServiceNote,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,

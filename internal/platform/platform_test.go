@@ -178,8 +178,18 @@ func TestElevationHelps(t *testing.T) {
 func TestNativeServiceParts(t *testing.T) {
 	p := Native()
 	want := DefaultSocketPath
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		want = `\\.\pipe\lowpath`
+	case "darwin":
+		// macOS has no /run.
+		if want != "/var/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on macOS", want)
+		}
+	case "linux":
+		if want != "/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on Linux", want)
+		}
 	}
 	if p.ServiceAPI.String() != want {
 		t.Errorf("service API %q, want %q", p.ServiceAPI.String(), want)

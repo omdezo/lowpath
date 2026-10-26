@@ -257,6 +257,13 @@ func (s *WindowsService) Uninstall() error {
 	return nil
 }
 
+func (s *WindowsService) SecureDataDir(dir string) error {
+	if !s.elevated() {
+		return fmt.Errorf("secure %s: %w", dir, ErrNeedAdmin)
+	}
+	return secureDir(dir)
+}
+
 // placeProgram copies src to <Program Files>\Lowpath\lowpathsvc.exe, which
 // only administrators can change, and returns that path.
 func (s *WindowsService) placeProgram(src string) (string, error) {
@@ -349,33 +356,56 @@ func setServiceSecurity(h windows.Handle, sddl string) error {
 	return nil
 }
 
-// secureDir creates dir and makes Administrators its owner and SYSTEM and
-// Administrators the only accounts with access, replacing whatever ACL a
-// folder made earlier (perhaps by a user) had.
+// secureDir creates dir, or checks the one there, and makes Administrators
+// its owner and SYSTEM and Administrators the only accounts with access.
 //
-// A folder that a user made first (ProgramData lets users create folders),
-// or a link to somewhere else, is moved aside rather than taken over: its
-// files would be the user's, and a planted state.json could send game
+// The folder is created with its access list in one step, so no user can
+// slip in between: ProgramData lets every user create folders and files in
+// the folders under it, and a user who got in first could plant a link
+// that makes the SYSTEM service write wherever it points. For the same
+// reason a folder that is already there is kept only when it is a real
+// folder that SYSTEM or Administrators own and only they can change (a
+// folder this function secured). Anything else (made by a user, made
+// with ProgramData's inherited access list, a file or a link) is moved
+// aside rather than taken over: a planted state.json could send game
 // traffic through any relay.
 func secureDir(dir string) error {
-	if fi, err := os.Lstat(dir); err == nil {
-		trusted, err := trustedDir(dir, fi)
+	return secureDirWith(dir, dataDirSDDL)
+}
+
+// secureAttempts bounds moving aside a folder that keeps coming back.
+const secureAttempts = 3
+
+func secureDirWith(dir, sddl string) error {
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return fmt.Errorf("service data folder: %w", err)
+	}
+	for attempt := 1; ; attempt++ {
+		created, err := createDir(dir, sd)
+		if err != nil {
+			return fmt.Errorf("service data folder: %w", err)
+		}
+		if created {
+			break
+		}
+		trusted, err := trustedDir(dir)
 		if err != nil {
 			return err
 		}
-		if !trusted {
-			aside := fmt.Sprintf("%s.untrusted-%d", dir, time.Now().Unix())
-			if err := os.Rename(dir, aside); err != nil {
-				return fmt.Errorf("move aside %s, which another user made: %w", dir, err)
-			}
+		if trusted {
+			break
 		}
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("service data folder: %w", err)
-	}
-	sd, err := windows.SecurityDescriptorFromString(dataDirSDDL)
-	if err != nil {
-		return err
+		if attempt == secureAttempts {
+			return fmt.Errorf("service data folder %s: another program keeps making it", dir)
+		}
+		aside := fmt.Sprintf("%s.untrusted-%d", dir, time.Now().UnixNano())
+		if err := os.Rename(dir, aside); err != nil {
+			return fmt.Errorf("move aside %s, which another user could change: %w", dir, err)
+		}
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
@@ -385,6 +415,8 @@ func secureDir(dir string) error {
 	if err != nil {
 		return err
 	}
+	// Owner and access list again: a folder made by an administrator's
+	// process may have another owner, and this resets the files in it.
 	err = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		admins, nil, dacl, nil)
@@ -394,21 +426,80 @@ func secureDir(dir string) error {
 	return nil
 }
 
-// trustedDir reports whether an existing data folder is a real folder owned
-// by SYSTEM or Administrators.
-func trustedDir(dir string, fi os.FileInfo) (bool, error) {
+// createDir makes dir with the security descriptor sd in one call, so it
+// never exists with the access list it would inherit. created is false,
+// with no error, when something is there already.
+func createDir(dir string, sd *windows.SECURITY_DESCRIPTOR) (created bool, err error) {
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return false, err
+	}
+	sa := windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	err = windows.CreateDirectory(p, &sa)
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("create %s: %w", dir, err)
+	}
+	return true, nil
+}
+
+// trustedDir reports whether the existing data folder is a real folder
+// owned by SYSTEM or Administrators that only they can change.
+func trustedDir(dir string) (bool, error) {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return false, fmt.Errorf("check %s: %w", dir, err)
+	}
 	if !fi.IsDir() || fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 		return false, nil // a file, a symbolic link or a junction
 	}
-	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return false, fmt.Errorf("check %s: %w", dir, err)
 	}
+	return adminsOnly(sd), nil
+}
+
+// adminsOnly reports whether sd is owned by SYSTEM or Administrators and
+// has a protected access list that allows nobody else anything: no
+// inherited "Users may create files" from ProgramData, no ACE a user added.
+func adminsOnly(sd *windows.SECURITY_DESCRIPTOR) bool {
 	owner, _, err := sd.Owner()
-	if err != nil {
-		return false, fmt.Errorf("check %s: %w", dir, err)
+	if err != nil || owner == nil || !isAdminSID(owner) {
+		return false
 	}
-	return owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) || owner.IsWellKnown(windows.WinLocalSystemSid), nil
+	ctl, _, err := sd.Control()
+	if err != nil || ctl&windows.SE_DACL_PROTECTED == 0 {
+		return false
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return false // no DACL at all gives everyone full access
+	}
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return false
+		}
+		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
+			continue // denying never opens anything up
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			return false // object or callback ACEs: not something this code writes
+		}
+		if !isAdminSID((*windows.SID)(unsafe.Pointer(&ace.SidStart))) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAdminSID(s *windows.SID) bool {
+	return s.IsWellKnown(windows.WinBuiltinAdministratorsSid) || s.IsWellKnown(windows.WinLocalSystemSid)
 }
 
 // writeSeed writes the seed files that dir doesn't have yet. dir is secured

@@ -264,3 +264,44 @@ func TestStatus(t *testing.T) {
 		t.Error("status of a service that doesn't answer succeeded")
 	}
 }
+
+// scmRunner plays the service manager: it runs the service at once, with a
+// context that has already ended, so serve starts up and stops.
+type scmRunner struct{ calls int }
+
+func (r *scmRunner) Run(_ string, run func(ctx context.Context) error) (bool, error) {
+	r.calls++
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return true, run(ctx)
+}
+
+// Started by the service manager, the service secures its data folder
+// before it writes anything there, at every start; when it can't, it stops
+// before serving anything.
+func TestServiceSecuresDataFolder(t *testing.T) {
+	c := newTestCLI(t)
+	r := &scmRunner{}
+	c.runner = r
+	data := filepath.Join(t.TempDir(), "Lowpath")
+	if err := c.dispatch("", []string{"-data", data}); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.fp.Service.Secured(); r.calls != 1 || len(got) != 1 || got[0].Dir != data || !got[0].Empty {
+		t.Fatalf("secured %+v (runs %d), want %s once, before the log", got, r.calls, data)
+	}
+	if _, err := os.Stat(filepath.Join(data, "lowpath.log")); err != nil {
+		t.Errorf("service log: %v", err)
+	}
+
+	c = newTestCLI(t)
+	c.runner = &scmRunner{}
+	c.fp.Service.SetSecureErr(platform.ErrNeedAdmin)
+	data = filepath.Join(t.TempDir(), "Lowpath")
+	if err := c.dispatch("", []string{"-data", data}); err == nil {
+		t.Error("served with a data folder it couldn't secure")
+	}
+	if _, err := os.Stat(filepath.Join(data, "lowpath.log")); err == nil {
+		t.Error("wrote its log into a data folder it couldn't secure")
+	}
+}
