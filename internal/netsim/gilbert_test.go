@@ -220,3 +220,34 @@ func TestGilbertTimeStepsWithTheClock(t *testing.T) {
 		}
 	}
 }
+
+// TestGilbertTimeStepChange: a profile that changes the step size at
+// runtime keeps the chain moving in the new steps instead of waiting for
+// the clock to catch up with an index counted in the old ones.
+func TestGilbertTimeStepChange(t *testing.T) {
+	rng := newRand(3)
+	var c geChain
+	fine := GilbertTime(0.03, 8*time.Millisecond, time.Millisecond)
+	now := time.Duration(0)
+	for ; now < 10*time.Second; now += time.Millisecond {
+		c.drop(fine, now, rng)
+	}
+	// Ten times coarser from t = 10 s: the old index (10000) is ten times
+	// the new one (1000).
+	coarse := GilbertTime(0.03, 80*time.Millisecond, 10*time.Millisecond)
+	const n = 5000 // one packet per step, 50 s
+	runs, prev := 0, false
+	for range n {
+		d := c.drop(coarse, now, rng)
+		if d && !prev {
+			runs++
+		}
+		prev = d
+		now += 10 * time.Millisecond
+	}
+	// About n·p = 19 bursts expected; a held chain gives none (or one
+	// that never ends).
+	if runs < 5 {
+		t.Errorf("after the step change %d loss bursts in %d steps, want about %.0f", runs, n, n*coarse.P)
+	}
+}

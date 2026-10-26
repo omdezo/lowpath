@@ -145,7 +145,8 @@ func (g GilbertElliott) JointLoss(n int) float64 {
 type geChain struct {
 	started bool
 	bad     bool
-	step    int64 // index of the current Step, time mode only
+	step    int64         // index of the current Step, time mode only
+	unit    time.Duration // the Step that step counts in
 }
 
 // drop advances the chain to now (time since the link or segment started;
@@ -161,10 +162,15 @@ func (c *geChain) drop(m GilbertElliott, now time.Duration, rng *rand.Rand) bool
 		c.started = true
 		c.bad = rng.Float64() < m.BadShare()
 		if m.Step > 0 {
-			c.step = int64(now / m.Step)
+			c.step, c.unit = int64(now/m.Step), m.Step
 		}
 	case m.Step > 0:
 		s := int64(now / m.Step)
+		if m.Step != c.unit {
+			// The profile changed the step size: count on from here in the
+			// new one, or an index in the old one would hold the chain still.
+			c.step, c.unit = s, m.Step
+		}
 		if s > c.step { // concurrent senders may arrive slightly out of order: same step then
 			c.bad = rng.Float64() < m.BadAfter(int(min(s-c.step, math.MaxInt32)), c.bad)
 			c.step = s
