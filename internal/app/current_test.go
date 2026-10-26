@@ -121,8 +121,10 @@ func TestCurrentServerFromFlowEvents(t *testing.T) {
 	}
 
 	// The game starts: the watch opens and learns its PID.
+	pids := fakePIDs(2)
+	cs2PID, steamPID := pids[0], pids[1]
 	fp.Games.SetRunning("cs2.exe", "steam.exe")
-	fp.Owners.Set(nil, map[uint32]string{4242: "cs2.exe", 77: "steam.exe"})
+	fp.Owners.Set(nil, map[uint32]string{cs2PID: "cs2.exe", steamPID: "steam.exe"})
 	tick(time.Second)
 	if !fp.Flows.Watching() {
 		t.Fatal("a running game must open the flow watch")
@@ -134,15 +136,15 @@ func TestCurrentServerFromFlowEvents(t *testing.T) {
 		}
 	}
 	for range 12 {
-		emit(detect.FlowEvent{PID: 4242, Proto: "udp", Local: local, Remote: game, Bytes: 120, Outbound: true})
+		emit(detect.FlowEvent{PID: cs2PID, Proto: "udp", Local: local, Remote: game, Bytes: 120, Outbound: true})
 		// A receive with the ends the other way round still counts for the game server.
-		emit(detect.FlowEvent{PID: 4242, Proto: "udp", Local: game, Remote: local, Bytes: 300})
+		emit(detect.FlowEvent{PID: cs2PID, Proto: "udp", Local: game, Remote: local, Bytes: 300})
 	}
-	emit(detect.FlowEvent{PID: 4242, Proto: "udp", Local: local, Remote: other, Outbound: true})
+	emit(detect.FlowEvent{PID: cs2PID, Proto: "udp", Local: local, Remote: other, Outbound: true})
 	// Not game servers: the game's web traffic, DNS, and another program.
-	emit(detect.FlowEvent{PID: 4242, Proto: "tcp", Local: local, Remote: netip.MustParseAddrPort("198.51.100.80:443"), Outbound: true})
-	emit(detect.FlowEvent{PID: 4242, Proto: "udp", Local: local, Remote: netip.MustParseAddrPort("192.168.1.1:53"), Outbound: true})
-	emit(detect.FlowEvent{PID: 77, Proto: "udp", Local: local, Remote: netip.MustParseAddrPort("198.51.100.200:27017"), Outbound: true})
+	emit(detect.FlowEvent{PID: cs2PID, Proto: "tcp", Local: local, Remote: netip.MustParseAddrPort("198.51.100.80:443"), Outbound: true})
+	emit(detect.FlowEvent{PID: cs2PID, Proto: "udp", Local: local, Remote: netip.MustParseAddrPort("192.168.1.1:53"), Outbound: true})
+	emit(detect.FlowEvent{PID: steamPID, Proto: "udp", Local: local, Remote: netip.MustParseAddrPort("198.51.100.200:27017"), Outbound: true})
 	tick(time.Second)
 
 	r = get()
@@ -177,7 +179,7 @@ func TestCurrentServerFromFlowEvents(t *testing.T) {
 
 	// Five seconds of play save the server, as a boost would.
 	for range 5 {
-		emit(detect.FlowEvent{PID: 4242, Proto: "udp", Local: local, Remote: game, Outbound: true})
+		emit(detect.FlowEvent{PID: cs2PID, Proto: "udp", Local: local, Remote: game, Outbound: true})
 		tick(time.Second)
 	}
 	if saved := srv.store.Servers("cs2"); len(saved) == 0 || saved[0] != game {
@@ -335,14 +337,15 @@ func TestCurrentServerDoesNotSaveTCP(t *testing.T) {
 		srv.scanRunning()
 		srv.current.tick(srv.runningGames())
 	}
+	cs2PID := fakePIDs(1)[0]
 	fp.Games.SetRunning("cs2.exe")
-	fp.Owners.Set(nil, map[uint32]string{4242: "cs2.exe"})
+	fp.Owners.Set(nil, map[uint32]string{cs2PID: "cs2.exe"})
 	tick()
 	local := netip.MustParseAddrPort("192.168.1.20:50124")
 	chat := netip.MustParseAddrPort("203.0.113.70:5223")
 	for range 8 {
 		for range 5 {
-			fp.Flows.Emit(detect.FlowEvent{PID: 4242, Proto: "tcp", Local: local, Remote: chat, Outbound: true})
+			fp.Flows.Emit(detect.FlowEvent{PID: cs2PID, Proto: "tcp", Local: local, Remote: chat, Outbound: true})
 		}
 		tick()
 	}
