@@ -4,10 +4,11 @@
 // sockets.
 //
 // Resolver is the OS-neutral contract; New returns the implementation for
-// the operating system the binary is built for (GetExtendedUdpTable and a
-// Toolhelp32 snapshot on Windows). Where no implementation exists yet, every
-// call fails with an error that matches errors.ErrUnsupported, so callers
-// can say so instead of guessing.
+// the operating system the binary is built for: GetExtendedUdpTable and a
+// Toolhelp32 snapshot on Windows, /proc on Linux (Procfs), libproc on macOS
+// (Darwin). Where no implementation exists, every call fails with an error
+// that matches errors.ErrUnsupported, so callers can say so instead of
+// guessing.
 package owner
 
 import (
@@ -39,6 +40,35 @@ type Resolver interface {
 	UDPSockets() ([]Socket, error)
 	// ProcessNames maps every running PID to its image name ("cs2.exe").
 	ProcessNames() (map[uint32]string, error)
+}
+
+// Program is a running process with every name it goes by. On Linux and
+// macOS one name is not enough to recognise a game: the kernel's short name
+// is cut to 15 or 16 bytes ("VALORANT-Win64-"), and a Windows game under
+// Wine or Proton runs from the Wine loader, so the program file is not the
+// game's while argv[0] holds its Windows path.
+type Program struct {
+	PID uint32
+	// Name is the one name to show and save ("cs2", "RocketLeague.exe").
+	Name string
+	// Names are all the names the process goes by, Name included, as the
+	// system spells them: short name, program file name, argv[0] name.
+	Names []string
+	// Exe is the program's full path ("" when the system won't tell). For
+	// a Wine process it is the game's .exe mapped into the Wine prefix.
+	Exe string
+}
+
+// ProcessTable lists running programs.
+type ProcessTable interface {
+	Programs() ([]Program, error)
+}
+
+// Table is a Resolver that also lists programs with all their names: what
+// game detection needs on Linux and macOS.
+type Table interface {
+	Resolver
+	ProcessTable
 }
 
 // ListProcesses lists the programs that have UDP sockets open, sorted by
