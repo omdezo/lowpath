@@ -25,6 +25,11 @@ func (s Stats) Score() float64 {
 	return s.RTT + 3*s.Jitter + 8*s.Loss
 }
 
+// measured reports whether s rests on at least one probe with an outcome: a
+// reply, or none within probeTimeout. Probes still in flight count as
+// neither, so until then Up is false without anything having been lost.
+func (s Stats) measured() bool { return s.Samples > 0 || s.Loss > 0 }
+
 const (
 	ringSize     = 128
 	statsWindow  = 50 // probes considered per live snapshot (~5 s at 10 Hz)

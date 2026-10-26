@@ -137,6 +137,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- A boost no longer falls back to the direct route for a second right after
+  it starts when the PC is busy: a route in use is judged on what its
+  probes said, so one whose first probes are still in flight (or not sent
+  yet) at the first selection tick keeps carrying the game. Routes that
+  are all dead still fall back, about one second later than before, once
+  their first probes go unanswered for 1 s, and within about 3 s of
+  the start even if no probe could be sent (#178).
 - The service's Unix socket now reads a refused account's request before
   answering 403, so that window always learns it isn't served ("only
   serves accounts signed in at this computer") and runs the engine itself,
