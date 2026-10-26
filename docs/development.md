@@ -280,7 +280,11 @@ desktop, Lowpath asks for them itself: the polkit password dialog runs
 `setcap cap_net_admin,cap_net_raw+ep` on the program file (once; a new
 version asks again), and the program starts again as the same user, so its
 window and files stay yours. Cancel it and the banner offers **Allow route
-mode** later, or proxy mode. By hand:
+mode** later, or proxy mode. Before the prompt, a program file you own is
+made `0700`: with the capabilities on it, anyone who can run it could change
+the system's routes and firewall. A copy started under `no_new_privs` (a
+sandbox, or a systemd unit with `NoNewPrivileges=yes`) isn't offered the
+prompt, because the kernel grants no file capabilities there. By hand:
 
 ```sh
 go build -o lowpath ./cmd/lowpath && go build -o lpcheck ./cmd/lpcheck
@@ -292,6 +296,8 @@ The window is a WebKitGTK view run by the system's Python (`python3-gi`
 and the WebKitGTK typelib, on Ubuntu `gir1.2-webkit2-4.1`, on Fedora
 `webkitgtk6.0` or `webkit2gtk4.1`; GNOME desktops have them), else Chrome,
 Chromium, Edge, Brave or Vivaldi in app mode, else the default browser.
+Without a graphical session (`WAYLAND_DISPLAY` and `DISPLAY` unset, as over
+ssh) no window is tried, and the address is printed instead.
 Closing it quits Lowpath and stops the boost. A file downloaded with a
 browser isn't executable yet: `chmod +x lowpath-linux-amd64`, or tick
 *Allow executing file as program* in its properties, then open it; from

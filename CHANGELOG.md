@@ -14,9 +14,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   default browser otherwise), and closing it quits and stops the boost. A
   second start brings the running copy forward instead of starting another.
   On Linux route mode asks for your password once (polkit) to give the
-  program its two network capabilities and keeps running as you, and the
-  first start adds Lowpath to the app menu; the build makes a universal
-  `Lowpath.app` for macOS. Logs go to `~/.local/state/Lowpath` and
+  program file, made private to you, its two network capabilities, and
+  keeps running as you; the first start adds Lowpath to the app menu. The
+  build makes a universal `Lowpath.app` for macOS. Logs go to `~/.local/state/Lowpath` and
   `~/Library/Logs/Lowpath` (`-logs` to choose), and SIGHUP stops the app
   cleanly (#44).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I

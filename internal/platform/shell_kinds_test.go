@@ -25,7 +25,7 @@ func hasEnv(c command, kv string) bool { return slices.Contains(c.env, kv) }
 func TestXDGKinds(t *testing.T) {
 	dir := t.TempDir()
 	x := newFakeExec("/usr/bin/python3", "chromium")
-	w := newXDGDesktop(DesktopConfig{ProfileDir: dir, Icon: []byte("png"), Log: testLog()}, x, env(nil), homeAt(dir))
+	w := newXDGDesktop(DesktopConfig{ProfileDir: dir, Icon: []byte("png"), Log: testLog()}, x, env(map[string]string{"WAYLAND_DISPLAY": "wayland-0"}), homeAt(dir))
 	if len(w.kinds) != 2 || w.kinds[0].name != "webkitgtk" || w.kinds[1].name != "chromium" {
 		t.Fatalf("kinds %v", w.kinds)
 	}
@@ -67,10 +67,20 @@ func TestXDGKinds(t *testing.T) {
 	}
 
 	// Nothing installed: each kind says what is missing.
-	none := newXDGDesktop(DesktopConfig{ProfileDir: dir}, newFakeExec(), env(nil), homeAt(dir))
+	none := newXDGDesktop(DesktopConfig{ProfileDir: dir}, newFakeExec(), env(map[string]string{"DISPLAY": ":0"}), homeAt(dir))
 	for _, k := range none.kinds {
 		if _, err := k.command("u"); err == nil {
 			t.Errorf("%s available with nothing installed", k.name)
+		}
+	}
+
+	// Everything installed but no graphical session (a TTY or ssh): no
+	// window program is started, so the app falls back to the browser or
+	// the printed address instead of waiting for an invisible window.
+	tty := newXDGDesktop(DesktopConfig{ProfileDir: dir}, newFakeExec("/usr/bin/python3", "chromium"), env(nil), homeAt(dir))
+	for _, k := range tty.kinds {
+		if _, err := k.command("u"); err == nil || !strings.Contains(err.Error(), "no graphical session") {
+			t.Errorf("%s without a display: %v", k.name, err)
 		}
 	}
 }

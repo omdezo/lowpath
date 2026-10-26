@@ -1,8 +1,8 @@
 # Lowpath's app window on Linux: the UI in a WebKitGTK view, run by the
 # system's Python with PyGObject, so the app itself needs no GTK. Started by
 # internal/platform (desktop_xdg.go) with the URL in LOWPATH_URL. Exit
-# status 3 means no WebKitGTK is installed; closing the window, or SIGTERM,
-# exits with 0.
+# status 3 means no WebKitGTK is installed, 4 that there is no display;
+# closing the window, or SIGTERM, exits with 0.
 import os
 import signal
 import sys
@@ -21,11 +21,14 @@ MIN_SIZE = (920, 600)
 
 def load():
     # GTK 4 with WebKitGTK 6.0 (Fedora 39+, Ubuntu 24.04+), then GTK 3
-    # with WebKit2GTK 4.1 or 4.0 (older releases).
+    # with WebKit2GTK 4.1 or 4.0 (older releases). The WebKit version is
+    # required first: require_version records a version as soon as it is
+    # available, and a Gtk 4.0 recorded before WebKit 6.0 turns out to be
+    # missing would make every GTK 3 fallback fail with "already requires".
     for gtk, webkit, name in (("4.0", "6.0", "WebKit"), ("3.0", "4.1", "WebKit2"), ("3.0", "4.0", "WebKit2")):
         try:
-            gi.require_version("Gtk", gtk)
             gi.require_version(name, webkit)
+            gi.require_version("Gtk", gtk)
             from gi.repository import GLib, Gtk  # noqa: F401
             mod = __import__("gi.repository", fromlist=[name])
             return gtk, getattr(mod, name)
@@ -40,7 +43,13 @@ def main():
     gtk, webkit = load()
     if webkit is None:
         sys.exit(3)
-    from gi.repository import GLib, Gtk
+    from gi.repository import Gdk, GLib, Gtk
+
+    # No display to show a window on (a TTY or ssh session): exit, so the
+    # app opens the browser or prints the address instead of waiting for a
+    # window nobody can see.
+    if Gdk.Display.get_default() is None:
+        sys.exit(4)
 
     # The Wayland app id and X11 class: they match lowpath.desktop, so the
     # dock shows Lowpath's name and icon.
@@ -75,4 +84,7 @@ def main():
     loop.run()
 
 
-main()
+# Run as a script (python3 -c); the tests load it as a module to check
+# load() against a stand-in gi.
+if __name__ == "__main__":
+    main()

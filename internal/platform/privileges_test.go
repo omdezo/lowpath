@@ -13,11 +13,61 @@ const testExe = "/home/p/Apps/Lowpath/lowpath"
 
 func testPolkit(x *fakeExec, m mountFlags, caps *bool) *Polkit {
 	return &Polkit{
-		Root:   Root{euid: func() int { return 1000 }},
-		x:      x,
-		exe:    func() (string, error) { return testExe, nil },
-		mount:  func(string) (mountFlags, error) { return m, nil },
-		getcap: func(string) bool { return *caps },
+		Root:       Root{euid: func() int { return 1000 }},
+		x:          x,
+		exe:        func() (string, error) { return testExe, nil },
+		mount:      func(string) (mountFlags, error) { return m, nil },
+		getcap:     func(string) bool { return *caps },
+		noNewPrivs: func() bool { return false },
+		ownerOnly:  func(string) error { return nil },
+	}
+}
+
+// Under no_new_privs (a sandbox, or a unit with NoNewPrivileges=yes) the
+// kernel grants no file capabilities, so neither the first prompt nor a
+// restart with the capabilities already on the file would help: no
+// "Allow route mode" button, and no restart loop.
+func TestPolkitNoNewPrivs(t *testing.T) {
+	for _, granted := range []bool{false, true} {
+		x := newFakeExec("/usr/bin/pkexec", "/usr/sbin/setcap")
+		caps := granted
+		p := testPolkit(x, mountFlags{}, &caps)
+		p.noNewPrivs = func() bool { return true }
+		if p.CanElevate() {
+			t.Errorf("granted=%v: CanElevate under no_new_privs", granted)
+		}
+		if err := p.Relaunch(nil); err == nil || !strings.Contains(err.Error(), "no_new_privs") {
+			t.Errorf("granted=%v: Relaunch = %v", granted, err)
+		}
+		if len(x.runs) != 0 || len(x.spawned) != 0 {
+			t.Errorf("granted=%v: ran %v, spawned %v", granted, x.runs, x.spawned)
+		}
+	}
+}
+
+// The program file is kept to its owner before it gets the capabilities,
+// so other accounts on the PC can't start a Lowpath that changes routes;
+// if that fails, no prompt is shown.
+func TestPolkitOwnerOnlyFirst(t *testing.T) {
+	x := newFakeExec("/usr/bin/pkexec", "/usr/sbin/setcap")
+	caps := false
+	var order []string
+	x.run = func(command) (int, string) { order = append(order, "setcap"); caps = true; return 0, "" }
+	p := testPolkit(x, mountFlags{}, &caps)
+	p.ownerOnly = func(path string) error { order = append(order, "owner-only "+path); return nil }
+	if err := p.Relaunch(nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"owner-only " + testExe, "setcap"}) {
+		t.Errorf("order %v", order)
+	}
+
+	x = newFakeExec("/usr/bin/pkexec", "/usr/sbin/setcap")
+	caps = false
+	p = testPolkit(x, mountFlags{}, &caps)
+	p.ownerOnly = func(string) error { return os.ErrPermission }
+	if err := p.Relaunch(nil); err == nil || len(x.runs) != 0 || len(x.spawned) != 0 {
+		t.Errorf("chmod failed: %v, ran %v, spawned %v", err, x.runs, x.spawned)
 	}
 }
 

@@ -24,6 +24,14 @@ type Polkit struct {
 	exe    func() (string, error)
 	mount  func(path string) (mountFlags, error)
 	getcap func(path string) bool
+	// noNewPrivs reports whether this process runs with no_new_privs, under
+	// which execve grants no file capabilities (capabilities(7)).
+	noNewPrivs func() bool
+	// ownerOnly takes the group's and others' rights off the program file
+	// when this user owns it, before it gets the capabilities: otherwise
+	// every account on the PC could start a Lowpath that can change the
+	// system's routes and firewall.
+	ownerOnly func(path string) error
 }
 
 // mountFlags are the options of the filesystem a file is on that matter
@@ -69,6 +77,12 @@ func (p *Polkit) why() error {
 	if _, _, err := p.tools(); err != nil {
 		return err
 	}
+	// Inherited from a sandbox, a launcher or a NoNewPrivileges= unit: the
+	// restarted copy would get no capabilities whatever the file carries,
+	// and the button would restart Lowpath into the same problem forever.
+	if p.noNewPrivs() {
+		return errors.New("Lowpath was started with no_new_privs (a sandbox or service setting), which keeps programs from getting file capabilities")
+	}
 	exe, err := p.exe()
 	if err != nil {
 		return err
@@ -84,12 +98,15 @@ func (p *Polkit) Relaunch(args []string) error {
 	if err != nil {
 		return fmt.Errorf("platform: can't ask for network rights: %w", err)
 	}
+	if err := p.why(); err != nil {
+		return fmt.Errorf("platform: can't give Lowpath network rights: %w", err)
+	}
 	exe, err := p.exe()
 	if err != nil {
 		return err
 	}
-	if err := p.grantable(exe); err != nil {
-		return fmt.Errorf("platform: can't give Lowpath network rights: %w", err)
+	if err := p.ownerOnly(exe); err != nil {
+		return fmt.Errorf("platform: keep %s to its owner before giving it network rights: %w", exe, err)
 	}
 	if !p.getcap(exe) {
 		code, stderr, err := p.x.Run(context.Background(), command{path: pkexec, args: []string{setcap, routeCaps, exe}})

@@ -50,10 +50,25 @@ func newXDGDesktop(cfg DesktopConfig, x execer, getenv func(string) string, home
 		},
 	}
 	w.kinds = []windowKind{
-		webkitGTKKind(cfg, x, getenv),
-		xdgChromiumKind(cfg, x, home),
+		onDisplay(webkitGTKKind(cfg, x, getenv), getenv),
+		onDisplay(xdgChromiumKind(cfg, x, home), getenv),
 	}
 	return w
+}
+
+// onDisplay makes k unavailable outside a graphical session (a TTY, ssh,
+// a service started before the desktop): a window program there may fail
+// slowly, or keep running with nothing on screen, and the app would wait
+// for a window nobody can see instead of printing the address.
+func onDisplay(k windowKind, getenv func(string) string) windowKind {
+	inner := k.command
+	k.command = func(url string) (command, error) {
+		if getenv("WAYLAND_DISPLAY") == "" && getenv("DISPLAY") == "" {
+			return command{}, errors.New("no graphical session (WAYLAND_DISPLAY and DISPLAY are not set)")
+		}
+		return inner(url)
+	}
+	return k
 }
 
 func webkitGTKKind(cfg DesktopConfig, x execer, getenv func(string) string) windowKind {
