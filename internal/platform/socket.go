@@ -223,8 +223,9 @@ var refusal = []byte("HTTP/1.1 403 Forbidden\r\n" +
 // and read the answer.
 const refuseWait = 2 * time.Second
 
-// maxRefusedRead bounds what RefusePeer reads of a refused client's
-// request, head and then the rest: the window's are a few hundred bytes.
+// maxRefusedRead bounds each of RefusePeer's two reads of a refused
+// client's request, the head and then the rest: the window's are a few
+// hundred bytes.
 const maxRefusedRead = 64 << 10
 
 // RefusePeer answers a connection the service won't serve with 403
