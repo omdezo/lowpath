@@ -75,6 +75,8 @@ type Platform struct {
     Inventory  SystemInventory // = compat.System
     Service    ServiceManager  // the background service (LowpathSvc)
     ServiceAPI ServiceAPI      // the channel between the window and the service
+    WiFi       WiFi            // = diag.WLAN
+    Conns      Connections     // = diag.ConnStats: per-connection TCP bytes
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -126,6 +128,7 @@ type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platf
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
 | Paths | `%APPDATA%\Lowpath` (data and log), `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); log in `$XDG_STATE_HOME/Lowpath` (`~/.local/state`) or `~/Library/Logs/Lowpath`; no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
+| Conns | `ErrUnsupported`: `GetPerTcpConnectionEStats` returns data bytes only after `SetPerTcpConnectionEStats` enabled collection, which needs administrator rights, and so does the Kernel-Network ETW session; `GetExtendedTcpTable` needs none but has no byte counts | Linux: `sock_diag` (`NETLINK_SOCK_DIAG`, `SOCK_DIAG_BY_FAMILY` with `INET_DIAG_INFO`): every TCP socket of the namespace with `tcp_info`'s `tcpi_bytes_acked` / `tcpi_bytes_received` (Linux 4.1+), no capability needed; owners from `/proc/<pid>/fd` for this user's processes, looked up only for the busiest connections and cached by inode. macOS: `ErrUnsupported` (`net.inet.tcp.pcblist_n` has per-socket counts in private layouts) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
 | Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder; each connection's account is checked with `SO_PEERCRED` or `LOCAL_PEERCRED`: root, the service's own account and accounts with a logind or utmpx session are served, others get 403 (`platform.SessionPolicy`), and the window refuses a socket root doesn't serve), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
 
@@ -745,6 +748,11 @@ func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, err
 func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 func NewVerdictEngine(VerdictConfig) *VerdictEngine; (*VerdictEngine).Diagnose(Evidence) Diagnosis
 func (DiagnosisReport) Text() string
+type ConnStats interface {              // per OS, behind diag.NewConnStats(); platform.Conns
+    TCPConns() ([]TCPConn, error)       // TCPConn{ID, Local, Remote, Sent, Received, Ref}; ErrUnsupported
+    Owners(conns []TCPConn) map[uint64]uint32 // by ID; other users' sockets left out
+}
+func NewConnWatch(ConnStats, names, addrs) *ConnWatch; (*ConnWatch).Sample(now, index) (ConnSample, bool) // LAN vs internet bytes/s, top talkers
 type WLAN interface {                   // per OS, behind diag.NewWLAN(); platform.WiFi
     Link(index int) (WiFiLink, error)   // RSSI, quality, band, channel, width, PHY, Tx/Rx rate, MLO links
     Survey(index int) (WiFiSurvey, error) // BSS Load of the AP, networks on its channel (scan cache)
@@ -813,13 +821,47 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
 - **Passive detector** (1 Hz during a session): fires when the relay leg's
   RTT (`after.rtt_ms − after.server_ms`) is ≥ 20 ms above its baseline
   (minimum over 2 min of seconds when the line wasn't full) while non-game
-  traffic (adapter bytes − the engine's `wire_bytes_*`) is ≥ 70% of the line
-  rate (the last test; the peak seen only when there was none, since the
-  adapter counters also carry LAN traffic) and ≥ 2 Mbit/s, for 3 of 5
-  seconds. Clears after 5 clean seconds.
+  traffic (adapter bytes − the engine's `wire_bytes_*` − LAN bytes, below)
+  is ≥ 70% of the line rate and ≥ 2 Mbit/s, for 3 of 5 seconds. Clears
+  after 5 clean seconds. The line rate is the last test's; without one it is
+  the most non-game traffic seen in the last 10 minutes (a sliding maximum,
+  `PassiveConfig.PeakWindow`), so a LAN burst that couldn't be told apart
+  stops hiding internet downloads 10 minutes after it ends, and
+  `needs_test` asks the UI to suggest the test once (dismissable, since the
+  test can't run during a boost). With no test and no traffic seen yet it
+  isn't watching ("your connection's speed isn't known yet").
+- **LAN split and top program** (`ConnWatch`, where `platform.Conns`
+  works): each second, per-connection TCP byte deltas (`ID`: the socket
+  cookie, so a reused port pair starts over; a connection new since the
+  last reading counts in full, but one missing from a reading, such as an
+  IPv6 dump that failed, keeps its last counters for 10 s so it doesn't
+  come back as its whole lifetime; counters that go backwards count
+  nothing).
+  A connection counts only when its local address is one of the default
+  interface's own (VPN tunnels, container bridges, loopback and this PC's
+  own addresses carry no bytes over the adapter); its peer is LAN when
+  private (RFC 1918, `fc00::/7`), link-local or inside one of the
+  interface's on-link prefixes (`net.Interface.Addrs`, read again every
+  10 s), else internet. Addresses are unmapped first, so dual-stack
+  sockets' v4-mapped peers sort the same. LAN bytes/s are subtracted from
+  the adapter's (UDP LAN traffic, which has no per-socket counters, still
+  counts as other traffic), and while internet traffic is ≥ 1 Mbit/s the 32
+  busiest connections are matched to processes and the top 3 programs
+  passed on; the state's `top` is the biggest in the direction that fills
+  the line, named only when it moves at least half of the other traffic
+  there (UDP, QUIC downloads included, has no counters, so the busiest TCP
+  program isn't always "most of it"). Where `Conns` reports `ErrUnsupported` (Windows, macOS) it is
+  asked once; LAN traffic then counts as other traffic and no program is
+  named (`lan_*_mbps` null).
 - The app keeps the last result in `state.json` (`bloat`), refuses the test
   during a session (409 `session_active`) and stops a running test when a
-  boost starts.
+  boost starts. **Analyze** and the startup route mapping started during a
+  test wait for it (up to 30 s; the test takes about 22) before measuring:
+  routes measured on a line the test fills look slow, and an analysis
+  seeds the next boost's route ranking for a minute. When the test still
+  loads the line after the wait, or a loaded phase (download or upload)
+  overlaps the measurement, the result has `loaded: true`, the UI says so
+  and measures again on the next visit, and it seeds no boost.
 - **Route trace (MTR)** (on demand, 200 rounds at 1 Hz, about 3½ min):
   `icmp.PingTTL` sends a 64-byte echo with TTL 1 to 30 (WinMTR's defaults),
   one goroutine per TTL, staggered over half the interval, 2 s timeout.
@@ -1152,7 +1194,10 @@ Live adds `"wifi": null | {state, scan_paused, streaming, message, notes}`
 "injected", "errors", "game_pids": number[], "last_error": string}` and,
 during a session, `"line": PassiveState` (`{active, direction, since,
 watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
-line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
+line_down_mbps, line_up_mbps, line_source: "test"|"peak", needs_test,
+lan_down_mbps, lan_up_mbps, top: {name, down_mbps, up_mbps}}`). The
+analysis (`POST /api/games/{id}/analyze`) and the mapping (`POST
+/api/mapping`) add `loaded` (see the bufferbloat test). The snapshot adds
 `wire_bytes_up` / `wire_bytes_down`. `"failsafe": null | {at, kind:
 "stopped"|"recovered", game_id, game, message, detail}` is the last boost
 that ended without the user asking (see Capture → Fail-open), until the

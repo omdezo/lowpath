@@ -54,6 +54,11 @@ type bloatRunner struct {
 	err      string
 	cancel   context.CancelFunc
 	finished chan struct{}
+	// loading: the test is in its download or upload phase, filling the
+	// line on purpose; loads counts those phases since start, so a
+	// measurement can tell whether one overlapped it (loadedSince).
+	loading bool
+	loads   uint64
 }
 
 func (b *bloatRunner) view() bloatView {
@@ -68,6 +73,46 @@ func (b *bloatRunner) isRunning() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.running
+}
+
+// loadMark is where the test's load stood when a measurement began.
+type loadMark struct {
+	loads   uint64
+	loading bool
+}
+
+func (b *bloatRunner) mark() loadMark {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return loadMark{b.loads, b.loading}
+}
+
+// loadedSince reports whether the test filled the line at any moment since
+// m: it was loading then, is loading now, or a loaded phase began between.
+func (b *bloatRunner) loadedSince(m loadMark) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return m.loading || b.loading || b.loads != m.loads
+}
+
+// wait blocks until no test runs, ctx ends or max passes, and reports
+// whether no test runs now.
+func (b *bloatRunner) wait(ctx context.Context, max time.Duration) bool {
+	b.mu.Lock()
+	running, fin := b.running, b.finished
+	b.mu.Unlock()
+	if !running {
+		return true
+	}
+	t := time.NewTimer(max)
+	defer t.Stop()
+	select {
+	case <-fin:
+		return true
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return false
 }
 
 // start begins a test in the background.
@@ -103,14 +148,19 @@ func (b *bloatRunner) run(ctx context.Context, finished chan struct{}) {
 	defer close(finished)
 	defer func() {
 		b.mu.Lock()
-		b.running, b.progress, b.cancel = false, nil, nil
+		b.running, b.progress, b.cancel, b.loading = false, nil, nil, false
 		b.mu.Unlock()
 	}()
 	cfg := b.config(ctx)
 	test := diag.NewBloatTest(cfg)
 	res, err := test.Run(ctx, func(p diag.BloatProgress) {
+		loading := p.Phase == diag.PhaseDownload || p.Phase == diag.PhaseUpload
 		b.mu.Lock()
 		b.progress = &p
+		if loading && !b.loading {
+			b.loads++
+		}
+		b.loading = loading
 		b.mu.Unlock()
 	})
 	if err != nil {

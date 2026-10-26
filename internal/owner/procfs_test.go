@@ -99,6 +99,25 @@ func TestProcfsUDPSockets(t *testing.T) {
 	}
 }
 
+// SocketOwners finds any socket by inode, TCP ones included, and leaves out
+// what it can't see: another user's process, an inode no process holds.
+func TestProcfsSocketOwners(t *testing.T) {
+	p := NewProcfs(procFixture())
+	got, err := p.SocketOwners(map[uint64]bool{999: true, 105: true, 4242: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[uint64]uint32{999: 1200, 105: 1300}; !reflect.DeepEqual(got, want) {
+		t.Errorf("SocketOwners = %v, want %v", got, want)
+	}
+	if got, err := p.SocketOwners(nil); err != nil || len(got) != 0 {
+		t.Errorf("nothing asked: %v, %v", got, err)
+	}
+	if _, err := NewProcfs(fstest.MapFS{}).SocketOwners(map[uint64]bool{1: true}); err == nil {
+		t.Error("no /proc: want an error, not \"no owners\"")
+	}
+}
+
 func TestProcfsPrograms(t *testing.T) {
 	progs, err := NewProcfs(procFixture()).Programs()
 	if err != nil {

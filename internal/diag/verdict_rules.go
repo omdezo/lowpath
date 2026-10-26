@@ -276,6 +276,9 @@ func passiveFact(p *PassiveState) string {
 	if p.RTTMS != nil && p.BaselineMS != nil {
 		s += fmt.Sprintf(" and the game's ping rose from %.0f to %.0f ms", *p.BaselineMS, *p.RTTMS)
 	}
+	if t := p.Top; t != nil {
+		s += fmt.Sprintf("; most of it is %s on this PC (%.0f Mbit/s down, %.0f up)", t.Name, t.DownMbps, t.UpMbps)
+	}
 	return s + "."
 }
 

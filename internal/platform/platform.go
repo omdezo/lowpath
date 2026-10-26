@@ -93,6 +93,13 @@ type SystemInventory = compat.System
 // and pauses the adapter's background scans during a boost (diag.WLAN).
 type WiFi = diag.WLAN
 
+// Connections reads per-connection TCP byte counters with the remote
+// address and owner, so the passive detector can leave LAN traffic out
+// and name the program filling the line (diag.ConnStats). It must work
+// without administrator rights; a system without such counters reports
+// errors.ErrUnsupported.
+type Connections = diag.ConnStats
+
 // IconProvider reads a program's own icon.
 type IconProvider interface {
 	// ExeIcon renders the program's main icon at size×size.
@@ -135,6 +142,7 @@ type Platform struct {
 	Service    ServiceManager
 	ServiceAPI ServiceAPI
 	WiFi       WiFi
+	Conns      Connections
 }
 
 // Check reports a Platform with a missing part, which would otherwise fail
@@ -152,7 +160,7 @@ func (p *Platform) Check() error {
 		{"Privileges", p.Privileges == nil}, {"Games", p.Games == nil}, {"Icons", p.Icons == nil},
 		{"Paths", p.Paths == nil}, {"Flows", p.Flows == nil}, {"Inventory", p.Inventory == nil},
 		{"Service", p.Service == nil}, {"ServiceAPI", p.ServiceAPI == nil},
-		{"WiFi", p.WiFi == nil},
+		{"WiFi", p.WiFi == nil}, {"Conns", p.Conns == nil},
 	} {
 		if part.unset {
 			missing = append(missing, part.name)
