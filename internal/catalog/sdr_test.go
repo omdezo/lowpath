@@ -193,3 +193,25 @@ func TestSplitDesc(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDuplicateIDsKeepOne(t *testing.T) {
+	// "DXB" and "dxb" are one POP once lowercased: one row, whichever map
+	// order the decoder used.
+	body := []byte(`{"pops":{
+		"dxb":{"desc":"Dubai (United Arab Emirates)","relays":[{"ipv4":"8.8.8.8"}]},
+		"DXB":{"desc":"Dubai (United Arab Emirates)","relays":[{"ipv4":"1.1.1.1"}]},
+		" dxb ":{"desc":"Dubai (United Arab Emirates)","relays":[{"ipv4":"9.9.9.9"}]}}}`)
+	for range 20 {
+		cfg, err := ParseSDRConfig(1, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.POPs) != 1 {
+			t.Fatalf("pops = %+v, want one dxb", cfg.POPs)
+		}
+		// Sorted keys: " dxb " < "DXB" < "dxb", so the first one wins.
+		if got := cfg.POPs[0].Relays[0].Addr.String(); got != "9.9.9.9" {
+			t.Fatalf("kept relay %s; the choice must not depend on map order", got)
+		}
+	}
+}

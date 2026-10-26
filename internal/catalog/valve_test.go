@@ -46,16 +46,26 @@ func (f *fakeSource) count() int {
 }
 
 // fakeProber gives every POP a ping from a table; others get no reply.
+// With gate set, the first round waits for it to close.
 type fakeProber struct {
 	mu     sync.Mutex
 	rtt    map[string]time.Duration
 	rounds int
+	gate   chan struct{}
 }
 
 func (f *fakeProber) Probe(ctx context.Context, pops []POP, done func(string, POPPing)) {
 	f.mu.Lock()
 	f.rounds++
+	first, gate := f.rounds == 1, f.gate
 	f.mu.Unlock()
+	if first && gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return
+		}
+	}
 	for _, p := range pops {
 		if len(p.Relays) == 0 {
 			continue
@@ -289,5 +299,73 @@ func TestRetryIn(t *testing.T) {
 		if got := retryIn(d); got != want {
 			t.Errorf("retryIn(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestValveCacheFromTheFutureIsRefreshed(t *testing.T) {
+	// Saved while the PC's clock was a year ahead: without a check the list
+	// would count as current until that date.
+	r := newRig(t)
+	r.cache.b["sdr-730"] = loadFixture(t)
+	r.cache.at["sdr-730"] = r.clock.Now().Add(365 * 24 * time.Hour)
+	if l := r.v.List(730); l.State != "ready" || !l.Stale {
+		t.Fatalf("future-dated cache = %+v, want shown and stale", l)
+	}
+	l := waitFor(t, r.v, func(l ServerList) bool { return r.src.count() == 1 && settled(l) && !l.Stale })
+	if l.FetchedAt == nil || !l.FetchedAt.Equal(r.clock.Now()) {
+		t.Fatalf("fetched_at = %v after the refresh", l.FetchedAt)
+	}
+}
+
+func TestValvePingRetriesDownloadNow(t *testing.T) {
+	r := newRig(t)
+	r.src.set(nil, &FetchError{Err: errors.New("network is unreachable")})
+	waitFor(t, r.v, func(l ServerList) bool { return l.State == "error" })
+	// Back online, still inside the backoff: List waits, the button doesn't.
+	r.src.set(loadFixture(t), nil)
+	r.v.List(730)
+	if r.src.count() != 1 {
+		t.Fatalf("%d downloads during the backoff", r.src.count())
+	}
+	r.v.Ping(730)
+	l := waitFor(t, r.v, settled)
+	if l.State != "ready" || r.src.count() != 2 {
+		t.Fatalf("after try again: %+v, %d downloads", l, r.src.count())
+	}
+}
+
+func TestValveNewListDuringPingIsPinged(t *testing.T) {
+	// An old saved list is pinged at once; the download lands while that
+	// round still runs. Its POPs must get their own round.
+	r := newRig(t)
+	r.probe.gate = make(chan struct{})
+	r.cache.b["sdr-730"] = loadFixture(t)
+	r.cache.at["sdr-730"] = r.clock.Now().Add(-3 * time.Hour)
+	r.v.List(730)
+	waitFor(t, r.v, func(l ServerList) bool { return r.src.count() == 1 && !l.Stale && l.Pinging })
+	close(r.probe.gate)
+	waitFor(t, r.v, func(l ServerList) bool { return r.probe.count() == 2 && settled(l) })
+}
+
+func TestValveCloseStopsNewWork(t *testing.T) {
+	r := newRig(t)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				r.v.List(730)
+				r.v.Ping(730)
+			}
+		}()
+	}
+	r.v.Close()
+	n := r.src.count()
+	wg.Wait()
+	r.v.List(730)
+	r.v.Ping(730)
+	if r.src.count() != n {
+		t.Fatalf("downloads started after Close: %d, then %d", n, r.src.count())
 	}
 }

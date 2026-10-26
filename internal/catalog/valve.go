@@ -97,9 +97,13 @@ func NewValveServers(o ValveOptions) *ValveServers {
 	}
 }
 
-// Close stops downloads and ping rounds and waits for them to end.
+// Close stops downloads and ping rounds and waits for them to end. The
+// cancel happens under v.mu, so no List running at the same time can start
+// new work (a WaitGroup Add racing the Wait) once Close has begun.
 func (v *ValveServers) Close() {
+	v.mu.Lock()
 	v.cancel()
+	v.mu.Unlock()
 	v.wg.Wait()
 }
 
@@ -134,7 +138,7 @@ func (v *ValveServers) List(appID int) ServerList {
 	defer v.mu.Unlock()
 	a := v.app(appID)
 	now := v.now()
-	if !a.fetching && (a.cfg == nil || now.Sub(a.fetchedAt) >= v.ttl) && !now.Before(a.nextTry) {
+	if !a.fetching && (a.cfg == nil || v.old(a, now)) && !now.Before(a.nextTry) {
 		v.startFetch(a)
 	}
 	if a.cfg != nil && (a.pingedAt.IsZero() || now.Sub(a.pingedAt) >= v.pingTTL) {
@@ -143,14 +147,25 @@ func (v *ValveServers) List(appID int) ServerList {
 	return v.view(a, now)
 }
 
+// old says the list is due for a refresh: older than the TTL, or saved "in
+// the future" (the PC's clock was wrong when it was written, or the file's
+// time was changed), which would otherwise keep it current for years.
+func (v *ValveServers) old(a *sdrApp, now time.Time) bool {
+	age := now.Sub(a.fetchedAt)
+	return age >= v.ttl || age < -time.Minute
+}
+
 // Ping measures every POP of the app again now (when its list is known and
-// no round is running) and returns the list.
+// no round is running) and returns the list. Without a list it is the
+// player's "try again": a download starts now instead of after the backoff.
 func (v *ValveServers) Ping(appID int) ServerList {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	a := v.app(appID)
 	if a.cfg != nil {
 		v.startPing(a)
+	} else if !a.fetching {
+		v.startFetch(a)
 	}
 	return v.view(a, v.now())
 }
@@ -197,7 +212,8 @@ func (v *ValveServers) startPing(a *sdrApp) {
 		return
 	}
 	a.pinging = true
-	pops := slices.Clone(a.cfg.POPs)
+	cfg := a.cfg
+	pops := slices.Clone(cfg.POPs)
 	v.wg.Add(1)
 	go func() {
 		defer v.wg.Done()
@@ -207,9 +223,15 @@ func (v *ValveServers) startPing(a *sdrApp) {
 			v.mu.Unlock()
 		})
 		v.mu.Lock()
+		defer v.mu.Unlock()
 		a.pinging = false
 		a.pingedAt = v.now()
-		v.mu.Unlock()
+		// A new list arrived during this round (its own startPing found
+		// this one running): measure the new POPs too, or they would wait
+		// for the next round with no number and no reason.
+		if a.cfg != cfg {
+			v.startPing(a)
+		}
 	}()
 }
 
@@ -275,7 +297,7 @@ func (v *ValveServers) view(a *sdrApp, now time.Time) ServerList {
 	l.State = "ready"
 	l.Revision = a.cfg.Revision
 	l.FetchedAt = ptr(a.fetchedAt)
-	l.Stale = a.lastErr != nil || now.Sub(a.fetchedAt) >= v.ttl
+	l.Stale = a.lastErr != nil || v.old(a, now)
 	if a.lastErr != nil {
 		l.Message = fmt.Sprintf("Couldn't refresh the list (%v); showing the copy saved earlier.", a.lastErr)
 	}

@@ -253,7 +253,11 @@ func NewValveServers(ValveOptions) *ValveServers              // List(appID), Pi
   download when the list is missing or older than 1 h (backoff 30 s → 15
   min on failure) and a ping round when pings are older than 5 min. The
   last good download is kept in `<data>\catalog\sdr-<app>.json`, shown
-  (marked `stale`) when Steam can't be reached.
+  (marked `stale`) when Steam can't be reached. A saved time in the future
+  (wrong clock) counts as old. `Ping` without a list retries the download
+  at once (the card's "Try again"). A new list that lands during a ping
+  round gets its own round when that one ends. A 200 reply that isn't a
+  config (Wi-Fi login page, proxy) is reported as such.
 
 ## App, desktop shell, build
 
@@ -364,7 +368,11 @@ prints that URL to stderr only, never to the log.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,
   direct ping and loss (six rows, "Show all"), "—" and the reason when a POP
-  doesn't answer, a "Ping again" button, and when the list was fetched.
+  doesn't answer, a "Ping again" button ("Try again" when the download
+  failed), and when the list was fetched. The card polls every 1.2 s while
+  a download or ping round runs, every 10 s after a failed download (so the
+  service's retry happens), and every 60 s otherwise (hourly refresh,
+  5-minute re-ping).
 
 ## Verification
 

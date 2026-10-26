@@ -6,6 +6,12 @@ import { ms, pct, since } from "../util";
 
 const SHOWN = 6; // rows before "Show all"
 const POLL_MS = 1200; // while the list downloads or a ping round runs
+// After a failed download: the service retries on its own backoff, but only
+// when asked, so keep asking or "Trying again in 30 s" would never happen.
+const RETRY_POLL_MS = 10_000;
+// While the page stays open: lets the hourly list refresh and the 5-minute
+// re-ping happen without leaving and reopening the game.
+const IDLE_POLL_MS = 60_000;
 
 // Ping colors match the route quality thresholds (util.ts quality()).
 function pingQ(v: number): "good" | "warn" | "bad" {
@@ -28,19 +34,24 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
   const [failed, setFailed] = useState(false);
   const [all, setAll] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  const live = useRef(true);
+  // Bumped when the game changes or the card unmounts: a reply that comes
+  // back after that belongs to the old game and is dropped.
+  const gen = useRef(0);
 
   const load = useCallback(
     async (ping = false) => {
       window.clearTimeout(timer.current);
+      const g = gen.current;
       try {
         const l = ping ? await api.pingServers(gameId) : await api.servers(gameId);
-        if (!live.current) return;
+        if (g !== gen.current) return;
         setList(l);
         setFailed(false);
-        if (l.state === "loading" || l.pinging) timer.current = window.setTimeout(() => load(), POLL_MS);
+        if (l.state === "unsupported") return;
+        const wait = l.state === "loading" || l.pinging ? POLL_MS : l.state === "error" ? RETRY_POLL_MS : IDLE_POLL_MS;
+        timer.current = window.setTimeout(() => load(), wait);
       } catch {
-        if (!live.current) return;
+        if (g !== gen.current) return;
         // The local service is restarting or busy: say so, try again later.
         setFailed(true);
         timer.current = window.setTimeout(() => load(), 5000);
@@ -50,12 +61,12 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
   );
 
   useEffect(() => {
-    live.current = true;
+    gen.current++;
     setList(null);
     setAll(false);
     load();
     return () => {
-      live.current = false;
+      gen.current++;
       window.clearTimeout(timer.current);
     };
   }, [load]);
@@ -66,6 +77,8 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
   const rows = all ? pops : pops.slice(0, SHOWN);
   const loading = !list || list.state === "loading";
   const pinging = !!list?.pinging;
+  // No list after a failed download: the button asks for it again now.
+  const retry = list?.state === "error";
 
   return (
     <section className="card pops" aria-label="Valve servers">
@@ -76,9 +89,9 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
             Direct ping from this PC to the relays {gameName} plays through. Valve routes the match from there, so Lowpath can only improve the way to the nearest one.
           </div>
         </div>
-        <button className="btn btn-sm" onClick={() => load(true)} disabled={loading || pinging || list?.state !== "ready"}>
+        <button className="btn btn-sm" onClick={() => load(true)} disabled={loading || pinging || (list?.state !== "ready" && !retry)}>
           {pinging ? <Loader2 size={14} className="spin" /> : <RotateCw size={14} />}
-          {pinging ? "Pinging…" : "Ping again"}
+          {pinging ? "Pinging…" : retry ? "Try again" : "Ping again"}
         </button>
       </div>
 
@@ -174,7 +187,7 @@ function POPRow({ pop, pinging }: { pop: POPView; pinging: boolean }) {
         ) : pending && pinging ? (
           <span className="skeleton" />
         ) : (
-          <span className="faint" title={pop.note}>
+          <span className="faint" title={pop.note ?? (pending ? "Not measured yet" : undefined)}>
             —
           </span>
         )}

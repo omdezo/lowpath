@@ -220,20 +220,29 @@ async function main() {
 
     // 2b. Valve games know their servers before launch: Steam's SDR POP list
     //     with a direct ping from this PC, no relay needed.
+    //     The list comes from Steam: offline (no LOWPATH_INTERNET=1) the
+    //     card must instead say plainly why there is no list.
+    const internet = process.env.LOWPATH_INTERNET === "1";
     const sdr = await waitForServers(page, "cs2");
     const measured = (sdr?.pops || []).filter((p) => p.ping_ms != null);
-    check(
-      "CS2 lists Valve's servers with a direct ping",
-      sdr?.state === "ready" && measured.length > 0,
-      sdr?.state === "ready" ? `${sdr.pops.length} POPs, ${measured.length} answered; nearest ${measured.slice(0, 3).map((p) => `${p.id} ${p.ping_ms.toFixed(0)} ms`).join(", ")}` : `${sdr?.state}: ${sdr?.message}`,
-    );
     const unmeasured = (sdr?.pops || []).filter((p) => p.ping_ms == null);
-    check("POPs without a reply show a reason, not a number", unmeasured.every((p) => p.note), `${unmeasured.length} without a reply`);
     const popList = page.getByRole("list", { name: "Valve servers" });
-    await popList.waitFor({ timeout: 5000 }).catch(() => {});
-    const uiRows = await popList.getByRole("listitem").count().catch(() => 0);
-    check("Game page shows the Valve server list", uiRows > 0, `${uiRows} rows shown`);
-    await popList.scrollIntoViewIfNeeded().catch(() => {});
+    if (sdr?.state === "ready" || internet) {
+      check(
+        "CS2 lists Valve's servers with a direct ping",
+        sdr?.state === "ready" && (measured.length > 0 || (!internet && unmeasured.every((p) => p.note))),
+        sdr?.state === "ready" ? `${sdr.pops.length} POPs, ${measured.length} answered; nearest ${measured.slice(0, 3).map((p) => `${p.id} ${p.ping_ms.toFixed(0)} ms`).join(", ")}` : `${sdr?.state}: ${sdr?.message}`,
+      );
+      check("POPs without a reply show a reason, not a number", unmeasured.every((p) => p.note), `${unmeasured.length} without a reply`);
+      await popList.waitFor({ timeout: 5000 }).catch(() => {});
+      const uiRows = await popList.getByRole("listitem").count().catch(() => 0);
+      check("Game page shows the Valve server list", uiRows > 0, `${uiRows} rows shown`);
+    } else {
+      const card = page.getByRole("region", { name: "Valve servers" });
+      const said = await card.getByRole("status").first().textContent({ timeout: 15000 }).catch(() => "");
+      check("Offline, the Valve servers card says why there is no list", sdr?.state === "error" && !!sdr.message && /Valve's server list/.test(said || ""), `${sdr?.state}: ${said}`);
+    }
+    await page.getByRole("region", { name: "Valve servers" }).scrollIntoViewIfNeeded().catch(() => {});
     await shot(page, "cs2-servers", "CS2 before launch: Valve's relay POPs with a direct ping from this PC");
     await scrollTop(page);
 

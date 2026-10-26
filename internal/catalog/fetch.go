@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -65,10 +67,18 @@ func (s *SDRSource) Fetch(ctx context.Context, appID int) ([]byte, error) {
 		return nil, &FetchError{Err: err}
 	}
 	if _, err := ParseSDRConfig(appID, b); err != nil {
+		if !errors.Is(err, ErrNotSDR) {
+			// HTML from a captive portal, a proxy's error page, a cut-off
+			// body: say what it was, not the JSON decoder's words.
+			err = fmt.Errorf("%w: %w", errBadReply, err)
+		}
 		return nil, &FetchError{Err: err}
 	}
 	return b, nil
 }
+
+// errBadReply marks a 200 reply that isn't a usable SDR config.
+var errBadReply = errors.New("not a server list")
 
 // FetchError is a failed download, worded for the player.
 type FetchError struct {
@@ -87,13 +97,30 @@ func (e *FetchError) Error() string {
 	switch {
 	case errors.Is(e.Err, ErrNotSDR):
 		return "Steam sent no server list for this game"
+	case errors.Is(e.Err, errBadReply):
+		return "the reply wasn't Steam's server list (a Wi-Fi login page, proxy or filter may be in the way)"
 	case errors.As(e.Err, &dns):
 		return "can't look up Steam's address (offline, or DNS isn't answering)"
 	case errors.Is(e.Err, context.DeadlineExceeded) || (errors.As(e.Err, &nerr) && nerr.Timeout()):
 		return "Steam didn't answer in time"
 	case errors.Is(e.Err, context.Canceled):
 		return "cancelled"
-	default:
-		return "can't reach Steam: " + e.Err.Error()
 	}
+	var op *net.OpError
+	var cert *tls.CertificateVerificationError
+	switch {
+	case errors.As(e.Err, &op) && op.Op == "proxyconnect":
+		return "can't reach the proxy set on this PC"
+	case errors.As(e.Err, &op) && op.Op == "dial":
+		return "can't connect to Steam (offline, or a firewall is blocking Lowpath)"
+	case errors.As(e.Err, &cert):
+		return "Steam's certificate wasn't trusted (an antivirus or proxy may be inspecting HTTPS)"
+	}
+	// The rest in Go's words, without the request URL *url.Error adds.
+	err := e.Err
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		err = uerr.Err
+	}
+	return "can't reach Steam: " + strings.TrimSuffix(err.Error(), ".")
 }

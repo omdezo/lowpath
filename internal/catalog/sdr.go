@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -109,11 +110,17 @@ func ParseSDRConfig(appID int, b []byte) (*SDRConfig, error) {
 		return nil, fmt.Errorf("SDR config lists %d POPs, more than %d", len(raw.POPs), maxPOPs)
 	}
 	cfg := &SDRConfig{AppID: appID, Revision: raw.Revision}
-	for id, rp := range raw.POPs {
-		id = strings.ToLower(strings.TrimSpace(id))
-		if !popIDRe.MatchString(id) {
+	// Visit the ids in a fixed order: "DXB" and "dxb" are the same POP once
+	// lowercased, and which one is kept must not depend on map order.
+	ids := slices.Sorted(maps.Keys(raw.POPs))
+	seen := make(map[string]bool, len(ids))
+	for _, key := range ids {
+		rp := raw.POPs[key]
+		id := strings.ToLower(strings.TrimSpace(key))
+		if !popIDRe.MatchString(id) || seen[id] {
 			continue
 		}
+		seen[id] = true
 		p := POP{ID: id, Tier: rp.Tier, Partners: rp.Partners}
 		for _, a := range rp.Aliases {
 			if a = strings.ToLower(strings.TrimSpace(a)); popIDRe.MatchString(a) && len(p.Aliases) < 8 {

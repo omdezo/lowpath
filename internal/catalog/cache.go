@@ -49,8 +49,9 @@ func (c *DirCache) Load(key string) ([]byte, time.Time, error) {
 	return b, fi.ModTime(), err
 }
 
-// Save writes atomically (temp file, then rename), so a crash mid-write
-// leaves the old copy.
+// Save writes atomically (a temp file of its own, then rename), so a crash
+// mid-write leaves the old copy, and two Lowpath processes saving at once
+// (the window and its elevated relaunch) can't interleave their bytes.
 func (c *DirCache) Save(key string, b []byte) error {
 	p, err := c.path(key)
 	if err != nil {
@@ -59,11 +60,19 @@ func (c *DirCache) Save(key string, b []byte) error {
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.CreateTemp(c.dir, key+".*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
+	tmp := f.Name()
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, p)
+	}
+	if err != nil {
 		os.Remove(tmp)
 		return err
 	}

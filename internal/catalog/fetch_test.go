@@ -2,10 +2,12 @@ package catalog
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,10 +45,11 @@ func TestFetchErrors(t *testing.T) {
 		{"no config", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"success":false,"message":"Failed to get appinfo"}`))
 		}, "no server list"},
-		{"html", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("<html>captive portal</html>")) }, "can't reach Steam"},
+		{"html", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("<html>captive portal</html>")) }, "Wi-Fi login page"},
+		{"empty object", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }, "no server list"},
 		{"too big", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"pops":{"a":{"desc":"` + strings.Repeat("x", maxConfigBytes) + `"}}}`))
-		}, "too large"},
+		}, "wasn't Steam's server list"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -86,9 +89,21 @@ func TestFetchErrorWording(t *testing.T) {
 	if !strings.Contains(dns.Error(), "offline") {
 		t.Errorf("DNS failure: %q", dns.Error())
 	}
-	refused := &FetchError{Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
-	if !strings.HasPrefix(refused.Error(), "can't reach Steam") {
-		t.Errorf("refused: %q", refused.Error())
+	refused := &FetchError{Err: &url.Error{Op: "Get", URL: "https://api.steampowered.com/x", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}}
+	if got := refused.Error(); !strings.HasPrefix(got, "can't connect to Steam") || strings.Contains(got, "https://") {
+		t.Errorf("refused: %q", got)
+	}
+	proxy := &FetchError{Err: &url.Error{Op: "Get", URL: "https://api.steampowered.com/x", Err: &net.OpError{Op: "proxyconnect", Err: errors.New("connection refused")}}}
+	if got := proxy.Error(); !strings.Contains(got, "proxy") {
+		t.Errorf("proxy: %q", got)
+	}
+	cert := &FetchError{Err: &url.Error{Op: "Get", URL: "https://api.steampowered.com/x", Err: &tls.CertificateVerificationError{Err: errors.New("x509: unknown authority")}}}
+	if got := cert.Error(); !strings.Contains(got, "certificate") {
+		t.Errorf("certificate: %q", got)
+	}
+	other := &FetchError{Err: &url.Error{Op: "Get", URL: "https://api.steampowered.com/x", Err: errors.New("unexpected EOF.")}}
+	if got := other.Error(); got != "can't reach Steam: unexpected EOF" {
+		t.Errorf("other: %q", got)
 	}
 	if c := (&FetchError{Err: context.Canceled}); c.Error() != "cancelled" {
 		t.Errorf("cancelled: %q", c.Error())
@@ -113,7 +128,14 @@ func TestDirCache(t *testing.T) {
 			t.Errorf("key %q accepted", k)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "sdr-730.json.tmp")); !errors.Is(err, os.ErrNotExist) {
-		t.Error("temp file left behind")
+	// A second save replaces the first, and no temp file is left behind.
+	if err := c.Save("sdr-730", []byte(`{"x":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := c.Load("sdr-730"); string(b) != `{"x":2}` {
+		t.Fatalf("after a second save: %q", b)
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmp) != 0 {
+		t.Errorf("temp files left behind: %v", tmp)
 	}
 }
