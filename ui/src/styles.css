@@ -1087,6 +1087,10 @@ button.route-card:hover {
   color: var(--text);
 }
 
+.banner-detail {
+  color: var(--muted);
+}
+
 /* network lab */
 .lab {
   padding: 4px 0;

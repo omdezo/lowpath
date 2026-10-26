@@ -239,6 +239,15 @@ async function main() {
   const base = await lpcheck("direct (no Lowpath)", ["-for", "3s"]);
   check("Baseline: lpcheck reaches Google STUN directly", base.received > 0, `${base.received}/${base.sent} replies, ${base.avg} ms, public ${base.public}`);
 
+  // A previous run that was killed mid-boost (taskkill /F, a crash) leaves
+  // its session marker behind. Plant one whose process is gone (a child
+  // that already exited) so the app's start-up cleanup has to report it.
+  const gone = spawnSync(process.execPath, ["-e", ""], { windowsHide: true }).pid;
+  fs.writeFileSync(
+    path.join(data, "capture-session.json"),
+    JSON.stringify({ backend: "divert", pid: gone, exe: "lowpath.exe", game: "cs2", started: new Date(Date.now() - 3600e3).toISOString() }),
+  );
+
   const speed = await speedServer();
   const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -250,6 +259,28 @@ async function main() {
     await page.getByLabel("Search games").waitFor();
     await page.getByRole("heading", { name: "Your games" }).waitFor();
     check("App opens straight to the home screen", true);
+
+    // 1b. Fail-open: the leftover marker is cleaned up and explained.
+    const notice = page.getByRole("alert", { name: "Boost ended" });
+    await notice.waitFor({ timeout: 5000 }).catch(() => {});
+    const noticeText = (await notice.textContent().catch(() => "")) ?? "";
+    check(
+      "A boost the last run never finished is reported at start",
+      /Your last boost was cut short/.test(noticeText) && noticeText.includes("Counter-Strike 2") && noticeText.includes("normal connection"),
+      noticeText.trim().slice(0, 140),
+    );
+    check("The leftover session marker is removed", !fs.existsSync(path.join(data, "capture-session.json")));
+    await shot(page, "failsafe-recovered", "Start-up cleanup: the last run closed mid-boost; the game went back to the normal connection");
+    await notice.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
+    check("The notice can be dismissed", !(await notice.isVisible().catch(() => false)));
+    // The service forgets it too, so a reload or another window doesn't
+    // bring it back (the click's request may still be in flight).
+    let after = await live(page);
+    for (let i = 0; i < 20 && after?.failsafe; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      after = await live(page);
+    }
+    check("The service forgets a dismissed notice", after != null && !after.failsafe, JSON.stringify(after?.failsafe ?? null).slice(0, 140));
     await shot(page, "home", "Home: pick a game, press BOOST, play");
 
     // 2. No relays yet: the game screen offers the two ways to start.

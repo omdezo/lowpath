@@ -80,6 +80,11 @@ type Config struct {
 	BloatLoader diag.Loader
 	// Ping sends one ICMP echo. Nil: icmp.Ping.
 	Ping diag.PingFunc
+	// Marker records a running route-mode session on disk, so the next
+	// start can clean up after a run that was killed or crashed. Nil: no
+	// record (tests); cmd/lowpath keeps capture-session.json in the data
+	// folder.
+	Marker SessionMarker
 	// PingTTL sends one TTL-limited echo for the route trace. Nil:
 	// icmp.PingTTL. Names looks up hop names; nil: reverse DNS.
 	PingTTL diag.TTLPingFunc
@@ -116,6 +121,7 @@ type Server struct {
 	bloat   *bloatRunner
 	trace   *traceRunner
 	line    *lineWatch
+	marker  SessionMarker // nil: none
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -133,6 +139,7 @@ type Server struct {
 	installed map[string]bool
 	running   map[string]bool
 	mapping   *mappingResult
+	failsafe  *failsafeView // the last boost that ended without the user asking
 	closed    bool
 	done      chan struct{} // closed by Close; ends the live streams
 }
@@ -207,7 +214,8 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line: newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		line:   newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		marker: cfg.Marker,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -219,6 +227,7 @@ func NewServer(cfg Config) (*Server, error) {
 		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
 		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
+	s.recoverLeftover()
 	return s, nil
 }
 
@@ -347,6 +356,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/apply", s.handleApply)
 	mux.HandleFunc("POST /api/stop", s.handleStop)
 	mux.HandleFunc("GET /api/live", s.handleLive)
+	mux.HandleFunc("DELETE /api/failsafe", s.handleDismissFailsafe)
 	mux.HandleFunc("PUT /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/relays", s.handleRelays)
 	mux.HandleFunc("POST /api/relays", s.handleAddRelay)
@@ -618,11 +628,14 @@ type liveView struct {
 	// Line is the passive bufferbloat detector during a session (nil
 	// without one).
 	Line *diag.PassiveState `json:"line"`
+	// Failsafe is the last boost that ended without the user asking (nil:
+	// none since the last Boost).
+	Failsafe *failsafeView `json:"failsafe"`
 }
 
 func (s *Server) live() liveView {
 	s.mu.Lock()
-	v := liveView{Status: s.status, Session: s.sess}
+	v := liveView{Status: s.status, Session: s.sess, Failsafe: s.failsafe}
 	for id := range s.running {
 		v.Running = append(v.Running, id)
 	}
