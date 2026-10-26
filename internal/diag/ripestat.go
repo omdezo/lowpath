@@ -275,7 +275,7 @@ func splitHolder(h string) (handle, name string) {
 }
 
 // isHandle: an AS handle is one word of letters, digits, '-', '_' and '.'
-// in a single case ("OMANTEL-NAP-AS", and the odd "awasr"); a capitalised
+// in a single case ("OMANTEL-NAP-AS", and the odd lowercase "examplenet"); a capitalised
 // word such as "Some" starts a name instead.
 func isHandle(s string) bool {
 	if s == "" {

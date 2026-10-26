@@ -41,19 +41,19 @@ func (f *fakeLocator) Last() (diag.Location, bool) {
 	return f.loc, f.have
 }
 
-func muscat() diag.Location {
+func exampleLocation() diag.Location {
 	return diag.Location{
 		State: diag.StateOK,
 		IPv4: &diag.Endpoint{
-			IP: netip.MustParseAddr("89.147.159.43"), Source: "stun stun.l.google.com:19302",
-			NetworkInfo: diag.NetworkInfo{ASN: 204170, ASName: "awasr", ISP: "Awaser Oman LLC", Country: "OM", City: "Muscat", Prefix: netip.MustParsePrefix("89.147.159.0/24")},
+			IP: netip.MustParseAddr("203.0.113.43"), Source: "stun stun.l.google.com:19302",
+			NetworkInfo: diag.NetworkInfo{ASN: 64500, ASName: "examplenet", ISP: "Example Broadband", Country: "NL", City: "Amsterdam", Prefix: netip.MustParsePrefix("203.0.113.0/24")},
 		},
 		IPv6Note: "This connection has no public IPv6 address (common, and fine for Lowpath).",
 	}
 }
 
 func TestLocationEndpoint(t *testing.T) {
-	fl := &fakeLocator{loc: muscat()}
+	fl := &fakeLocator{loc: exampleLocation()}
 	ts, _ := newRealServer(t, &fakeCapturer{}, func(c *Config) { c.Locator = fl })
 
 	// The diagnostics report has no location before one was looked up.
@@ -78,8 +78,8 @@ func TestLocationEndpoint(t *testing.T) {
 	if code := call(t, ts, "GET", "/api/location", "", &got); code != 200 {
 		t.Fatalf("location: %d", code)
 	}
-	if got.State != "ok" || got.IPv4.IP != "89.147.159.43" || got.IPv4.ASN != 204170 || got.IPv4.ISP != "Awaser Oman LLC" ||
-		got.IPv4.City != "Muscat" || got.IPv4.Prefix != "89.147.159.0/24" || got.IPv6 != nil || got.IPv6Note == "" {
+	if got.State != "ok" || got.IPv4.IP != "203.0.113.43" || got.IPv4.ASN != 64500 || got.IPv4.ISP != "Example Broadband" ||
+		got.IPv4.City != "Amsterdam" || got.IPv4.Prefix != "203.0.113.0/24" || got.IPv6 != nil || got.IPv6Note == "" {
 		t.Fatalf("got %+v", got)
 	}
 	call(t, ts, "GET", "/api/location?refresh=1", "", nil)
@@ -89,7 +89,7 @@ func TestLocationEndpoint(t *testing.T) {
 
 	// The report carries the ISP but not the full address.
 	_, body := do(t, ts, "GET", "/api/diagnostics", "", nil)
-	if strings.Contains(body, "89.147.159.43") || !strings.Contains(body, "89.147.159.0") || !strings.Contains(body, "Awaser Oman LLC") {
+	if strings.Contains(body, "203.0.113.43") || !strings.Contains(body, "203.0.113.0") || !strings.Contains(body, "Example Broadband") {
 		t.Fatalf("report location not redacted: %s", body)
 	}
 }

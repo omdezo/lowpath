@@ -192,7 +192,7 @@ func TestSplitHolder(t *testing.T) {
 		{"COMCAST-7922 - Comcast Cable Communications, LLC", "COMCAST-7922", "Comcast Cable Communications, LLC"},
 		{"M247 M247 Europe SRL", "M247", "M247 Europe SRL"},
 		{"CLOUDFLARENET", "CLOUDFLARENET", "CLOUDFLARENET"},
-		{"awasr Awaser Oman LLC", "awasr", "Awaser Oman LLC"},
+		{"examplenet Example Broadband", "examplenet", "Example Broadband"},
 		{"Some ISP without a handle", "", "Some ISP without a handle"},
 		{"", "", ""},
 	} {

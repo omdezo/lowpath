@@ -15,14 +15,14 @@ function countryName(code?: string): string {
   }
 }
 
-// "Muscat, Oman", "Netherlands", or "" when unknown.
+// "Amsterdam, Netherlands", "Netherlands", or "" when unknown.
 export function place(e?: Endpoint | null): string {
   if (!e) return "";
   const country = countryName(e.country);
   return [e.city, country].filter(Boolean).join(", ");
 }
 
-// "Awaser Oman LLC (AS204170)", or "" when the AS is unknown.
+// "Example Broadband (AS64500)", or "" when the AS is unknown.
 export function network(e?: Endpoint | null): string {
   if (!e?.asn) return "";
   const name = e.isp || e.as_name || "";
