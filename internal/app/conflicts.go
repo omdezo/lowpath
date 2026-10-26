@@ -23,7 +23,9 @@ const (
 	// scan takes tens of milliseconds; one that hangs (a service manager
 	// that stopped answering) must not hold up a boost.
 	conflictWait = 3 * time.Second
-	// conflictLimit ends a scan that hangs, so the next one can start.
+	// conflictLimit cuts a slow scan's remaining steps short. An OS call
+	// that never returns can't be ended: the next scan starts once it does,
+	// and until then callers get the last report (see scan).
 	conflictLimit = 30 * time.Second
 )
 
@@ -78,6 +80,14 @@ func (w *conflictWatch) run(ctx context.Context) {
 // scan starts a scan (or joins the one running) and waits up to w.wait for
 // it. When it takes longer, the previous report comes back with a note.
 func (w *conflictWatch) scan() compat.Report {
+	r, _ := w.check()
+	return r
+}
+
+// check is scan, also saying whether the report comes from a scan that
+// finished while the caller waited. A stale report must not refuse a boost:
+// what it named may have closed since, and the scan that would say so hangs.
+func (w *conflictWatch) check() (r compat.Report, fresh bool) {
 	wait := w.wait
 	w.mu.Lock()
 	ch := w.inflight
@@ -91,12 +101,12 @@ func (w *conflictWatch) scan() compat.Report {
 	defer t.Stop()
 	select {
 	case <-ch:
-		return w.current()
+		return w.current(), true
 	case <-t.C:
 	}
-	r := w.current()
+	r = w.current()
 	r.Unchecked = append(slices.Clone(r.Unchecked), fmt.Sprintf("the check didn't finish within %v; showing the last result", wait))
-	return r
+	return r, false
 }
 
 func (w *conflictWatch) scanOnce(done chan struct{}) {

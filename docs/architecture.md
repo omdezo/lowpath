@@ -295,7 +295,7 @@ and says what to do.
 | WinDivert tools: GoodbyeDPI, zapret (`winws.exe`) | process, service | `warn` (they change web traffic, not usually game UDP) |
 | Windows Packet Filter (WinpkFilter), the NDIS filter ExitLag and NoPing install | service `ndisrd`, Uninstall entry | loaded: `warn`; installed: `info`, with how to uninstall it |
 | WinDivert loaded by another program | a running service named `WinDivert*` whose `ImagePath` is outside Lowpath's driver folders (`Paths.DriverDirs`) | `warn` |
-| A VPN carrying all traffic | the adapter `diag.NetStats.DefaultRoute` picks (`GetBestInterfaceEx` to a public address: catches `0/0` and OpenVPN/WireGuard `0/1`+`128/1` alike) is a VPN: brand words in its name or description (NordLynx → NordVPN, TAP-Windows → OpenVPN, WireGuard, AnyConnect, ...), IANA type PPP/virtual/tunnel, or `tun*`/`wg*`/`utun*` on Linux and macOS; PPPoE, Teredo and ISATAP are not VPNs | `warn`; a split tunnel or a VPN that isn't up is no conflict |
+| A VPN carrying all traffic | the adapter that carries traffic to a public address (Windows: `GetBestInterfaceEx` through `diag.NetStats`; Linux and macOS: `compat.EgressRoute`, the interface owning the source address the kernel picks for a connected UDP socket, which sends nothing, falling back to the `0/0` route) is a VPN; this catches `0/0`, OpenVPN/WireGuard `0/1`+`128/1` and wg-quick's policy routing alike is a VPN: brand words in its name or description (NordLynx → NordVPN, TAP-Windows → OpenVPN, WireGuard, AnyConnect, ...), IANA type PPP/virtual/tunnel, or `tun*`/`wg*`/`utun*` on Linux and macOS; PPPoE, Teredo and ISATAP are not VPNs | `warn`; a split tunnel or a VPN that isn't up is no conflict |
 
 Each conflict carries `found` (the evidence), `action` (one sentence) and
 `why` (the "Why?" text). A part that can't be read goes to `unchecked` with
@@ -305,7 +305,10 @@ quietly; offline is no failure.
 In the app (`internal/app/conflicts.go`) a `conflictWatch` scans every 15 s
 and on demand, one scan at a time; callers wait at most 3 s and otherwise
 get the last report with a note, and a panic in an OS call becomes an
-`unchecked` line. A missing report never blocks anything (fail open).
+`unchecked` line. A missing or stale report never blocks anything (fail
+open): Boost is refused only on a scan that finished while it waited. An OS
+call that never returns can't be ended; the 30 s limit only cuts the
+remaining steps short, and the next scan starts once the call returns.
 `POST /api/apply` in route mode checks first, before the rights check,
 since restarting as administrator wouldn't help, and answers 409
 `conflict` with the blocking conflicts unless `ignore_conflicts` is set

@@ -118,11 +118,14 @@ func (r Report) Redacted() Report {
 }
 
 // redactUser replaces the folder name after \Users\ or /home/ (the account
-// name, often a real name) with "…".
+// name, often a real name) with "…". The markers are ASCII, so the search
+// folds ASCII case only: strings.ToLower can change a string's byte length
+// (U+0130 shrinks, U+023A grows), and an index into a lowered copy would then
+// point at the wrong place in s.
 func redactUser(s string) string {
 	for _, marker := range []string{`\users\`, "/users/", "/home/"} {
 		for from := 0; ; {
-			i := strings.Index(strings.ToLower(s[from:]), marker)
+			i := indexFoldASCII(s[from:], marker)
 			if i < 0 {
 				break
 			}
@@ -136,6 +139,27 @@ func redactUser(s string) string {
 		}
 	}
 	return s
+}
+
+// indexFoldASCII is strings.Index ignoring ASCII case, with offsets into s
+// itself; marker must be lower-case ASCII.
+func indexFoldASCII(s, marker string) int {
+	for i := 0; i+len(marker) <= len(s); i++ {
+		j := 0
+		for ; j < len(marker); j++ {
+			c := s[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != marker[j] {
+				break
+			}
+		}
+		if j == len(marker) {
+			return i
+		}
+	}
+	return -1
 }
 
 // Names lists the conflicts' names for a sentence: "ExitLag", "ExitLag and

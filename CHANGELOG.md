@@ -14,7 +14,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   program, tools such as clumsy, and a VPN that carries all traffic are
   named in a banner with what to do and a "Why?". Route mode won't start
   next to a running booster (Boost says to close it first, or Boost
-  anyway); Settings → Network lists everything found (#9).
+  anyway); Settings → Network lists everything found. On Linux and macOS a
+  VPN that takes over with `0/1`+`128/1` routes or policy routing is found
+  too (#9).
 - Route trace (MTR) in Settings → Diagnostics: loss and delay at every
   router on the way to a relay, game server or any host, 200 probes per
   hop over ICMP (no admin rights on Windows), or with the relay's own UDP

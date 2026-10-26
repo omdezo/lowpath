@@ -165,6 +165,27 @@ func TestHungScanFailsOpen(t *testing.T) {
 	}
 }
 
+// The last finished scan saw ExitLag, then the check hangs: the stale
+// report must not refuse Boost (ExitLag may have closed since).
+func TestStaleBlockDoesNotRefuse(t *testing.T) {
+	fp := newFake(t)
+	fp.Privileges.SetElevated(true)
+	fp.Inventory.Set(exitLagRunning)
+	ts, srv := newRealServer(t, fp)
+	srv.conflicts.wait = 50 * time.Millisecond
+	if r := srv.conflicts.scan(); len(r.Blocking()) != 1 {
+		t.Fatalf("first scan: %+v", r)
+	}
+	release := make(chan struct{})
+	fp.Inventory.Hang(release)
+	t.Cleanup(func() { close(release) })
+	id := routeGame(t, ts)
+	if code, r := applyRaw(t, ts, `{"game_id":"`+id+`","mode":"smart"}`); code != 200 {
+		t.Fatalf("apply on a stale report: %d %+v", code, r)
+	}
+	lastCapture(t, fp)
+}
+
 type panicky struct{ fakeplatform.Inventory }
 
 func (*panicky) Services() ([]compat.Service, error) { panic("service manager exploded") }

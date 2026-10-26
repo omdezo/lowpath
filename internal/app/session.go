@@ -106,10 +106,17 @@ func (s *Server) apply(req applyReq) error {
 	case CaptureRoute:
 		// Before the rights check: restarting as administrator wouldn't
 		// help while another program captures the same packets.
+		// Only a scan that finished now refuses: a stale report (the check
+		// hangs) may name a program that has closed since, so it fails open.
 		if !req.IgnoreConflicts {
-			if block := s.conflicts.scan().Blocking(); len(block) > 0 {
-				s.log.Warn("boost refused: another program captures game traffic", "conflicts", compat.Names(block))
-				return conflictErr(block)
+			rep, fresh := s.conflicts.check()
+			if block := rep.Blocking(); len(block) > 0 {
+				if !fresh {
+					s.log.Warn("conflict check didn't finish; boosting without it", "last_found", compat.Names(block))
+				} else {
+					s.log.Warn("boost refused: another program captures game traffic", "conflicts", compat.Names(block))
+					return conflictErr(block)
+				}
 			}
 		}
 		if err := s.plat.Capture.Available(); err != nil {

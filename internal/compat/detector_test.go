@@ -307,6 +307,15 @@ func TestRedacted(t *testing.T) {
 	if !strings.Contains(r.Conflicts[0].Found[0], "Example User") {
 		t.Error("Redacted changed the original")
 	}
+
+	// Letters whose lower case has another byte length (U+0130 shrinks,
+	// U+023A grows) before the marker must not shift the cut.
+	for _, in := range []string{`D:\İİ\Users\Example User\x`, `D:\ȺȺ\USERS\Example User\x`} {
+		got := redactUser(in)
+		if strings.Contains(got, "Example User") || !strings.HasSuffix(got, `\…\x`) {
+			t.Errorf("redactUser(%q) = %q", in, got)
+		}
+	}
 }
 
 func TestProductTable(t *testing.T) {

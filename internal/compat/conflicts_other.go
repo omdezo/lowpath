@@ -18,10 +18,12 @@ type unixSystem struct {
 	route RouteFinder
 }
 
-// NewSystem returns this OS's System: running processes from procs, the
-// internet route from route.
+// NewSystem returns this OS's System: running processes from procs, and the
+// internet route from the kernel's choice of source address toward the
+// internet (EgressRoute), with route as the fallback. Reading the 0/0 route
+// alone misses OpenVPN's def1 routes and wg-quick's policy routing.
 func NewSystem(procs ProcessLister, route RouteFinder) System {
-	return unixSystem{procs: procs, route: route}
+	return unixSystem{procs: procs, route: NewEgressRoute(route)}
 }
 
 func (u unixSystem) Processes() ([]string, error) { return processNames(u.procs), nil }
