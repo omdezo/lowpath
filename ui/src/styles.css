@@ -1731,6 +1731,85 @@ select.input {
   margin: 2px 0 6px;
 }
 
+/* other network software: banner and settings row */
+.conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conflict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* The banner's colour marks it; the advice itself reads as plain text. */
+.conflicts .conflict {
+  color: var(--text);
+}
+
+.conflict .link {
+  font-size: inherit;
+}
+
+.conflict-why {
+  font-size: 12.5px;
+}
+
+.setting.other-software {
+  align-items: flex-start;
+}
+
+.setting.other-software > .muted {
+  margin-top: 1px;
+}
+
+.setting.other-software .note-warn {
+  margin: 2px 0 6px;
+}
+
+.software-list {
+  list-style: none;
+  margin: 8px 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.software-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.software-list .software-tag {
+  margin: 1px 0 0;
+  flex: none;
+}
+
+.software-block {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+
+.software-warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
 /* settings: relays */
 .relay-list {
   display: flex;

@@ -115,9 +115,16 @@ function speedServer() {
   return new Promise((resolve) => srv.listen(0, "127.0.0.1", () => resolve(srv)));
 }
 
-function startApp(data, importFile, bloatServer) {
+// inventory is the file the app reads the "other network software" from
+// (-compat-inventory): the test writes "ExitLag is running" into it, and the
+// PC's real boosters and VPNs never change the results.
+function startApp(data, importFile, bloatServer, inventory) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
-  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms"], { windowsHide: true });
+  const app = spawn(
+    APP,
+    ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory],
+    { windowsHide: true },
+  );
   app.stdout.pipe(log);
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -263,7 +270,8 @@ async function main() {
   );
 
   const speed = await speedServer();
-  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`);
+  const inventory = path.join(data, "inventory.json");
+  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`, inventory);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1100, height: 720 } })).newPage();
   let helper;
@@ -360,6 +368,9 @@ async function main() {
       v4 ? `${headline}; ${v4.ip} via ${v4.source}` : `${where?.state}: ${where?.message ?? "no answer"}`,
     );
     check("STUN and lpcheck see the same public IP", !base.public || !v4 || base.public.startsWith(v4.ip + ":"), `${v4?.ip} vs ${base.public}`);
+    const other = page.getByTestId("other-software");
+    await other.locator(".conn-headline", { hasText: "None found" }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("Other network software: none on a clean system", ((await other.locator(".conn-headline").textContent().catch(() => "")) ?? "") === "None found");
     await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
@@ -506,6 +517,58 @@ async function main() {
     await page.waitForTimeout(500);
     await closeSettings(page);
     await selectGame(page, "lpcheck");
+
+    // 7b. Another booster: with ExitLag running, Boost names it instead of
+    // starting a capture that fights ExitLag's driver.
+    const setInventory = async (inv) => {
+      if (inv) fs.writeFileSync(inventory, JSON.stringify(inv));
+      else fs.rmSync(inventory, { force: true });
+      await api(page, "GET", "/conflicts?fresh=1");
+      await page.waitForTimeout(1200); // the 2 Hz live feed carries it to the banner
+    };
+    await setInventory({
+      processes: ["ExitLag.exe"],
+      programs: ["ExitLag"],
+      services: [{ name: "ndisrd", display: "WinpkFilter LWF", driver: true, running: true }],
+    });
+    const cres = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart" });
+    check(
+      "Boost next to a running ExitLag is refused and names it",
+      cres.status === 409 && cres.body?.error === "conflict" && /^ExitLag is running/.test(cres.body?.message) && cres.body?.conflicts?.[0]?.id === "exitlag",
+      `${cres.status} ${cres.body?.error}: ${cres.body?.message}`,
+    );
+    await boostBtn(page, "lpcheck").click();
+    const refusal = page.locator(".boost-refused");
+    await refusal.waitFor({ timeout: 5000 }).catch(() => {});
+    check("The Boost button says to close ExitLag first", /ExitLag is running.*close it first/.test((await refusal.textContent().catch(() => "")) ?? ""));
+    check("…and offers Boost anyway", await refusal.getByRole("button", { name: "Boost anyway" }).isVisible().catch(() => false));
+    const cbanner = page.getByRole("alert", { name: "Other network software" });
+    check("The banner names ExitLag and the leftover driver", (await cbanner.textContent().catch(() => ""))?.includes("ExitLag is running.") && (await cbanner.textContent())?.includes("Windows Packet Filter is loaded."));
+    await cbanner.getByRole("button", { name: "Why?" }).first().click();
+    check("Why? explains the conflict", await cbanner.getByText(/Two programs rerouting the same packets/).isVisible().catch(() => false));
+    await scrollTop(page);
+    await shot(page, "conflict-exitlag", "ExitLag running: the banner names it and says what to do, with a one-click explanation");
+    await refusal.scrollIntoViewIfNeeded().catch(() => {});
+    await shot(page, "conflict-boost", "ExitLag running: Boost says to close it first, or Boost anyway");
+    if (!admin) {
+      const anyway = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart", ignore_conflicts: true });
+      check("Boost anyway skips the conflict check", anyway.body?.error === "needs_admin", `${anyway.status} ${anyway.body?.error}`);
+    }
+    await openSettings(page, "Network");
+    await page.getByTestId("other-software").getByRole("button", { name: "Check again" }).click();
+    await page.getByTestId("other-software").locator(".conn-headline", { hasText: "2 found" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByTestId("other-software").scrollIntoViewIfNeeded();
+    check("Settings lists the other network software", ((await page.getByTestId("other-software").textContent()) ?? "").includes("ExitLag is running."));
+    await shot(page, "settings-other-software", "Settings → Network: other network software found, with what to do about each");
+    await closeSettings(page);
+    // Closed but still installed: named quietly, Boost is free again.
+    await setInventory({ programs: ["ExitLag"] });
+    const idle = page.getByLabel("Installed network software");
+    check("An installed ExitLag is named", ((await idle.textContent().catch(() => "")) ?? "").includes("ExitLag is installed."));
+    check("The refusal goes once ExitLag is closed", !(await refusal.isVisible().catch(() => false)));
+    await scrollTop(page);
+    await shot(page, "conflict-installed", "ExitLag installed but closed: a quiet note, Boost works");
+    await setInventory(null);
     if (!admin) {
       const res = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart" });
       check("Route mode without admin asks for administrator rights", res.status === 409 && res.body?.error === "needs_admin", `${res.status} ${res.body?.error}`);

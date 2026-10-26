@@ -145,6 +145,31 @@ export interface Live {
   // The last boost that ended without the user asking (fail-open), until
   // the next boost.
   failsafe?: Failsafe | null;
+  // Other boosters, packet filter drivers and full-tunnel VPNs (null
+  // until the first check ends).
+  conflicts?: ConflictReport | null;
+}
+
+// Other software that competes with Lowpath (internal/compat). "block":
+// running and capturing the same packets, route mode won't start next to
+// it; "warn": active, may make the boost worse; "info": installed, idle.
+export type ConflictLevel = "block" | "warn" | "info";
+
+export interface Conflict {
+  id: string;
+  name: string;
+  kind: "booster" | "packet_tool" | "packet_filter" | "vpn";
+  level: ConflictLevel;
+  found: string[] | null;
+  action: string;
+  why: string;
+}
+
+export interface ConflictReport {
+  at: string;
+  conflicts: Conflict[] | null;
+  // Checks that couldn't run, with the reason.
+  unchecked: string[] | null;
 }
 
 // A boost the service ended on its own to keep the game connected

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { ChevronDown, Info, Loader2, Plus, Power, RotateCw, Wifi, Zap } from "lucide-react";
-import { api, describeError } from "../api";
-import type { Analysis, Game, Live, RelayView, Route, RouteMode, Settings, Stats } from "../types";
+import { ChevronDown, Info, Loader2, Plus, Power, RotateCw, ShieldAlert, Wifi, Zap } from "lucide-react";
+import { api, ApiError, describeError } from "../api";
+import type { Analysis, Conflict, Game, Live, RelayView, Route, RouteMode, Settings, Stats } from "../types";
 import { ms, pct, quality, score } from "../util";
 import { StatusPill } from "./Bits";
 import { ArtImg, GameIcon, hasArt } from "./GameArt";
@@ -69,6 +69,8 @@ export function GamePanel(props: Props) {
   const [busy, setBusy] = useState<"apply" | "stop" | null>(null);
   const [choice, setChoice] = useState<Choice>("smart");
   const [details, setDetails] = useState(readDetailsOpen);
+  // Boost was refused because another program captures game traffic.
+  const [refused, setRefused] = useState<{ message: string; conflicts: Conflict[] } | null>(null);
 
   const sess = live.session?.game_id === game.id ? live.session : null;
   const snap = sess ? live.snapshot : null;
@@ -153,18 +155,34 @@ export function GamePanel(props: Props) {
   const best = eligible.find((r) => statsFor(r.id)?.up) ?? eligible[0];
   const bestStats = best ? statsFor(best.id) : undefined;
 
-  const apply = async (c: Choice = choice) => {
+  const apply = async (c: Choice = choice, ignoreConflicts = false) => {
     const p = parseChoice(c);
     setBusy("apply");
     try {
-      await api.apply(game.id, p.mode, p.region, p.routeId);
+      await api.apply(game.id, p.mode, p.region, p.routeId, ignoreConflicts);
+      setRefused(null);
     } catch (e) {
+      if (e instanceof ApiError && e.kind === "conflict") {
+        // Said next to the button, where the player looks, not in a toast.
+        setRefused({ message: e.message, conflicts: e.conflicts });
+        return;
+      }
+      setRefused(null);
       const d = describeError(e, "Couldn't start optimizing");
       onError(d.msg, d.title);
     } finally {
       setBusy(null);
     }
   };
+
+  // The refusal goes once the program it named is closed.
+  const blockingIds = (live.conflicts?.conflicts ?? [])
+    .filter((c) => c.level === "block")
+    .map((c) => c.id)
+    .join(",");
+  useEffect(() => {
+    if (refused && !refused.conflicts.some((c) => blockingIds.split(",").includes(c.id))) setRefused(null);
+  }, [blockingIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stop = async () => {
     setBusy("stop");
@@ -376,10 +394,26 @@ export function GamePanel(props: Props) {
                 })}
               </select>
               <BoostButton state={btn} gameName={game.name} onClick={onBig} />
-              <div className="control-caption" aria-live="polite">
-                {isOn && btn !== "down" && <span className="live-dot" aria-hidden="true" />}
-                <span>{caption}</span>
-              </div>
+              {refused && !sess && btn === "idle" ? (
+                <div className="control-caption boost-refused" role="alert">
+                  <ShieldAlert size={14} style={{ flex: "none" }} />
+                  <span>
+                    {refused.message}.{" "}
+                    <button
+                      className="link"
+                      onClick={() => apply(choice, true)}
+                      title="Start route mode next to it. The game's packets may go through either program, or get lost."
+                    >
+                      Boost anyway
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <div className="control-caption" aria-live="polite">
+                  {isOn && btn !== "down" && <span className="live-dot" aria-hidden="true" />}
+                  <span>{caption}</span>
+                </div>
+              )}
             </div>
           </section>
 

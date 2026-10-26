@@ -2,6 +2,8 @@ import type {
   Analysis,
   BloatStatus,
   Bootstrap,
+  Conflict,
+  ConflictReport,
   CurrentServer,
   Game,
   Live,
@@ -24,6 +26,9 @@ export class ApiError extends Error {
     public kind: string,
     message: string,
     public status: number,
+    // What is in the way, when the service says (kind "conflict", or a
+    // capture failure next to a running booster).
+    public conflicts: Conflict[] = [],
   ) {
     super(message);
   }
@@ -37,7 +42,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  let data: { error?: string; message?: string } | null = null;
+  let data: { error?: string; message?: string; conflicts?: Conflict[] | null } | null = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
@@ -46,7 +51,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     throw new ApiError("bad_response", "The Lowpath service sent an unreadable reply", res.status);
   }
   if (!res.ok) {
-    throw new ApiError(data?.error ?? "error", data?.message ?? res.statusText, res.status);
+    throw new ApiError(data?.error ?? "error", data?.message ?? res.statusText, res.status, data?.conflicts ?? []);
   }
   return data as T;
 }
@@ -62,8 +67,9 @@ export const api = {
   pingServers: (id: string) => call<ServerList>("POST", `/games/${enc(id)}/servers/ping`),
   currentServer: (id: string) => call<CurrentServer>("GET", `/games/${enc(id)}/current-server`),
   favorite: (id: string) => call<{ favorites: string[] | null }>("POST", `/games/${enc(id)}/favorite`),
-  apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string) =>
-    call<Live>("POST", "/apply", { game_id, mode, region, route_id }),
+  apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string, ignore_conflicts = false) =>
+    call<Live>("POST", "/apply", { game_id, mode, region, route_id, ignore_conflicts }),
+  conflicts: (fresh = false) => call<ConflictReport>("GET", fresh ? "/conflicts?fresh=1" : "/conflicts"),
   stop: () => call<Live>("POST", "/stop"),
   dismissFailsafe: () => call<Live>("DELETE", "/failsafe"),
   saveSettings: (s: Settings) => call<Settings>("PUT", "/settings", s),
@@ -103,6 +109,8 @@ export function describeError(e: unknown, fallback: string): { title?: string; m
         title: "No relays yet",
         msg: "Add a relay in Settings → Relays, or turn on the loopback test relay to check that capture works.",
       };
+    case "conflict":
+      return { title: "Close the other program first", msg: e.message || "Another program captures game traffic too." };
     case "capture_failed":
       return { title: "Couldn't capture game traffic", msg: e.message || "The capture driver failed to start." };
     case "trace_running":

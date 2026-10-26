@@ -447,6 +447,14 @@
   font-weight: 600;
 }
 
+.boost-refused {
+  color: var(--bad);
+}
+
+.boost-refused svg {
+  margin-top: 2px;
+}
+
 .live-dot {
   flex: none;
   width: 7px;
