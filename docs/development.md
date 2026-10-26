@@ -337,13 +337,15 @@ go test ./...
   the Unix socket (stale file taken over, a running one and a plain file
   left alone; the peer check on every OS with the peer played by a fake:
   signed-in, root, `nobody` and an unknown peer, 403 before the API sees
-  the request, one log line per account a minute, a client that never
-  reads holding nobody up, the window refusing a socket root doesn't
-  serve; logind's session files, macOS utmpx records and `login.defs`
-  parsed from samples; on Linux and macOS the kernel's peer credentials
-  for this process, and as **root** on Linux, `go test -run PeerCheck -v
-  ./internal/platform` connects as `nobody` and as uid 1000 to 1002 from
-  child processes, against this system's sessions and a sample logind
+  the request but only once its head is in (sent whole, in pieces, after
+  empty lines, with a body, over the size limit, cut short), one log
+  line per account a minute, a client that never reads holding nobody up,
+  the window refusing a socket root doesn't serve; logind's session
+  files, macOS utmpx records and `login.defs` parsed from samples; on
+  Linux and macOS the kernel's peer credentials for this process, and as
+  **root** on Linux, `go test -run PeerCheck -v ./internal/platform`
+  connects as `nobody` and as uid 1000 to 1002 from child processes,
+  against this system's sessions and a sample logind
   list; WSL2 works); the service manager read for a service that isn't installed
   and for the event log, install and uninstall refused without rights, the
   service's and data folder's access lists, the data folder created with
