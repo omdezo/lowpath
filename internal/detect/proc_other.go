@@ -2,19 +2,8 @@
 
 package detect
 
-import (
-	"os"
-	"path/filepath"
-	"strings"
-)
+// Outside Windows the process list comes from an owner.ProcessTable; a
+// System built without one sees no processes rather than guessing.
+func running() map[string]bool { return map[string]bool{} }
 
-func running() map[string]bool {
-	out := map[string]bool{}
-	matches, _ := filepath.Glob("/proc/[0-9]*/comm")
-	for _, m := range matches {
-		if b, err := os.ReadFile(m); err == nil {
-			out[strings.ToLower(strings.TrimSpace(string(b)))] = true
-		}
-	}
-	return out
-}
+func runningExe(names []string) string { return "" }

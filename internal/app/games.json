@@ -1,9 +1,9 @@
 [
   {"id": "valorant", "name": "Valorant", "genre": "Tactical FPS", "color": "#E2525C", "smart": true, "processes": ["VALORANT-Win64-Shipping.exe"], "paths": ["C:\\Riot Games\\VALORANT"]},
   {"id": "lol", "name": "League of Legends", "genre": "MOBA", "color": "#C8A456", "smart": true, "processes": ["League of Legends.exe"], "paths": ["C:\\Riot Games\\League of Legends"]},
-  {"id": "cs2", "name": "Counter-Strike 2", "genre": "Tactical FPS", "color": "#E8A33A", "steam_app": 730, "smart": true, "processes": ["cs2.exe"], "steam": "Counter-Strike Global Offensive", "discovery": ["sdr"]},
+  {"id": "cs2", "name": "Counter-Strike 2", "genre": "Tactical FPS", "color": "#E8A33A", "steam_app": 730, "smart": true, "processes": ["cs2.exe", "cs2"], "steam": "Counter-Strike Global Offensive", "discovery": ["sdr"]},
   {"id": "apex", "name": "Apex Legends", "genre": "Battle Royale", "color": "#D9473A", "steam_app": 1172470, "smart": true, "processes": ["r5apex.exe", "r5apex_dx12.exe"], "steam": "Apex Legends"},
-  {"id": "dota2", "name": "Dota 2", "genre": "MOBA", "color": "#B33A2B", "steam_app": 570, "smart": true, "processes": ["dota2.exe"], "steam": "dota 2 beta", "discovery": ["sdr"]},
+  {"id": "dota2", "name": "Dota 2", "genre": "MOBA", "color": "#B33A2B", "steam_app": 570, "smart": true, "processes": ["dota2.exe", "dota2"], "steam": "dota 2 beta", "discovery": ["sdr"]},
   {"id": "fortnite", "name": "Fortnite", "genre": "Battle Royale", "color": "#8A5CF6", "smart": true, "processes": ["FortniteClient-Win64-Shipping.exe"], "paths": ["C:\\Program Files\\Epic Games\\Fortnite"]},
   {"id": "r6", "name": "Rainbow Six Siege", "genre": "Tactical FPS", "color": "#5B8DEF", "steam_app": 359550, "smart": true, "processes": ["RainbowSix.exe", "RainbowSix_Vulkan.exe"], "steam": "Tom Clancy's Rainbow Six Siege"},
   {"id": "ow2", "name": "Overwatch 2", "genre": "Hero Shooter", "color": "#F09A3E", "steam_app": 2357570, "smart": true, "processes": ["Overwatch.exe"], "steam": "Overwatch"},

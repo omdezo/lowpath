@@ -59,10 +59,11 @@ func TestInstalledAndFindExe(t *testing.T) {
 	exe := filepath.Join(bin, "Game-Win64-Shipping.exe")
 	os.WriteFile(exe, nil, 0o644)
 
-	if !Installed([]string{filepath.Join(root, "nope"), bin}, "", nil) {
+	if !(Library{}).Has([]string{filepath.Join(root, "nope"), bin}, "") {
 		t.Error("existing install path not found")
 	}
-	if !Installed(nil, "Game", []string{root}) || Installed(nil, "Other", []string{root}) {
+	steam := Library{Steam: []string{root}}
+	if !steam.Has(nil, "Game") || steam.Has(nil, "Other") || steam.Has(nil, "") {
 		t.Error("Steam folder lookup wrong")
 	}
 	if got := FindExe([]string{root}, []string{"game-win64-shipping.EXE"}, 5, 100); got != exe {
@@ -88,5 +89,25 @@ func TestSystemOnThisOS(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("ExeIcon on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+	}
+}
+
+// On Linux and macOS the real process table lists this test binary under
+// its own name, and its path.
+func TestSystemSeesSelf(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("the Windows snapshot is covered by TestSystemOnThisOS")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	s := New()
+	if name := filepath.Base(exe); !s.Running()[strings.ToLower(name)] {
+		t.Errorf("%q not among the running programs", name)
+	}
+	got := s.RunningExe([]string{filepath.Base(exe)})
+	if real, _ := filepath.EvalSymlinks(exe); got != exe && got != real {
+		t.Errorf("RunningExe = %q, want %q", got, exe)
 	}
 }

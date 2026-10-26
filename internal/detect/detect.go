@@ -9,39 +9,85 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+
+	"lowpath/internal/owner"
 )
 
-// System finds games on this computer: running processes, Steam libraries
-// and program icons. New picks the implementation for the operating system
-// the binary is built for; parts not implemented on an OS report nothing (or
-// an error matching errors.ErrUnsupported), never made-up results.
+// System finds games on this computer: running processes, Steam libraries,
+// Wine prefixes, launcher installs and program icons. New picks the
+// implementation for the operating system the binary is built for; parts
+// not implemented on an OS report nothing (or an error matching
+// errors.ErrUnsupported), never made-up results.
 type System struct {
-	steam []string // Steam client install folders to look in
+	loc Locations
+	// procs lists running programs (Linux, macOS); nil means the OS's own
+	// process snapshot (Windows).
+	procs owner.ProcessTable
 }
-
-// New returns the detector for this operating system.
-func New() *System { return NewWithSteam(steamBases()) }
 
 // NewWithSteam is New with the Steam client folders given (tests, or a
 // Steam installed somewhere unusual).
-func NewWithSteam(steamDirs []string) *System { return &System{steam: steamDirs} }
+func NewWithSteam(steamDirs []string) *System {
+	return &System{loc: Locations{Steam: steamDirs}, procs: defaultProcs()}
+}
 
-// Running returns the lower-cased image names of all running processes.
-func (s *System) Running() map[string]bool { return running() }
+// NewSystem looks in loc and lists processes with procs (nil: the OS's own
+// process snapshot, which only Windows has).
+func NewSystem(procs owner.ProcessTable, loc Locations) *System {
+	return &System{loc: loc, procs: procs}
+}
+
+// Running returns the lower-cased image names of all running processes:
+// on Linux and macOS every name a process goes by (see owner.Program).
+func (s *System) Running() map[string]bool {
+	if s.procs == nil {
+		return running()
+	}
+	out := map[string]bool{}
+	progs, _ := s.procs.Programs() // unreadable: nothing found runs
+	for _, p := range progs {
+		for _, n := range p.Names {
+			out[strings.ToLower(n)] = true
+		}
+	}
+	return out
+}
 
 // RunningExe returns the full path of a running process with one of the
 // given image names, or "" when none runs or the OS won't tell.
-func (s *System) RunningExe(names []string) string { return runningExe(names) }
+func (s *System) RunningExe(names []string) string {
+	if s.procs == nil {
+		return runningExe(names)
+	}
+	progs, _ := s.procs.Programs()
+	for _, p := range progs {
+		if p.Exe == "" || !anyFold(p.Names, names) {
+			continue
+		}
+		if fi, err := os.Stat(p.Exe); err == nil && !fi.IsDir() {
+			return p.Exe
+		}
+	}
+	return ""
+}
 
 // ExeIcon returns the main icon of a program, rendered at size×size.
 func (s *System) ExeIcon(path string, size int) (image.Image, error) { return exeIcon(path, size) }
+
+// anyFold reports whether a and b share a name, ignoring case.
+func anyFold(a, b []string) bool {
+	return slices.ContainsFunc(a, func(x string) bool {
+		return slices.ContainsFunc(b, func(y string) bool { return strings.EqualFold(x, y) })
+	})
+}
 
 // SteamLibraries returns every steamapps/common directory we can find: the
 // Steam client's own and every library listed in its libraryfolders.vdf.
 func (s *System) SteamLibraries() []string {
 	var roots []string
-	for _, base := range s.steam {
+	for _, base := range s.loc.Steam {
 		roots = append(roots, base)
 		vdf, err := os.ReadFile(filepath.Join(base, "steamapps", "libraryfolders.vdf"))
 		if err != nil {
@@ -55,7 +101,7 @@ func (s *System) SteamLibraries() []string {
 	var out []string
 	for _, r := range roots {
 		dir := filepath.Join(r, "steamapps", "common")
-		key := strings.ToLower(filepath.Clean(dir))
+		key := dirKey(dir)
 		if seen[key] {
 			continue
 		}
@@ -68,11 +114,13 @@ func (s *System) SteamLibraries() []string {
 }
 
 // SteamRoots returns the Steam client install folders that exist (where the
-// appcache with each game's library artwork lives).
+// appcache with each game's library artwork lives), each once.
 func (s *System) SteamRoots() []string {
 	var out []string
-	for _, dir := range s.steam {
-		if fi, err := os.Stat(filepath.Join(dir, "appcache")); err == nil && fi.IsDir() {
+	seen := map[string]bool{}
+	for _, dir := range s.loc.Steam {
+		if k := dirKey(dir); !seen[k] && isDir(filepath.Join(dir, "appcache")) {
+			seen[k] = true
 			out = append(out, dir)
 		}
 	}
@@ -80,24 +128,6 @@ func (s *System) SteamRoots() []string {
 }
 
 var vdfPath = regexp.MustCompile(`"path"\s+"([^"]+)"`)
-
-// Installed reports whether any of the given absolute paths, or a Steam
-// library folder with the given name, exists.
-func Installed(paths []string, steamDir string, libs []string) bool {
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	if steamDir != "" {
-		for _, l := range libs {
-			if _, err := os.Stat(filepath.Join(l, steamDir)); err == nil {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // errFound stops the directory walk once the program turns up.
 var errFound = errors.New("found")

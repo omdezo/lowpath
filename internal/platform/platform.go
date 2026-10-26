@@ -57,6 +57,13 @@ type GameDetector interface {
 	SteamLibraries() []string
 	// SteamRoots returns the Steam client folders that have an appcache.
 	SteamRoots() []string
+	// WinePrefixes returns the drive_c folders of the Wine and Proton
+	// prefixes found, where Windows games live on Linux and macOS (none on
+	// Windows).
+	WinePrefixes() []string
+	// LauncherInstalls returns the game folders launchers such as Heroic
+	// report as installed.
+	LauncherInstalls() []string
 }
 
 // IconProvider reads a program's own icon.

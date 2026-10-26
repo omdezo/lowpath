@@ -82,6 +82,8 @@ type GameDetector interface {
     RunningExe(names []string) string  // "" = none, or the OS won't tell
     SteamLibraries() []string
     SteamRoots() []string
+    WinePrefixes() []string            // drive_c of Wine/Proton prefixes (none on Windows)
+    LauncherInstalls() []string        // game folders launchers report (Heroic/Legendary)
 }
 type IconProvider interface{ ExeIcon(path string, size int) (image.Image, error) }
 type Paths interface {
@@ -94,9 +96,9 @@ type Paths interface {
 | Part | Windows | Linux, macOS (today) |
 |---|---|---|
 | Capture | `capture.WinDivert` (64-bit only; `ErrNoDriver` on arm64) | `capture.Unavailable`: route mode says "packet capture isn't available on this system yet" (TUN backends: #41, #42) |
-| Owners | `owner.Windows`: `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` + Toolhelp32 | `owner.Unsupported` (`/proc`, libproc: #43) |
+| Owners | `owner.Windows`: `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` + Toolhelp32 | Linux `owner.Procfs`: `/proc/net/udp{,6}` inodes matched to `/proc/<pid>/fd` `socket:[inode]` links. macOS `owner.Darwin`: `kern.proc.all`, then `proc_pidinfo(PROC_PIDLISTFDS)` + `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` through the `proc_info` syscall (no cgo). Own user's processes only, no root. Other OSes: `owner.Unsupported` |
 | Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | `platform.Root`: euid 0; no prompt yet (#44) |
-| Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `/proc/*/comm` on Linux; no Steam folders or icons yet (#43) |
+| Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
 
 Rules: a part not built for an OS fails with an error matching
@@ -115,7 +117,21 @@ type Resolver interface {
     ProcessNames() (map[uint32]string, error) // PID -> image name
 }
 func ListProcesses(r Resolver, self uint32) ([]Process, error) // "Add game" list; portable
+
+type Program struct{ PID uint32; Name string; Names []string; Exe string }
+type Table interface{ Resolver; Programs() ([]Program, error) } // Linux, macOS
 ```
+
+On Linux and macOS a process's short name is cut to 15 or 16 bytes, and a
+Windows game under Wine or Proton runs from the Wine loader with its
+Windows path in argv[0] (`C:\...\RocketLeague.exe`). `Program.Names` holds
+all of them, `Name` is the game's own (argv[0]'s file for Wine, else the
+program file, else the short name), and `Exe` maps a Wine argv[0] through
+`$WINEPREFIX/dosdevices`. The catalog's install paths are Windows paths;
+`detect.Library.Has` looks them up case-insensitively in each prefix's
+`drive_c` and matches their last folder against launcher installs. The
+`/proc` reader takes an `fs.FS` and the libproc structures are decoded by
+portable functions, so both are tested on every OS against fixtures.
 
 ## Capture — `internal/divert`, `internal/capture`
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -454,6 +455,50 @@ func TestRunningGamesFromDetector(t *testing.T) {
 	call(t, ts, "GET", "/api/bootstrap", "", &b)
 	for _, g := range b.Games {
 		if g.Running != (g.ID == "cs2") {
+			t.Errorf("%s running = %v", g.ID, g.Running)
+		}
+	}
+}
+
+// Installed games come from the detector's Steam libraries, Wine prefixes
+// and launcher installs. Outside Windows the catalog's Windows paths are
+// looked up inside the prefixes; on Windows they are real paths on this PC,
+// so only the Steam part is checked there.
+func TestInstalledGamesFromDetector(t *testing.T) {
+	fc := newFake(t)
+	steam := t.TempDir()
+	os.MkdirAll(filepath.Join(steam, "Counter-Strike Global Offensive"), 0o755)
+	driveC := t.TempDir()
+	os.MkdirAll(filepath.Join(driveC, "riot games", "VALORANT"), 0o755)
+	epic := filepath.Join(t.TempDir(), "rocketleague")
+	os.MkdirAll(epic, 0o755)
+	fc.Games.SetSteam([]string{steam}, nil)
+	fc.Games.SetWine([]string{driveC}, []string{epic})
+	ts, srv := newRealServer(t, fc)
+	srv.scanInstalled()
+	var b bootstrap
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	want := map[string]bool{"cs2": true}
+	if runtime.GOOS != "windows" {
+		want["valorant"], want["rocketleague"] = true, true
+	}
+	for _, g := range b.Games {
+		if w, ok := want[g.ID]; ok && g.Installed != w || !ok && runtime.GOOS != "windows" && g.Installed {
+			t.Errorf("%s installed = %v", g.ID, g.Installed)
+		}
+	}
+}
+
+// A Linux CS2 runs as "cs2", not "cs2.exe".
+func TestNativeLinuxNamesRun(t *testing.T) {
+	fc := newFake(t)
+	fc.Games.SetRunning("cs2", "dota2")
+	ts, srv := newRealServer(t, fc)
+	srv.scanRunning()
+	var b bootstrap
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	for _, g := range b.Games {
+		if g.Running != (g.ID == "cs2" || g.ID == "dota2") {
 			t.Errorf("%s running = %v", g.ID, g.Running)
 		}
 	}

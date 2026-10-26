@@ -237,18 +237,7 @@ func (s *Server) Run(ctx context.Context) {
 	// Fetch the library's artwork in the background so covers are ready
 	// the first time the home screen opens.
 	go s.art.warm(ctx, s.allGames())
-	go func() {
-		libs := s.plat.Games.SteamLibraries()
-		inst := map[string]bool{}
-		for _, g := range s.games {
-			if detect.Installed(g.Paths, g.Steam, libs) {
-				inst[g.ID] = true
-			}
-		}
-		s.mu.Lock()
-		s.installed = inst
-		s.mu.Unlock()
-	}()
+	go s.scanInstalled()
 	go s.line.run(s.lifetime, s.lineInput)
 	go func() {
 		t := time.NewTicker(3 * time.Second)
@@ -312,6 +301,23 @@ func (s *Server) game(id string) (Game, bool) {
 		}
 	}
 	return Game{}, false
+}
+
+// scanInstalled finds which catalog games are installed: in a Steam
+// library, at their usual folder or, on Linux and macOS, inside a Wine or
+// Proton prefix or a launcher's install folder.
+func (s *Server) scanInstalled() {
+	games := s.plat.Games
+	lib := detect.Library{Steam: games.SteamLibraries(), DriveC: games.WinePrefixes(), Installs: games.LauncherInstalls()}
+	inst := map[string]bool{}
+	for _, g := range s.games {
+		if lib.Has(g.Paths, g.Steam) {
+			inst[g.ID] = true
+		}
+	}
+	s.mu.Lock()
+	s.installed = inst
+	s.mu.Unlock()
 }
 
 func (s *Server) scanRunning() {
