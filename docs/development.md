@@ -58,6 +58,8 @@ degrade or cut routes — no servers or admin rights needed.
 |---|---|
 | `%APPDATA%\Lowpath\state.json` | Settings, favorites, custom games, relays (with keys), learned servers |
 | `%APPDATA%\Lowpath\lowpath.log` | Log (starts over above 5 MB) |
+| `%APPDATA%\Lowpath\crash.log` | Go crash reports, one header line per start (starts over above 1 MB) |
+| `%APPDATA%\Lowpath\capture-session.json` | Exists only while route mode captures; found at start, it means the last run was killed or crashed mid-boost |
 | `%APPDATA%\Lowpath\art\` | Cached game artwork and extracted icons |
 | `%APPDATA%\Lowpath\catalog\` | Last downloaded Valve server lists (`sdr-<app id>.json`) |
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
@@ -114,11 +116,18 @@ go test ./...
   kill switch, capture mode, relay restarts.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
-  and the socket owner table — all without admin rights.
+  and the socket owner table — all without admin rights. The fail-open
+  watchdog (a stuck or panicking handler, a broken handle, sleep and
+  resume) and the session marker file run on a fake handle; from an
+  **administrator** terminal `go test -run FailOpen -v ./internal/capture`
+  also kills a real capturing process, and lets one deadlock, and measures
+  how fast the traffic goes direct (under 1 s).
 - **Relay:** key check, destination policy, server-leg ping, flow limits,
   forwarding hops.
 - **App:** local API guard and per-launch session, relay and custom-game
-  validation, error kinds, game art lookup, and a full route-mode session
+  validation, error kinds, game art lookup, fail-open (the session ends and
+  says why; a killed run's marker is cleaned up at the next start), and a
+  full route-mode session
   through the loopback relay on `fakeplatform`, so the app tests (and
   `cmd/lowpath`'s) run unchanged on Windows, Linux and macOS.
 - **Platform:** each OS implementation is complete, and what isn't built

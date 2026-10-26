@@ -141,6 +141,20 @@ export interface Live {
   running: string[] | null;
   // Passive bufferbloat detector, during a session only.
   line?: LineState | null;
+  // The last boost that ended without the user asking (fail-open), until
+  // the next boost.
+  failsafe?: Failsafe | null;
+}
+
+// A boost the service ended on its own to keep the game connected
+// ("stopped"), or one the last run never finished ("recovered").
+export interface Failsafe {
+  at: string;
+  kind: "stopped" | "recovered";
+  game_id: string;
+  game: string;
+  message: string;
+  detail?: string;
 }
 
 // Passive detector (internal/diag PassiveState). null numbers are unknown.

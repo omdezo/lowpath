@@ -242,6 +242,13 @@ type Backend interface {
 }
 ```
 
+`internal/capture/failopen_windows_test.go` checks the acceptance on the
+real driver (administrator only; skipped otherwise): a helper process
+captures the test's UDP to 192.0.2.1 and swallows it, the test kills it
+(`Process.Kill` is `TerminateProcess`, as `taskkill /F`) or lets its
+handler deadlock, and a lower-priority sniffing handle must see the packets
+leave within 1 s.
+
 ## Engine — capture mode
 
 Keep proxy mode and every existing test passing. Additions:
@@ -550,7 +557,10 @@ Live adds `"capture": null | {"mode": "route", "captured", "passed",
 during a session, `"line": PassiveState` (`{active, direction, since,
 watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
 line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
-`wire_bytes_up` / `wire_bytes_down`.
+`wire_bytes_up` / `wire_bytes_down`. `"failsafe": null | {at, kind:
+"stopped"|"recovered", game_id, game, message, detail}` is the last boost
+that ended without the user asking (see Capture → Fail-open), until the
+next Boost.
 Session adds `"capture_mode"`.
 
 New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
@@ -592,6 +602,9 @@ prints that URL to stderr only, never to the log.
 - Library: **Add game** → modal listing running processes with UDP sockets
   (from `/api/processes`), name field, add; custom games get a delete action.
 - Demo-only controls (Network lab) only when `demo` is true.
+- `live.failsafe` (no session running) → a banner above the page: "Boost
+  stopped to keep your game connected" or "Lowpath closed during a boost",
+  the service's message and detail, and a Dismiss button.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,
   direct ping and loss (six rows, "Show all"), "—" and the reason when a POP

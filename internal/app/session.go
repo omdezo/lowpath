@@ -150,6 +150,7 @@ func (s *Server) apply(req applyReq) error {
 	s.mu.Lock()
 	s.sess = sess
 	s.status = "optimizing"
+	s.failsafe = nil // a new boost: the old notice is history
 	s.mu.Unlock()
 	s.store.TouchRecent(req.GameID)
 	s.log.Info("optimizing", "game", req.GameID, "mode", req.Mode, "capture", mode, "paths", len(paths), "listen", sess.Listen)
@@ -212,6 +213,9 @@ func (s *Server) startRoute(sess *session, g Game, cfg engine.Config) error {
 	if err != nil {
 		return fmt.Errorf("start engine: %w", err)
 	}
+	// Marked before capture starts: a crash right after Start must still be
+	// found at the next launch.
+	s.markSession(sess.GameID)
 	c, err := s.plat.Capture.Start(capture.Config{
 		Processes: g.Processes,
 		// Relay endpoints must never be captured: a tunnel packet that got
@@ -221,6 +225,7 @@ func (s *Server) startRoute(sess *session, g Game, cfg engine.Config) error {
 		Log:      s.log.With("component", "capture"),
 	})
 	if err != nil {
+		s.unmarkSession()
 		eng.Stop()
 		return captureErr(err)
 	}
@@ -229,6 +234,7 @@ func (s *Server) startRoute(sess *session, g Game, cfg engine.Config) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sess.cancel = cancel
+	go s.watchCapture(ctx, sess, c)
 	go func() {
 		t := time.NewTicker(recordEvery)
 		defer t.Stop()
@@ -313,9 +319,9 @@ func (s *Server) stopSessionLocked() {
 		if err := sess.capt.Close(); err != nil {
 			s.log.Warn("close capture", "err", err)
 		}
-		s.recordPrimary(sess)
+		s.unmarkSession() // the game's traffic is direct again
 	}
-	sess.eng.Stop()
+	s.stopEngine(sess)
 	s.log.Info("stopped", "game", sess.GameID)
 }
 
