@@ -71,10 +71,17 @@ func socketError(err error) error {
 }
 
 // sendError maps a send that failed because the PC can't reach dst to
-// ErrNoRoute.
+// ErrNoRoute. A send the system refuses (EPERM from a firewall rule that
+// drops the probe, EACCES from a "prohibit" route or a broadcast address)
+// is this probe's answer, not a socket the process may not open: it no
+// longer matches os.ErrPermission, so the chain doesn't give up on the
+// socket for every later probe and the trace doesn't ask for root.
 func sendError(err error) error {
-	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.EADDRNOTAVAIL) {
+	switch {
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.EADDRNOTAVAIL):
 		return ErrNoRoute
+	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES):
+		return fmt.Errorf("icmp: the system refused to send the probe (a firewall rule or a route forbids it): %v", err)
 	}
 	return err
 }

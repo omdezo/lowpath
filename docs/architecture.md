@@ -832,11 +832,14 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   in `SO_EE_OFFENDER`), read with `poll(2)` since Go's poller reports an
   `EPOLLERR`-only wakeup as an error. macOS uses a datagram ICMP socket,
   a raw socket underneath that any user may open, with the raw socket's
-  matching (`icmp(4)`). A refused raw socket is not tried again; when no
-  socket can be opened the trace says what the system needs. TTLs past the one the
-  destination answered at stop; silent trailing hops are left out. Per hop:
-  sent, received, raw loss (as WinMTR counts it), best/avg/worst/last/stdev,
-  every address that answered (load balancing), reverse DNS.
+  matching (`icmp(4)`). A raw socket the OS won't open is not tried again;
+  a send it refuses (a firewall rule's `EPERM`, a "prohibit" route's
+  `EACCES`) is only that probe's answer and asks for no rights. When no
+  socket can be opened the trace says what the system needs. TTLs past the
+  one the destination answered at stop; silent trailing hops are left out.
+  Per hop: sent, received, raw loss (as WinMTR counts it),
+  best/avg/worst/last/stdev, every address that answered (load balancing),
+  reverse DNS.
   **Persistence rule:** a hop's *persisting* loss is the lowest loss at it
   or any later hop up to the destination (`persist_pct`); loss starts at
   the first hop where it reaches the threshold (1 point, or 2 probes when

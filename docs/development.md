@@ -281,7 +281,9 @@ go test ./...
   a destination in network namespaces of its own (nothing on the machine
   changes, WSL2 works) and traces it over IPv4 and IPv6 as root (raw
   socket), as nobody with only `net.ipv4.ping_group_range` open (ping
-  socket), with 24 probes at once, and as nobody with it closed.
+  socket), with 24 probes at once and a destination behind a "prohibit"
+  route (a refused send must not give up on the socket), and as nobody with
+  it closed.
 - **Verdict:** every rule against hand-built evidence (router loss on Wi-Fi
   with and without a signal reading, a cable, one stray lost ping, a router
   that ignores ping, slow replies only, a test from another adapter, old
