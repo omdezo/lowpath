@@ -80,9 +80,11 @@ function Get-StageList {
 # Get-ReportTarget returns the GitHub repo and commit a -Report run describes,
 # or $null (after saying why) when the result can't honestly describe exactly
 # one commit: uncommitted or untracked files would be built but not pushed.
+# ui/dist is build output (the ui stage rewrites it), not source, so it
+# doesn't count.
 function Get-ReportTarget {
     try {
-        if (git -C $root status --porcelain) {
+        if (git -C $root status --porcelain -- . ':(exclude)ui/dist') {
             Write-Host 'Not reporting: the working tree has uncommitted or untracked changes.' -ForegroundColor Yellow
             return $null
         }

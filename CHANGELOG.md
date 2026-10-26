@@ -21,6 +21,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 - CODEOWNERS, this changelog, and the pull request process in
   `CONTRIBUTING.md`.
 
+### Fixed
+- `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
+  the generated `ui/dist` output doesn't count as an uncommitted change.
+
 ## [0.2.0] - 2026-10-26
 
 First public release.
