@@ -124,6 +124,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- Current server card: a lookup spoiled by a slow or busy RIPEstat (no
+  network, or no ISP name or city) is asked again after 3 s instead of
+  being kept for 1 min, or for 1 h when only a part was missing; a registry
+  that stays slow is asked less and less often, up to once a minute, and
+  the card keeps showing what it already knew meanwhile (#145).
 - The background service's Unix socket on Linux and macOS no longer serves
   every local account: root, the service's own account and accounts signed
   in at the computer (a logind session, a utmpx session on macOS, or a
