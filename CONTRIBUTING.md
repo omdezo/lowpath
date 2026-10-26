@@ -37,9 +37,13 @@ work on a fresh clone without Node.js, and it is the page a program built
 before the UI shows instead, with how to build it. So building the UI never
 shows up in `git status`; if it does, something writes outside
 `ui/dist/app`, and the local CI's `ui` stage fails on it. Don't commit build
-output, and only edit the placeholder on purpose. A clone from before this
-layout should delete its old `ui/dist/assets` folder once: it is never
-served any more, but it is still embedded while it is there.
+output, and only edit the placeholder on purpose.
+
+A clone that built the UI before this layout has a rebuilt
+`ui/dist/index.html`, and git won't pull or switch branches over it: put it
+back first with `git restore ui/dist/index.html`. Then delete the old
+`ui/dist/assets` folder once: it is never served any more, but it is still
+embedded while it is there.
 
 ## Pull request process
 

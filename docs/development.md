@@ -394,6 +394,7 @@ sandbox, or a systemd unit with `NoNewPrivileges=yes`) isn't offered the
 prompt, because the kernel grants no file capabilities there. By hand:
 
 ```sh
+(cd ui && npm ci && npm run build)   # without it the window only says how to build the UI
 go build -o lowpath ./cmd/lowpath && go build -o lpcheck ./cmd/lpcheck
 sudo setcap cap_net_admin,cap_net_raw+ep ./lowpath
 ./lowpath                        # app window; -headless prints the launch link instead
