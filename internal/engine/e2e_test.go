@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -123,14 +124,28 @@ func TestPicksBestPathsAndMeasures(t *testing.T) {
 	}
 	t.Logf("analysis: direct %.1fms fast %.1fms ok %.1fms slow %.1fms",
 		a.Direct.RTT, a.Paths["fast"].RTT, a.Paths["ok"].RTT, a.Paths["slow"].RTT)
-	if r := a.Paths["fast"].RTT; r < 9 || r > 25 {
-		t.Errorf("fast path RTT %.1fms, want ~10ms", r)
-	}
 	if !a.DirectKnown {
 		t.Error("UDP-echo baseline answered but DirectKnown is false")
 	}
-	if r := a.Direct.RTT; r < 75 || r > 100 {
-		t.Errorf("direct RTT %.1fms, want ~80ms", r)
+	// A busy machine only ever adds delay: a simulated link never delivers
+	// sooner than its profile, but a starved goroutine can deliver much
+	// later. So each RTT gets a floor (90% of what its links add up to) and
+	// no ceiling, and the routes must come out in order, which is what
+	// shows they were measured apart.
+	prev := 0.0
+	for _, r := range []struct {
+		name       string
+		rtt, floor float64
+	}{
+		{"fast path", a.Paths["fast"].RTT, 9},
+		{"ok path", a.Paths["ok"].RTT, 27},
+		{"direct route", a.Direct.RTT, 72},
+		{"slow path", a.Paths["slow"].RTT, 108},
+	} {
+		if r.rtt < r.floor || r.rtt <= prev {
+			t.Errorf("%s RTT %.1fms, want at least %.0fms and more than the faster route's %.1fms", r.name, r.rtt, r.floor, prev)
+		}
+		prev = r.rtt
 	}
 
 	e, err := engine.Start(engine.Config{
@@ -141,38 +156,45 @@ func TestPicksBestPathsAndMeasures(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e.Stop()
-	time.Sleep(2500 * time.Millisecond)
-	s := e.Snapshot()
-	active := map[string]bool{}
+	// About 2 s of live probes, so a selection tick has ranked the paths on
+	// live numbers rather than the seed. Counting samples instead of
+	// sleeping keeps that true when the probe loop itself runs late.
+	var s engine.Snapshot
+	waitFor(t, 10*time.Second, func() bool {
+		s = e.Snapshot()
+		return s.After.Samples >= 20 && s.Before.Samples >= 20
+	})
+	if a := activeIDs(s); !a["fast"] || !a["ok"] || a["slow"] {
+		t.Errorf("active paths %v, want fast+ok", a)
+	}
+	okRTT := 0.0
 	for _, p := range s.Paths {
-		if p.Active {
-			active[p.ID] = true
+		if p.ID == "ok" {
+			okRTT = p.Stats.RTT
 		}
 	}
-	if !active["fast"] || !active["ok"] || active["slow"] {
-		t.Errorf("active paths %v, want fast+ok", active)
-	}
-	t.Logf("live: before %.1fms after %.1fms", s.Before.RTT, s.After.RTT)
-	if s.After.RTT >= s.Before.RTT || s.After.RTT > 25 {
-		t.Errorf("after %.1fms should beat before %.1fms", s.After.RTT, s.Before.RTT)
+	t.Logf("live: before %.1fms after %.1fms (%d samples), ok path %.1fms", s.Before.RTT, s.After.RTT, s.After.Samples, okRTT)
+	// The first copy wins, so "after" follows the fast path: below the
+	// direct route and below the second-best path it also rides.
+	if s.After.Samples == 0 || s.After.RTT >= s.Before.RTT || s.After.RTT >= okRTT {
+		t.Errorf("after %.1fms should beat before %.1fms and the ok path's %.1fms", s.After.RTT, s.Before.RTT, okRTT)
 	}
 
 	// Degrade the fast path badly: auto-switch must replace it with "slow".
+	// It takes a few seconds of probes for the loss to show; how many
+	// depends on how busy the machine is, so wait for the switch.
 	net.Links["fast"].SetProfile(netsim.Profile{Delay: 5 * time.Millisecond, Loss: 0.6})
-	time.Sleep(4 * time.Second)
-	s = e.Snapshot()
-	for _, p := range s.Paths {
-		if p.ID == "fast" && p.Active {
-			t.Errorf("degraded path still active: %+v", p.Stats)
-		}
+	switched := func(s engine.Snapshot) bool {
+		return slices.ContainsFunc(s.Events, func(ev engine.Event) bool { return ev.Kind == "switch" })
 	}
-	switched := false
-	for _, ev := range s.Events {
-		if ev.Kind == "switch" {
-			switched = true
-		}
+	waitFor(t, 15*time.Second, func() bool {
+		s = e.Snapshot()
+		return !activeIDs(s)["fast"] && switched(s)
+	})
+	if a := activeIDs(s); a["fast"] || !a["ok"] || !a["slow"] {
+		t.Errorf("active paths %v after degrading fast, want ok+slow", a)
 	}
-	if !switched {
+	if !switched(s) {
 		t.Errorf("no switch event: %+v", s.Events)
 	}
 }
@@ -228,7 +250,9 @@ func TestFallbackWhenAllRelaysDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(1200 * time.Millisecond) // one selection tick
+		// The first selection tick (1 s) finds the relay dead; a busy
+		// machine can run it late.
+		waitFor(t, 5*time.Second, func() bool { return e.Snapshot().Fallback })
 		got, _ := gameClient(t, e.ListenAddr(), 50, 2*time.Millisecond)
 		snap := e.Snapshot()
 		e.Stop()
