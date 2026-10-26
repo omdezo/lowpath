@@ -9,6 +9,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Verdict in Settings → Diagnostics: one plain answer to "why am I
+  lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
+  server, or already optimal), with a confidence level, the measurements
+  behind it and an exportable text report (#14). It says when the PC is
+  offline, ignores a route trace taken on another connection, and counts a
+  carrier-grade NAT hop as the ISP's, not the home network.
 - Conflict detector: ExitLag, NoPing and other game boosters, the Windows
   Packet Filter driver they leave behind, WinDivert loaded by another
   program, tools such as clumsy, and a VPN that carries all traffic are
@@ -56,6 +62,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   `CONTRIBUTING.md`.
 
 ### Fixed
+- Settings → Network: a slow first RIPEstat reply no longer leaves the ISP
+  unknown. A registry request with no answer after 2.5 s (or a 502) gets a
+  second copy on a fresh connection and the first answer wins; a lookup
+  spoiled by a timeout is kept for 3 s instead of 30 s, and the pane asks
+  once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
   the generated `ui/dist` output doesn't count as an uncommitted change.
 

@@ -67,6 +67,7 @@ type traceRequest struct {
 type traceRunner struct {
 	ping     diag.TTLPingFunc
 	names    diag.NameFunc
+	net      diag.NetStats // the connection the trace runs on; nil: unknown
 	store    *Store
 	log      *slog.Logger
 	count    int           // probes per hop (0: the default 200)
@@ -110,6 +111,12 @@ func (t *traceRunner) isRunning() bool {
 // start begins a trace of cfg in the background.
 func (t *traceRunner) start(parent context.Context, cfg diag.TraceConfig) error {
 	cfg.Ping, cfg.Names = t.ping, t.names
+	if t.net != nil {
+		// The verdict ignores a trace taken on another connection.
+		if r, err := t.net.DefaultRoute(); err == nil {
+			cfg.Route = r
+		}
+	}
 	tr := diag.NewTrace(t.tune(cfg))
 	t.mu.Lock()
 	defer t.mu.Unlock()
