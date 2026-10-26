@@ -129,8 +129,10 @@ func (c *GatewayConfig) defaults() {
 
 // GatewayView is what the pinger knows now (GET /api/diag/gateway).
 type GatewayView struct {
-	State   string `json:"state"`
-	Message string `json:"message,omitempty"` // why there are no numbers, in words
+	State string `json:"state"`
+	// Message says why there are no numbers, or, with Stats, that the
+	// router stopped answering.
+	Message string `json:"message,omitempty"`
 	// Note is something that happened to the series: it started over
 	// because the connection changed, or the rate went down.
 	Note      string    `json:"note,omitempty"`
@@ -168,6 +170,7 @@ type GatewayPinger struct {
 	sendState, sendMsg string
 
 	slow     bool
+	answered bool   // the router answered a ping in this series
 	epoch    uint64 // results of pings sent in an older epoch are dropped
 	inflight int
 	since    time.Time
@@ -236,7 +239,7 @@ func (g *GatewayPinger) step(now time.Time) time.Duration {
 		return 250 * time.Millisecond
 	}
 	g.paused = ""
-	switch gap := now.Sub(g.lastStep); {
+	switch gap := stepGap(g.lastStep, now); {
 	case !g.running:
 		g.running, g.slow, g.routeOK = true, false, false
 		g.resetLocked("")
@@ -278,6 +281,14 @@ func (g *GatewayPinger) step(now time.Time) time.Duration {
 	return g.interval()
 }
 
+// stepGap is the time between two steps, the larger of the monotonic and
+// the wall-clock difference. Go's monotonic clock stops while the system is
+// suspended on Linux (CLOCK_MONOTONIC) and macOS (CLOCK_UPTIME_RAW), so
+// only the wall clock sees a sleep there; on Windows both do.
+func stepGap(prev, now time.Time) time.Duration {
+	return max(now.Sub(prev), now.Round(0).Sub(prev.Round(0)))
+}
+
 func roundGap(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%d s", int(d.Round(time.Second)/time.Second))
@@ -307,6 +318,7 @@ func (g *GatewayPinger) stopLocked() {
 func (g *GatewayPinger) resetLocked(note string) {
 	g.epoch++
 	g.results = g.results[:0]
+	g.answered = false
 	g.since = time.Time{}
 	g.note = note
 	g.sendState, g.sendMsg = "", ""
@@ -421,6 +433,7 @@ func (g *GatewayPinger) addLocked(r gwResult) {
 	if g.since.IsZero() || r.sent.Before(g.since) {
 		g.since = r.sent
 	}
+	g.answered = g.answered || !r.lost
 	g.sendState, g.sendMsg = "", ""
 }
 
@@ -475,7 +488,8 @@ func (g *GatewayPinger) refreshSampleLocked(now time.Time) {
 	answered := st.Sent - st.Lost
 	s := &GatewaySample{Source: fmt.Sprintf("live router pings, %s a second", timesWord(time.Second/g.interval())),
 		At: g.results[len(g.results)-1].sent, Sent: st.Sent, Lost: st.Lost, P50MS: st.P50MS,
-		Link: g.route.Kind, Interface: g.route.Name, Limited: st.Limited, Spikes: st.Spikes}
+		Link: g.route.Kind, Interface: g.route.Name, Limited: st.Limited, Spikes: st.Spikes,
+		Stopped: answered == 0 && g.answered}
 	switch {
 	case st.P99MS != nil:
 		s.TailMS, s.TailPct = st.P99MS, 99
@@ -536,6 +550,11 @@ func (g *GatewayPinger) View() GatewayView {
 		v.State, v.Message = g.blocked, g.blockedMsg
 	case g.sendState != "":
 		v.State, v.Message = g.sendState, g.sendMsg
+	case st.Sent >= minGatewaySent && st.Lost == st.Sent && g.answered:
+		// It answered earlier in this series: this is loss, not a router
+		// that ignores ping.
+		v.State, v.Stats = GatewayOn, &st
+		v.Message = "Your router stopped answering: every ping in the last minute was lost."
 	case st.Sent >= minGatewaySent && st.Lost == st.Sent:
 		v.State, v.Message = GatewayNoReply, "Your router doesn't answer ping (many routers don't), so this link can't be measured. That is not loss."
 	case st.Sent-st.Lost < minGatewayReplies:

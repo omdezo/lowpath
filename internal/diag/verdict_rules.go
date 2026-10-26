@@ -30,7 +30,7 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 	c := Check{Rule: ruleHome, Name: "Wi-Fi and home network"}
 	g := v.gateway
 	var facts []string
-	if g != nil && g.Lost == g.Sent {
+	if g != nil && g.Lost == g.Sent && !g.Stopped {
 		// Many routers don't answer ping at all; that is no loss.
 		facts = append(facts, "Your router didn't answer any ping ("+g.Source+"): many routers ignore ping, so this says nothing about loss.")
 		g = nil
@@ -55,6 +55,9 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 		tailBad = g.TailMS != nil && *g.TailMS > gatewayTailMS
 		if g.Limited {
 			facts = append(facts, "Your router limits how many pings it answers, so its lost pings aren't counted as loss.")
+		}
+		if g.Stopped {
+			facts = append(facts, "Your router answered at first and then stopped answering: every ping since was lost.")
 		}
 		conf = v.gatewayConf
 	}

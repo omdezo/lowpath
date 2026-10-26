@@ -148,7 +148,7 @@ export function GatewayCard() {
         <div className="txt">
           <div className="t">Router pings</div>
           <div className="d">
-            Lowpath pings your router 20 times a second while this tab is open and during a boost. Lost pings and slow replies here lag every
+            Lowpath pings your router up to 20 times a second while this tab is open and during a boost. Lost pings and slow replies here lag every
             game before its traffic even leaves your home.
           </div>
         </div>
@@ -186,6 +186,11 @@ export function GatewayCard() {
             <Stat k="Spikes" v={String(st.spikes)} unit="" s="replies of 100 ms or more" />
             <Stat k="Jitter" v={fmtMs(st.jitter_ms)} unit="ms" s="change between replies" />
           </div>
+          {v.message && (
+            <div className="gw-msg note-warn" data-state={v.state}>
+              {v.message}
+            </div>
+          )}
           <GatewayChart series={v.series ?? []} />
         </>
       )}

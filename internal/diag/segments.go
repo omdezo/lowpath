@@ -40,6 +40,11 @@ func segments(v *view, checks []Check, vd Verdict) []Segment {
 		byRule[c.Rule] = c
 	}
 	out := []Segment{homeSegment(v, byRule), ispSegment(v, byRule, vd), lowpathSegment(v, vd), serverSegment(v, byRule)}
+	if vd.ID == VerdictOffline {
+		// No route at all: the home end is where it breaks, and router
+		// pings from before the connection dropped say nothing about now.
+		out[0] = Segment{ID: SegmentHome, Name: "Home", Status: SegmentBad, Summary: vd.Title + "."}
+	}
 	for i := range out {
 		out[i].Blamed = vd.Segment != "" && vd.Segment == out[i].ID && out[i].Status == SegmentBad
 	}
@@ -60,7 +65,7 @@ func checkStatus(c Check) string {
 func homeSegment(v *view, checks map[string]Check) Segment {
 	home, line := checks[ruleHome], checks[ruleLine]
 	s := Segment{ID: SegmentHome, Name: "Home", Status: checkStatus(home), Summary: home.Summary}
-	if g := v.gateway; g != nil && g.Lost < g.Sent {
+	if g := v.gateway; g != nil && (g.Lost < g.Sent || g.Stopped) {
 		s.RTTMS, s.Source = g.P50MS, upperFirst(g.Source)
 		if !g.Limited {
 			s.LossPct = ptr(g.lossPct())
@@ -89,11 +94,8 @@ func ispSegment(v *view, checks map[string]Check, vd Verdict) Segment {
 		if d := traceDest(t); d != nil && d.AvgMS != nil {
 			s.RTTMS = d.AvgMS
 		}
-		s.LossPct = ptr(0.0)
-		if h := firstISPHop(t); h != nil && h.PersistPct != nil {
-			s.LossPct = h.PersistPct
-		}
-		s.Source = "Route trace to " + traceHost(t)
+		s.LossPct = ispTraceLoss(v)
+		s.Source = "Route trace, this PC to " + traceHost(t)
 		return s
 	}
 	if b := v.bloat; b != nil {
@@ -106,6 +108,25 @@ func ispSegment(v *view, checks map[string]Check, vd Verdict) Segment {
 		}
 	}
 	return s
+}
+
+// ispTraceLoss is the trace's loss on the ISP's part, as the ISP rule
+// reads it: the loss that starts past the home network and persists to the
+// destination, else what persists from the first hop past home (a clean
+// route's). Nil when loss already starts at home, so the ISP's share can't
+// be told apart, or when no hop past home answered.
+func ispTraceLoss(v *view) *float64 {
+	t := v.trace
+	if v.homeLossHop() != nil {
+		return nil
+	}
+	if f := t.LossFrom; f != nil && *f >= 1 && *f <= len(t.Hops) && !(*f == len(t.Hops) && t.End == nil) {
+		return t.DestLossPct
+	}
+	if h := firstISPHop(t); h != nil {
+		return h.PersistPct
+	}
+	return nil
 }
 
 // traceDest is the row that measured the destination: the UDP row, else

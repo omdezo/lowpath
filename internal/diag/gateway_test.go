@@ -405,6 +405,40 @@ func TestGatewayPingerNoReply(t *testing.T) {
 	}
 }
 
+func TestGatewayPingerRouterStopsAnswering(t *testing.T) {
+	s := newStepper(t, func(c *GatewayConfig) { c.Idle = time.Hour })
+	s.g.Touch()
+	s.run(5 * time.Second)
+	// The router freezes; the Wi-Fi stays connected, so the route stays.
+	s.setReply(func(netip.Addr, time.Time) (time.Duration, error) { return 0, icmp.ErrTimeout })
+	s.run(70 * time.Second)
+	v := s.g.View()
+	if v.State != GatewayOn || v.Stats == nil || v.Stats.Lost != v.Stats.Sent || !strings.Contains(v.Message, "stopped answering") {
+		t.Fatalf("%s %q %+v", v.State, v.Message, v.Stats)
+	}
+	if sm := s.g.Sample(); sm == nil || sm.Lost != sm.Sent || !sm.Stopped {
+		t.Fatalf("sample %+v", sm)
+	}
+	// A new series (the connection changed) forgets that it ever answered.
+	s.net.set(Route{Index: 7, Name: "Ethernet", Kind: LinkEthernet, Gateway: netip.MustParseAddr("192.0.2.254")}, nil)
+	s.run(5 * time.Second)
+	if v := s.g.View(); v.State != GatewayNoReply {
+		t.Errorf("after the change: %s %q", v.State, v.Message)
+	}
+}
+
+func TestStepGap(t *testing.T) {
+	// Wall-clock only (as the fake clock, or a time read back from disk).
+	if got := stepGap(t0, t0.Add(40*time.Second)); got != 40*time.Second {
+		t.Errorf("wall gap %s", got)
+	}
+	// With monotonic readings that agree, the gap is the same.
+	a := time.Now()
+	if got := stepGap(a, a.Add(50*time.Millisecond)); got != 50*time.Millisecond {
+		t.Errorf("monotonic gap %s", got)
+	}
+}
+
 func TestGatewayPingerCantSend(t *testing.T) {
 	for _, c := range []struct {
 		err   error

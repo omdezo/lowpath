@@ -693,13 +693,16 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   itself while it fills the line). The route is read again every 2 s: a new
   interface or gateway (Wi-Fi to Ethernet) starts the series over and says
   so, and so does a tick more than 2 s late (the PC slept: pings in flight
-  then time out without the router ever seeing them). Numbers cover the
+  then time out without the router ever seeing them). The gap is the larger
+  of the monotonic and the wall-clock difference, since Go's monotonic
+  clock stops during suspend on Linux and macOS. Numbers cover the
   last 60 s of pings old enough to have their answer (sent more than 1 s
   ago): loss, median, p95, p99 (only from 100 replies), min, max, jitter
   (mean change between consecutive replies), spikes (replies ≥ 100 ms,
   roadmap L9) and the longest run of lost pings; plus one entry per second
   for the chart. Not loss: a router that answers no ping at all
-  (`no_reply`), pings that can't be sent (`no_permission`: on Linux root,
+  (`no_reply`; one that answered earlier in the series and then lost every
+  ping is real loss, `on` with a message, and the sample is `stopped`), pings that can't be sent (`no_permission`: on Linux root,
   `CAP_NET_RAW` or `net.ipv4.ping_group_range`; `cant_send`), no router
   address (`no_gateway`, a VPN or point-to-point link), no route
   (`offline`). A rate-limiting router is told apart from Wi-Fi loss by the
@@ -816,11 +819,14 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   segment. Home: router pings (median, loss; loss null when the router
   limits replies), `bad` when the home or line check found its problem,
   `warn` for spikes without loss. ISP: a route trace on this connection
-  (time to the destination, loss persisting from the first hop past home),
+  (time from this PC to the destination; the loss the ISP check cites when
+  loss starts past home, else what persists from the first hop past home,
+  null when loss starts at home),
   else the bufferbloat test's idle pings to its internet target; status
   from the ISP check. Lowpath: the relay leg of the boost or route
   analysis. Game server: the relay's own leg to the server, else the direct
-  ping; status from the server check. The app builds the evidence from what it stored
+  ping; status from the server check. Offline, Home is `bad` and blamed
+  with no numbers (router pings from before say nothing about now). The app builds the evidence from what it stored
   (the trace already redacted) and measures nothing itself, so
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.

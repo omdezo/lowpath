@@ -121,12 +121,65 @@ func TestSegmentsISPTrace(t *testing.T) {
 	d := diagnose(Evidence{Link: cableLink(), Gateway: livePings(cableLink(), 0, 3), Trace: tr})
 	wantVerdict(t, d, VerdictISP, ConfidenceHigh)
 	s := segment(t, d, SegmentISP)
-	if s.Status != SegmentBad || !s.Blamed || *s.RTTMS != 30 || *s.LossPct != 0 || !strings.Contains(s.Source, "Route trace to") {
-		// Hop 2 is the first past home and still clean; the loss starts at 3.
+	// Hop 2 is the first past home and still clean; the loss starts at 3
+	// and persists: the ISP part shows that loss, not hop 2's 0%.
+	if s.Status != SegmentBad || !s.Blamed || *s.RTTMS != 30 || s.LossPct == nil || *s.LossPct != 4 || !strings.Contains(s.Source, "this PC to Cloudflare DNS") {
 		t.Fatalf("isp %+v", s)
 	}
 	if h := segment(t, d, SegmentHome); h.Status != SegmentGood {
 		t.Errorf("home %+v", h)
+	}
+}
+
+func TestSegmentsISPTraceCleanAndHomeLoss(t *testing.T) {
+	clean := traceWith(6, 0, 0)
+	for i := range clean.Hops {
+		clean.Hops[i].PersistPct = ptr(0.0)
+	}
+	s := segment(t, diagnose(Evidence{Link: cableLink(), Trace: clean}), SegmentISP)
+	if s.Status != SegmentGood || s.LossPct == nil || *s.LossPct != 0 {
+		t.Errorf("clean trace: %+v", s)
+	}
+	// Loss from hop 1 persists through the ISP's hops: it is the home's,
+	// so the ISP part shows no loss figure of its own.
+	home := traceWith(6, 1, 5)
+	for i := range home.Hops {
+		home.Hops[i].PersistPct = ptr(5.0)
+	}
+	s = segment(t, diagnose(Evidence{Link: cableLink(), Trace: home}), SegmentISP)
+	if s.Status != SegmentUnknown || s.LossPct != nil {
+		t.Errorf("loss from home: %+v", s)
+	}
+}
+
+func TestSegmentsOffline(t *testing.T) {
+	// Clean router pings from before the connection dropped.
+	d := diagnose(Evidence{Link: cableLink(), Offline: true, Gateway: livePings(cableLink(), 0, 3)})
+	wantVerdict(t, d, VerdictOffline, ConfidenceHigh)
+	h := segment(t, d, SegmentHome)
+	if h.Status != SegmentBad || !h.Blamed || h.RTTMS != nil || h.LossPct != nil || !strings.Contains(h.Summary, "No internet") {
+		t.Fatalf("home while offline %+v", h)
+	}
+}
+
+func TestSegmentsRouterStoppedAnswering(t *testing.T) {
+	g := livePings(wifiLink(), 1200, 0)
+	g.P50MS, g.TailMS, g.TailPct, g.Stopped = nil, nil, 0, true
+	d := diagnose(Evidence{Link: wifiLink(), Gateway: g})
+	if d.Verdict.ID != VerdictWiFi {
+		t.Fatalf("verdict %s, want %s", d.Verdict.ID, VerdictWiFi)
+	}
+	h := segment(t, d, SegmentHome)
+	if h.Status != SegmentBad || !h.Blamed || h.RTTMS != nil || h.LossPct == nil || *h.LossPct != 100 {
+		t.Fatalf("home %+v", h)
+	}
+	if !strings.Contains(strings.Join(d.Checks[0].Facts, " "), "stopped answering") {
+		t.Errorf("facts %q", d.Checks[0].Facts)
+	}
+	// The same series from a router that never answered: not loss.
+	g.Stopped = false
+	if d := diagnose(Evidence{Link: wifiLink(), Gateway: g}); d.Verdict.ID == VerdictWiFi || segment(t, d, SegmentHome).Status != SegmentUnknown {
+		t.Errorf("never answered: %s %+v", d.Verdict.ID, segment(t, d, SegmentHome))
 	}
 }
 

@@ -146,6 +146,11 @@ type GatewaySample struct {
 	// Limited: the router limits how many pings it answers, so Lost isn't
 	// the link's loss.
 	Limited bool `json:"limited,omitempty"`
+	// Stopped: the router answered earlier in this series and has lost
+	// every ping since, so Lost == Sent is real loss (a frozen router, or
+	// Wi-Fi that stays connected but passes nothing), not a router that
+	// ignores ping.
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 func (g GatewaySample) lossPct() float64 {
