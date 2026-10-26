@@ -30,9 +30,20 @@ func TestNativeIsComplete(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		return
 	}
-	// Elsewhere, what isn't built yet says so instead of pretending.
-	if err := p.Capture.Available(); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("capture on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+	// Elsewhere, what isn't built yet says so instead of pretending. Linux
+	// captures through a TUN device, which needs root or CAP_NET_ADMIN.
+	switch err := p.Capture.Available(); runtime.GOOS {
+	case "linux":
+		if p.Capture.Name() != "tun" || (err != nil && !errors.Is(err, capture.ErrNeedAdmin) && !errors.Is(err, capture.ErrNoTUN)) {
+			t.Errorf("capture on linux: %s, %v; want tun, available or needing rights", p.Capture.Name(), err)
+		}
+		if p.ElevationHelps() {
+			t.Error("ElevationHelps without a prompt to show")
+		}
+	default:
+		if !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("capture on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+		}
 	}
 	switch _, err := p.Owners.UDPSockets(); runtime.GOOS {
 	case "linux", "darwin":

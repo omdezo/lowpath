@@ -12,10 +12,10 @@ import (
 
 // Backend is one way of taking the selected game's packets off the network
 // and putting the relays' replies back. The app and the engine only see this
-// interface, so they stay the same on every OS: WinDivert on Windows today,
-// TUN-based backends on Linux and macOS later.
+// interface, so they stay the same on every OS: WinDivert on Windows, TUN on
+// Linux, and a utun backend on macOS later.
 type Backend interface {
-	// Name identifies the backend in logs and the API ("divert", "none").
+	// Name identifies the backend in logs and the API ("divert", "tun", "none").
 	Name() string
 	// Available is nil, or why Start can't work here: an error matching
 	// ErrNeedAdmin, ErrNoDriver or errors.ErrUnsupported, or another reason.

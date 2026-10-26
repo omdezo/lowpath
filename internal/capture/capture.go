@@ -16,8 +16,9 @@
 // the handle and reports why through Done and Err.
 //
 // Backend (backend.go) is the OS-neutral contract the app depends on;
-// WinDivert implements it on Windows, and Unavailable stands in where no
-// capture method exists yet.
+// WinDivert implements it on Windows, TUN (tun.go) on Linux with the same
+// packet loop over a TUN device, and Unavailable stands in where no capture
+// method exists yet.
 package capture
 
 import (
@@ -369,6 +370,12 @@ func (c *Capture) maintain() {
 			c.tick.Store(now.Unix())
 			if err := c.owners.refresh(); err != nil {
 				c.fail(err)
+			} else if ds, ok := c.dev.(directSetter); ok {
+				// The kernel's fast path for other programs' ports follows
+				// the table (TUN backend).
+				if err := ds.setDirect(c.owners.cur.Load().directPorts(maxDirectPorts)); err != nil {
+					c.fail(err)
+				}
 			}
 			c.pruneFlows(now.Add(-flowIdle).Unix())
 		}
