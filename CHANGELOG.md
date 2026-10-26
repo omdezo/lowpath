@@ -107,6 +107,15 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   requests (`scripts/ci.ps1 -Report`).
 - CODEOWNERS, this changelog, and the pull request process in
   `CONTRIBUTING.md`.
+- An `addrs` stage in `scripts/ci.ps1` and `scripts/ci.sh` fails when a
+  test, e2e or doc file names a real public IP address; only the
+  documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+  2001:db8::/32) and a short allow-list of public resolvers and other
+  necessary addresses pass (#131).
+
+### Changed
+- Test fixtures and docs use documentation addresses and AS numbers
+  (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
 - Settings → Network: a slow first RIPEstat reply no longer leaves the ISP
@@ -121,6 +130,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   of sleeping, check the order of measured routes rather than RTT
   ceilings, and the relay-restart test keeps its burst within what
   loopback receive buffers hold (#114).
+- Route mode (Windows): closing the capture handle waits for the WinDivert
+  calls still running on it, so a late inject from the engine or a worker
+  that comes back after a fail-open can no longer reach the driver through
+  a released handle that Windows may have reused (#128).
 
 ## [0.2.0] - 2026-10-26
 

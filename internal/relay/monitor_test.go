@@ -86,11 +86,11 @@ func TestMonitorLimit(t *testing.T) {
 	}, time.Hour)
 	defer m.stop()
 
-	base := netip.MustParseAddr("203.0.112.0").As4()
+	base := netip.MustParseAddr("2001:db8::").As16()
 	for i := 0; i < maxServers+10; i++ {
 		b := base
-		b[2], b[3] = byte(i>>8), byte(i)
-		m.touch(netip.AddrFrom4(b))
+		b[14], b[15] = byte(i>>8), byte(i)
+		m.touch(netip.AddrFrom16(b))
 	}
 	if n := m.count(); n != maxServers {
 		t.Fatalf("%d servers monitored, want the cap %d", n, maxServers)
