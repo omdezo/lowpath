@@ -5,6 +5,7 @@ package divert
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -65,22 +67,31 @@ var (
 	loadedDir string
 	ready     atomic.Bool // set once every proc below is resolved
 
-	procOpen, procRecv, procSend, procShutdown, procClose uintptr
-	procSetParam, procGetParam                            uintptr
-	procCalcChecksums, procCompileFilter, procEvalFilter  uintptr
+	procOpen                                             uintptr
+	procCalcChecksums, procCompileFilter, procEvalFilter uintptr
+
+	// dllProcs are the calls a Handle makes; tests give a Handle a table of
+	// fakes instead.
+	dllProcs procTable
 )
+
+// procTable holds the addresses of the WinDivert functions that take a
+// HANDLE.
+type procTable struct {
+	recv, send, shutdown, close, setParam, getParam uintptr
+}
 
 var procNames = [...]struct {
 	name string
 	addr *uintptr
 }{
 	{"WinDivertOpen", &procOpen},
-	{"WinDivertRecv", &procRecv},
-	{"WinDivertSend", &procSend},
-	{"WinDivertShutdown", &procShutdown},
-	{"WinDivertClose", &procClose},
-	{"WinDivertSetParam", &procSetParam},
-	{"WinDivertGetParam", &procGetParam},
+	{"WinDivertRecv", &dllProcs.recv},
+	{"WinDivertSend", &dllProcs.send},
+	{"WinDivertShutdown", &dllProcs.shutdown},
+	{"WinDivertClose", &dllProcs.close},
+	{"WinDivertSetParam", &dllProcs.setParam},
+	{"WinDivertGetParam", &dllProcs.getParam},
 	{"WinDivertHelperCalcChecksums", &procCalcChecksums},
 	{"WinDivertHelperCompileFilter", &procCompileFilter},
 	{"WinDivertHelperEvalFilter", &procEvalFilter},
@@ -125,10 +136,22 @@ func Load(dir string) error {
 // Address) to the heap on each packet.
 
 // Handle is an open WinDivert handle. Recv, Send and the other methods may be
-// called from several goroutines at once.
+// called from several goroutines at once, also while Close runs: Close waits
+// for the calls already in the driver before it releases the handle, and every
+// later call fails with ErrClosed.
 type Handle struct {
-	h      uintptr
-	closed atomic.Bool
+	h     uintptr
+	procs *procTable
+	gate  *callGate
+}
+
+// releaseWait bounds how long Close waits for calls in flight. Send and the
+// parameter calls return in microseconds and Close makes a blocked Recv
+// return, so only a call stuck in the driver waits this long.
+var releaseWait = 100 * time.Millisecond
+
+func newHandle(h uintptr, procs *procTable) *Handle {
+	return &Handle{h: h, procs: procs, gate: newCallGate()}
 }
 
 // Open opens a handle that diverts every packet matching filter at layer.
@@ -146,7 +169,7 @@ func Open(filter string, layer Layer, priority int16, flags uint64) (*Handle, er
 	if syscall.Handle(r) == syscall.InvalidHandle {
 		return nil, openError(errno)
 	}
-	return &Handle{h: r}, nil
+	return newHandle(r, &dllProcs), nil
 }
 
 // openError turns WinDivertOpen's GetLastError into something a user can act on.
@@ -182,14 +205,15 @@ func ioError(op string, errno syscall.Errno) error {
 // Recv blocks until a packet matching the filter arrives, copies it into buf
 // and describes it in addr. Use a buffer of MTUMax bytes.
 func (h *Handle) Recv(buf []byte, addr *Address) (int, error) {
-	if h.closed.Load() {
-		return 0, ErrClosed
-	}
 	if len(buf) == 0 {
 		return 0, fmt.Errorf("divert: recv: empty buffer")
 	}
+	if !h.gate.enter() {
+		return 0, ErrClosed
+	}
+	defer h.gate.exit()
 	var n uint32
-	r, _, errno := syscall.SyscallN(procRecv, h.h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
+	r, _, errno := syscall.SyscallN(h.procs.recv, h.h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)),
 		uintptr(unsafe.Pointer(&n)), uintptr(unsafe.Pointer(addr)))
 	if r == 0 {
 		return 0, ioError("recv", errno)
@@ -199,14 +223,15 @@ func (h *Handle) Recv(buf []byte, addr *Address) (int, error) {
 
 // Send injects pkt, outbound or inbound as addr says.
 func (h *Handle) Send(pkt []byte, addr *Address) (int, error) {
-	if h.closed.Load() {
-		return 0, ErrClosed
-	}
 	if len(pkt) == 0 {
 		return 0, fmt.Errorf("divert: send: empty packet")
 	}
+	if !h.gate.enter() {
+		return 0, ErrClosed
+	}
+	defer h.gate.exit()
 	var n uint32
-	r, _, errno := syscall.SyscallN(procSend, h.h, uintptr(unsafe.Pointer(&pkt[0])), uintptr(len(pkt)),
+	r, _, errno := syscall.SyscallN(h.procs.send, h.h, uintptr(unsafe.Pointer(&pkt[0])), uintptr(len(pkt)),
 		uintptr(unsafe.Pointer(&n)), uintptr(unsafe.Pointer(addr)))
 	if r == 0 {
 		return 0, ioError("send", errno)
@@ -228,10 +253,11 @@ func (h *Handle) Shutdown() error { return h.shutdown(shutdownBoth) }
 func (h *Handle) ShutdownRecv() error { return h.shutdown(shutdownRecv) }
 
 func (h *Handle) shutdown(how uintptr) error {
-	if h.closed.Load() {
+	if !h.gate.enter() {
 		return ErrClosed
 	}
-	if r, _, errno := syscall.SyscallN(procShutdown, h.h, how); r == 0 {
+	defer h.gate.exit()
+	if r, _, errno := syscall.SyscallN(h.procs.shutdown, h.h, how); r == 0 {
 		return ioError("shutdown", errno)
 	}
 	return nil
@@ -239,32 +265,48 @@ func (h *Handle) shutdown(how uintptr) error {
 
 // Close releases the handle. From then on the driver no longer diverts
 // anything for it. Call Shutdown first and wait for receivers to return.
+//
+// Calls that are already running when Close starts finish first: Close
+// shuts down receiving so that a blocked Recv returns, and waits up to
+// releaseWait for them. A call still running after that is stuck in the
+// driver; Close releases the handle anyway, since leaving it open would keep
+// diverting the traffic, and reports how many calls it left.
 func (h *Handle) Close() error {
-	if !h.closed.CompareAndSwap(false, true) {
+	inFlight, first := h.gate.shut()
+	if !first {
 		return nil
 	}
-	if r, _, errno := syscall.SyscallN(procClose, h.h); r == 0 {
-		return fmt.Errorf("divert: close: %w", errno)
+	var stuck error
+	if inFlight > 0 {
+		syscall.SyscallN(h.procs.shutdown, h.h, shutdownRecv) // the caller may not have; a second time is harmless
+		if n := h.gate.wait(releaseWait); n > 0 {
+			stuck = fmt.Errorf("divert: close: calls still running after %v: %d", releaseWait, n)
+		}
 	}
-	return nil
+	if r, _, errno := syscall.SyscallN(h.procs.close, h.h); r == 0 {
+		return errors.Join(stuck, fmt.Errorf("divert: close: %w", errno))
+	}
+	return stuck
 }
 
 func (h *Handle) SetParam(p Param, v uint64) error {
-	if h.closed.Load() {
+	if !h.gate.enter() {
 		return ErrClosed
 	}
-	if r, _, errno := syscall.SyscallN(procSetParam, h.h, uintptr(p), uintptr(v)); r == 0 {
+	defer h.gate.exit()
+	if r, _, errno := syscall.SyscallN(h.procs.setParam, h.h, uintptr(p), uintptr(v)); r == 0 {
 		return fmt.Errorf("divert: set param %d: %w", p, errno)
 	}
 	return nil
 }
 
 func (h *Handle) GetParam(p Param) (uint64, error) {
-	if h.closed.Load() {
+	if !h.gate.enter() {
 		return 0, ErrClosed
 	}
+	defer h.gate.exit()
 	var v uint64
-	if r, _, errno := syscall.SyscallN(procGetParam, h.h, uintptr(p), uintptr(unsafe.Pointer(&v))); r == 0 {
+	if r, _, errno := syscall.SyscallN(h.procs.getParam, h.h, uintptr(p), uintptr(unsafe.Pointer(&v))); r == 0 {
 		return 0, fmt.Errorf("divert: get param %d: %w", p, errno)
 	}
 	return v, nil

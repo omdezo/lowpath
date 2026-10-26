@@ -116,6 +116,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
   the generated `ui/dist` output doesn't count as an uncommitted change.
+- Route mode (Windows): closing the capture handle waits for the WinDivert
+  calls still running on it, so a late inject from the engine or a worker
+  that comes back after a fail-open can no longer reach the driver through
+  a released handle that Windows may have reused (#128).
 
 ## [0.2.0] - 2026-10-26
 
