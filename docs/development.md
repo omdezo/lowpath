@@ -58,6 +58,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `%APPDATA%\Lowpath\state.json` | Settings, favorites, custom games, relays (with keys), learned servers |
 | `%APPDATA%\Lowpath\lowpath.log` | Log (starts over above 5 MB) |
 | `%APPDATA%\Lowpath\art\` | Cached game artwork and extracted icons |
+| `%APPDATA%\Lowpath\catalog\` | Last downloaded Valve server lists (`sdr-<app id>.json`) |
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
 | `%LOCALAPPDATA%\Lowpath\WebView2*` | App window data |
 
@@ -75,7 +76,8 @@ header. This is local security, not a login.
 cmd/lowpath        desktop app: API + embedded UI + window + elevation
 cmd/relay          relay server (egress or forwarding hop)
 cmd/lpcheck        STUN check for verifying routes
-internal/app       catalog, local store, relays, sessions, game art, HTTP API
+internal/app       game list, local store, relays, sessions, game art, HTTP API
+internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
 internal/capture   per-process UDP capture and injection (WinDivert)
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
@@ -111,9 +113,15 @@ go test ./...
 - **App:** local API guard and per-launch session, relay and custom-game
   validation, error kinds, game art lookup, and a full route-mode session
   through the loopback relay with a fake capture device.
+- **Catalog:** SDR config parsing against a trimmed copy of the live CS2
+  config, every geo fix seen in it, hostile replies, download errors and
+  timeouts, the disk cache, POP pinging, and the refresh/backoff/offline
+  behavior of the server list (fake clock, source and pinger).
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
-Google through a keyed relay and through the engine in capture mode.
+Google through a keyed relay and through the engine in capture mode, and
+that download the live SDR configs of CS2, Dota 2 and Deadlock and ping
+Dubai and Frankfurt.
 
 ### End-to-end UI test
 

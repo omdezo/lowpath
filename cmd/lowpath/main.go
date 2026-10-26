@@ -35,6 +35,7 @@ import (
 
 	"lowpath/internal/app"
 	"lowpath/internal/capture"
+	"lowpath/internal/catalog"
 	"lowpath/internal/demo"
 	"lowpath/ui"
 )
@@ -187,13 +188,23 @@ func newServer(ctx context.Context, o options, logger *slog.Logger, quit func())
 	if err != nil {
 		return nil, err
 	}
-	cfg := app.Config{Store: store, Games: games, Relays: relays, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
+	// Valve's SDR POP lists for CS2, Dota 2 and Deadlock: downloaded from
+	// Steam when a game page opens, kept on disk for offline starts, pinged
+	// from this PC.
+	servers := catalog.NewValveServers(catalog.ValveOptions{
+		Source: catalog.NewSDRSource(nil, catalog.SteamAPI),
+		Prober: catalog.NewPOPProber(catalog.ICMPPinger{}, nil),
+		Cache:  catalog.NewDirCache(filepath.Join(o.data, "catalog")),
+		Log:    logger.With("component", "catalog"),
+	})
+	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
 	if elevationSupported {
 		cfg.Elevate = func() error { return relaunchElevated(childArgs(o)) }
 	}
 	if o.demo {
 		sim, err := demo.Start(ctx, demo.DefaultPaths(), demo.DirectProfile(), logger.With("component", "relay"))
 		if err != nil {
+			servers.Close()
 			return nil, err
 		}
 		cfg.Network, cfg.Sim = app.DemoNetwork{N: sim}, sim
@@ -201,6 +212,7 @@ func newServer(ctx context.Context, o options, logger *slog.Logger, quit func())
 	}
 	srv, err := app.NewServer(cfg)
 	if err != nil {
+		servers.Close()
 		relays.Close()
 		return nil, err
 	}

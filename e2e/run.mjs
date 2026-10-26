@@ -154,6 +154,19 @@ async function waitForRoutes(page, id, ms = 20000) {
   return null;
 }
 
+// waitForServers waits for a Valve game's POP list to download and be pinged.
+async function waitForServers(page, id, ms = 30000) {
+  const end = Date.now() + ms;
+  let l = null;
+  while (Date.now() < end) {
+    l = (await api(page, "GET", `/games/${id}/servers`)).body;
+    if (l && l.state !== "loading" && !l.pinging && l.pinged_at) return l;
+    if (l?.state === "error") return l;
+    await page.waitForTimeout(500);
+  }
+  return l;
+}
+
 async function openDetails(page) {
   const t = page.getByRole("button", { name: /Details/ });
   if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
@@ -204,6 +217,25 @@ async function main() {
     const onboard = page.getByRole("heading", { name: "One quick step before you boost" });
     check("Without relays the game shows the setup choices", await onboard.isVisible().catch(() => false));
     await shot(page, "setup", "No relay yet: try it on this PC, or add your server");
+
+    // 2b. Valve games know their servers before launch: Steam's SDR POP list
+    //     with a direct ping from this PC, no relay needed.
+    const sdr = await waitForServers(page, "cs2");
+    const measured = (sdr?.pops || []).filter((p) => p.ping_ms != null);
+    check(
+      "CS2 lists Valve's servers with a direct ping",
+      sdr?.state === "ready" && measured.length > 0,
+      sdr?.state === "ready" ? `${sdr.pops.length} POPs, ${measured.length} answered; nearest ${measured.slice(0, 3).map((p) => `${p.id} ${p.ping_ms.toFixed(0)} ms`).join(", ")}` : `${sdr?.state}: ${sdr?.message}`,
+    );
+    const unmeasured = (sdr?.pops || []).filter((p) => p.ping_ms == null);
+    check("POPs without a reply show a reason, not a number", unmeasured.every((p) => p.note), `${unmeasured.length} without a reply`);
+    const popList = page.getByRole("list", { name: "Valve servers" });
+    await popList.waitFor({ timeout: 5000 }).catch(() => {});
+    const uiRows = await popList.getByRole("listitem").count().catch(() => 0);
+    check("Game page shows the Valve server list", uiRows > 0, `${uiRows} rows shown`);
+    await popList.scrollIntoViewIfNeeded().catch(() => {});
+    await shot(page, "cs2-servers", "CS2 before launch: Valve's relay POPs with a direct ping from this PC");
+    await scrollTop(page);
 
     // 3. Relays: turn on the loopback test relay and test it.
     await page.getByRole("button", { name: /Add my server/ }).click();

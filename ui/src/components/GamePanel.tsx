@@ -8,6 +8,7 @@ import { ArtImg, GameIcon, hasArt } from "./GameArt";
 import { LiveGraph, type Point } from "./LiveGraph";
 import { RouteMap } from "./RouteMap";
 import { TrafficCard } from "./Traffic";
+import { ValveServers } from "./ValveServers";
 
 interface Props {
   game: Game;
@@ -81,6 +82,8 @@ export function GamePanel(props: Props) {
   const waiting = routeCapture && servers.length === 0;
   const processes = game.processes ?? [];
   const picked = parseChoice(choice);
+  // Valve games: their relay POPs are known before the game starts.
+  const sdr = !!game.discovery?.includes("sdr");
 
   const analyze = useCallback(async () => {
     setAnalyzing(true);
@@ -317,9 +320,12 @@ export function GamePanel(props: Props) {
       <Banner game={game} status={<StatusPill status={pill} />} />
 
       {btn === "setup" ? (
-        <section className="card setup-wrap">
-          <Setup gameName={game.name} onOpenRelays={onOpenRelays} onEnableLoopback={onEnableLoopback} />
-        </section>
+        <>
+          <section className="card setup-wrap">
+            <Setup gameName={game.name} onOpenRelays={onOpenRelays} onEnableLoopback={onEnableLoopback} />
+          </section>
+          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
+        </>
       ) : (
         <>
           <section className={`card control ${isOn ? "control-on" : ""}`}>
@@ -384,6 +390,8 @@ export function GamePanel(props: Props) {
             relayToServer={leg}
             direct={beforeShown ? beforeShown.rtt_ms : null}
           />
+
+          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
 
           {loopbackOnly && (
             <div className="note">
