@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -218,23 +219,57 @@ var refusal = []byte("HTTP/1.1 403 Forbidden\r\n" +
 	fmt.Sprintf("Content-Length: %d\r\n\r\n", len(ErrPeerRefused.Error())+1) +
 	ErrPeerRefused.Error() + "\n")
 
-// refuseWait bounds how long a refused client gets to read the answer.
+// refuseWait bounds how long a refused client gets to send its request
+// and read the answer.
 const refuseWait = 2 * time.Second
 
+// maxRefusedRead bounds what RefusePeer reads of a refused client's
+// request, head and then the rest: the window's are a few hundred bytes.
+const maxRefusedRead = 64 << 10
+
 // RefusePeer answers a connection the service won't serve with 403
-// Forbidden and closes it. What the client sent is read and dropped first:
-// closing a Unix socket with unread data resets the connection, and the
-// client could lose the answer. The fake service socket uses it too.
+// Forbidden and closes it. The request head is read first: net/http's
+// client fails a round trip whose answer arrives before it has sent the
+// request ("unsolicited response received on idle HTTP channel") instead
+// of returning the 403. What the client sends after the head is read and
+// dropped once the answer is out: closing a Unix socket with unread data
+// resets the connection, and the client could lose the answer. The fake
+// service socket uses it too.
 func RefusePeer(c net.Conn) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(refuseWait))
+	// Answer whatever ended the head: the blank line, the size limit or
+	// the client's EOF. Past the deadline the write fails at once.
+	readRequestHead(bufio.NewReader(io.LimitReader(c, maxRefusedRead)))
 	if _, err := c.Write(refusal); err != nil {
 		return
 	}
 	if cw, ok := c.(interface{ CloseWrite() error }); ok {
 		cw.CloseWrite()
 	}
-	io.Copy(io.Discard, io.LimitReader(c, 64<<10))
+	io.Copy(io.Discard, io.LimitReader(c, maxRefusedRead))
+}
+
+// readRequestHead reads r up to the blank line that ends an HTTP request
+// head. As RFC 9112 section 2.2 lets a server, it skips empty lines before
+// the request line, and a bare LF ends a line too.
+func readRequestHead(r *bufio.Reader) error {
+	inLine, started := false, false
+	for {
+		line, err := r.ReadSlice('\n')
+		switch {
+		case err == bufio.ErrBufferFull: // a line longer than the buffer
+			inLine, started = true, true
+		case err != nil:
+			return err
+		case !inLine && (len(line) == 1 || len(line) == 2 && line[0] == '\r'):
+			if started {
+				return nil
+			}
+		default:
+			inLine, started = false, true
+		}
+	}
 }
 
 // controlConn runs fn on the connection's file descriptor.

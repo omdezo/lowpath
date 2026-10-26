@@ -137,6 +137,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- The service's Unix socket now reads a refused account's request before
+  answering 403, so that window always learns it isn't served ("only
+  serves accounts signed in at this computer") and runs the engine itself,
+  instead of sometimes getting an "unsolicited response" transport error
+  because the answer arrived before its request was sent (#197).
 - Route mode on Linux notices when another program removes its routing
   rule (systemd-networkd does this to rules its `.network` files don't
   declare) or, on kernels before 5.12, its nftables table (a firewall's

@@ -1,15 +1,18 @@
 package platform
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -228,5 +231,139 @@ func TestSocketAPIRefusedClientDoesNotBlock(t *testing.T) {
 	}
 	if d := time.Since(start); d > refuseWait {
 		t.Errorf("took %v", d)
+	}
+}
+
+func TestReadRequestHead(t *testing.T) {
+	long := strings.Repeat("a", 5000) // past bufio's 4096-byte buffer
+	for _, tc := range []struct {
+		name string
+		in   string
+		rest string // left unread; "" with err: none of it is a head
+		err  error
+	}{
+		{"request", "GET /version HTTP/1.1\r\nHost: lowpath\r\n\r\n", "", nil},
+		{"body left unread", "POST /api/stop HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}", "{}", nil},
+		{"bare LF", "GET / HTTP/1.1\nHost: lowpath\n\nnext", "next", nil},
+		{"empty lines before the request line", "\r\n\nGET / HTTP/1.1\r\n\r\n", "", nil},
+		{"long header line", "GET / HTTP/1.1\r\nX-Long: " + long + "\r\n\r\nbody", "body", nil},
+		// The buffer fills just before "\r\n": the line's end is not a
+		// blank line.
+		{"CRLF across the buffer's end", "GET / HTTP/1.1\r\nX: " + strings.Repeat("b", 4096-4) + "\r\nY: 1\r\n\r\n", "", nil},
+		{"cut short", "GET / HTTP/1.1\r\nHost: lowpath\r\n", "", io.EOF},
+		{"nothing sent", "", "", io.EOF},
+		{"only empty lines", "\r\n\r\n", "", io.EOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// One byte a read: the head arrives in pieces.
+			r := bufio.NewReader(iotest.OneByteReader(strings.NewReader(tc.in)))
+			if err := readRequestHead(r); err != tc.err {
+				t.Fatalf("err %v, want %v", err, tc.err)
+			}
+			if rest, _ := io.ReadAll(r); string(rest) != tc.rest {
+				t.Errorf("left %q, want %q", rest, tc.rest)
+			}
+		})
+	}
+}
+
+// RefusePeer answers only once the request head is in: net/http's client
+// fails on an answer that comes before its request (#197). Whatever the
+// client sends after the head, it reads the whole 403.
+func TestRefusePeer(t *testing.T) {
+	type conns func(t *testing.T) (client, server net.Conn)
+	pipe := func(*testing.T) (net.Conn, net.Conn) { return net.Pipe() } // the fake service's
+	unix := func(t *testing.T) (net.Conn, net.Conn) {
+		ln, err := net.Listen("unix", filepath.Join(socketDir(t), "api.sock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		client, err := net.Dial("unix", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := ln.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client, server
+	}
+	for _, tc := range []struct {
+		name  string
+		parts []string // written in turn
+		// head is how many parts make the request head: before each of
+		// them nothing may be answered. The rest are written while the
+		// answer is read, as net/http's client does.
+		head       int
+		closeWrite bool // the client ends its side after the parts
+		unixOnly   bool // net.Pipe can't half-close
+	}{
+		{"request", []string{"GET /version HTTP/1.1\r\nHost: lowpath\r\n\r\n"}, 1, false, false},
+		{"head in pieces", []string{"GET /version HTTP/1.1\r\n", "Host: lowpath\r", "\n", "\r\n"}, 4, false, false},
+		{"empty line first", []string{"\r\n", "GET / HTTP/1.1\r\n\r\n"}, 2, false, false},
+		{"body after the head", []string{"POST /api/stop HTTP/1.1\r\nHost: lowpath\r\nContent-Length: 4096\r\n\r\n", strings.Repeat("x", 4096)}, 1, false, false},
+		{"head over the limit", []string{"GET / HTTP/1.1\r\nX: " + strings.Repeat("a", maxRefusedRead)}, 0, false, false},
+		{"client stops mid-head", []string{"GET / HTTP/1.1\r\n"}, 1, true, true},
+	} {
+		for _, kind := range []struct {
+			name  string
+			conns conns
+		}{{"pipe", pipe}, {"unix", unix}} {
+			if tc.unixOnly && kind.name != "unix" {
+				continue
+			}
+			t.Run(kind.name+"/"+tc.name, func(t *testing.T) {
+				client, server := kind.conns(t)
+				defer client.Close()
+				done := make(chan struct{})
+				go func() { RefusePeer(server); close(done) }()
+
+				one := make([]byte, 1)
+				for _, p := range tc.parts[:tc.head] {
+					// Nothing to read yet: the answer waits for the head.
+					client.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+					if n, err := client.Read(one); n > 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+						t.Fatalf("answered before the head was sent: %q, %v", one[:n], err)
+					}
+					if _, err := io.WriteString(client, p); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wrote := make(chan error, 1)
+				go func() {
+					for _, p := range tc.parts[tc.head:] {
+						if _, err := io.WriteString(client, p); err != nil {
+							wrote <- err
+							return
+						}
+					}
+					if tc.closeWrite {
+						wrote <- client.(*net.UnixConn).CloseWrite()
+						return
+					}
+					wrote <- nil
+				}()
+
+				client.SetReadDeadline(time.Now().Add(5 * time.Second))
+				res, err := http.ReadResponse(bufio.NewReader(client), nil)
+				if err != nil {
+					t.Fatalf("no answer: %v", err)
+				}
+				body, err := io.ReadAll(res.Body)
+				if err != nil || res.StatusCode != http.StatusForbidden || strings.TrimSpace(string(body)) != ErrPeerRefused.Error() {
+					t.Errorf("answer %s %q, %v", res.Status, body, err)
+				}
+				if err := <-wrote; err != nil {
+					t.Errorf("write: %v", err)
+				}
+				client.Close()
+				select {
+				case <-done:
+				case <-time.After(refuseWait / 2): // not left to the deadline
+					t.Error("RefusePeer still runs after the client left")
+				}
+			})
+		}
 	}
 }
