@@ -231,6 +231,14 @@ func TestRedacted(t *testing.T) {
 	if loc.IPv4.IP != pub4 {
 		t.Fatal("Redacted changed the original")
 	}
+
+	// GeoLite's point can be finer than the city: the report keeps only the city.
+	lat, lon := 52.37, 4.89
+	loc.IPv4.City, loc.IPv4.Lat, loc.IPv4.Lon = "Amsterdam", &lat, &lon
+	r = loc.Redacted()
+	if r.IPv4.Lat != nil || r.IPv4.Lon != nil || r.IPv4.City != "Amsterdam" || loc.IPv4.Lat == nil {
+		t.Fatalf("coordinates in the report: %+v", r.IPv4.NetworkInfo)
+	}
 }
 
 // startSTUN runs a minimal local STUN server that answers with the

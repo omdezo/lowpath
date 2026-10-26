@@ -50,6 +50,9 @@ func TestNativeIsComplete(t *testing.T) {
 	if err := p.Privileges.Relaunch(nil); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Relaunch: %v, want errors.ErrUnsupported", err)
 	}
+	if _, err := p.Flows.Watch(nil); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("flow watch on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+	}
 }
 
 func TestCheckNamesMissingParts(t *testing.T) {

@@ -23,10 +23,17 @@ var (
 
 // ICMPPinger pings with internal/icmp: IcmpSendEcho on Windows (no admin
 // rights needed), a raw or unprivileged ping socket elsewhere.
-type ICMPPinger struct{}
+// Send replaces icmp.Ping (tests); nil = icmp.Ping.
+type ICMPPinger struct {
+	Send func(dst netip.Addr, timeout time.Duration) (time.Duration, error)
+}
 
-func (ICMPPinger) Ping(dst netip.Addr, timeout time.Duration) (time.Duration, error) {
-	rtt, err := icmp.Ping(dst, timeout)
+func (p ICMPPinger) Ping(dst netip.Addr, timeout time.Duration) (time.Duration, error) {
+	send := p.Send
+	if send == nil {
+		send = icmp.Ping
+	}
+	rtt, err := send(dst, timeout)
 	switch {
 	case errors.Is(err, icmp.ErrTimeout):
 		return 0, ErrNoReply

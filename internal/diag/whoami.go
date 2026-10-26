@@ -57,6 +57,10 @@ type NetworkInfo struct {
 	Prefix  netip.Prefix `json:"prefix,omitzero"`
 	Country string       `json:"country,omitempty"` // ISO 3166 alpha-2
 	City    string       `json:"city,omitempty"`
+	// Lat and Lon place City (GeoLite2's point for it); nil when only the
+	// country is known, whose center says nothing about distance.
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
 	// Partial says that part of the lookup failed (say, the city); what is
 	// filled in is still right.
 	Partial string `json:"partial,omitempty"`
@@ -107,6 +111,9 @@ func (l Location) Redacted() Location {
 		}
 		c := *e
 		c.IP = redactAddr(c.IP)
+		// GeoLite's point can be finer than the city (a postal code), and
+		// the city already says where.
+		c.Lat, c.Lon = nil, nil
 		c.LookupError, c.Partial = redactText(c.LookupError), redactText(c.Partial)
 		return &c
 	}

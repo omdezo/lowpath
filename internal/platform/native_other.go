@@ -31,5 +31,6 @@ func Native() *Platform {
 		Games:      games,
 		Icons:      games,
 		Paths:      NewUnixPaths(),
+		Flows:      detect.NewKernelNetwork(),
 	}
 }

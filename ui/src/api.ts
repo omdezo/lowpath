@@ -2,6 +2,7 @@ import type {
   Analysis,
   BloatStatus,
   Bootstrap,
+  CurrentServer,
   Game,
   Live,
   Mapping,
@@ -59,6 +60,7 @@ export const api = {
   analyze: (id: string) => call<Analysis>("POST", `/games/${enc(id)}/analyze`),
   servers: (id: string) => call<ServerList>("GET", `/games/${enc(id)}/servers`),
   pingServers: (id: string) => call<ServerList>("POST", `/games/${enc(id)}/servers/ping`),
+  currentServer: (id: string) => call<CurrentServer>("GET", `/games/${enc(id)}/current-server`),
   favorite: (id: string) => call<{ favorites: string[] | null }>("POST", `/games/${enc(id)}/favorite`),
   apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string) =>
     call<Live>("POST", "/apply", { game_id, mode, region, route_id }),

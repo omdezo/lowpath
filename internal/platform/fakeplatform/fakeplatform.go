@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/detect"
 	"lowpath/internal/owner"
 	"lowpath/internal/platform"
 )
@@ -33,6 +34,7 @@ type Fake struct {
 	Games      *Games
 	Icons      *Icons
 	Paths      *Paths
+	Flows      *Flows
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -47,6 +49,7 @@ func New(dir string) *Fake {
 		Games:      &Games{},
 		Icons:      &Icons{},
 		Paths:      &Paths{dir: dir},
+		Flows:      &Flows{},
 	}
 }
 
@@ -54,7 +57,7 @@ func New(dir string) *Fake {
 func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
-		Games: f.Games, Icons: f.Icons, Paths: f.Paths,
+		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows,
 	}
 }
 
@@ -426,4 +429,84 @@ func (p *Paths) DataDir() (string, error)  { return filepath.Join(p.dir, "data")
 func (p *Paths) CacheDir() (string, error) { return filepath.Join(p.dir, "cache"), nil }
 func (p *Paths) DriverDirs(bool) ([]string, []error) {
 	return []string{filepath.Join(p.dir, "driver")}, nil
+}
+
+// Flows is a flow watcher the test feeds with Emit.
+type Flows struct {
+	mu      sync.Mutex
+	err     error
+	onEvent func(detect.FlowEvent)
+	watch   *flowWatch
+	starts  int
+}
+
+// SetErr makes Watch fail with err (detect.ErrNeedAdmin to play an
+// unelevated Windows; nil: work again).
+func (f *Flows) SetErr(err error) { f.mu.Lock(); f.err = err; f.mu.Unlock() }
+
+func (f *Flows) Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.onEvent != nil {
+		return nil, errors.New("fakeplatform: a flow watch is already running")
+	}
+	f.onEvent = onEvent
+	f.starts++
+	f.watch = &flowWatch{f: f, done: make(chan struct{})}
+	return f.watch, nil
+}
+
+// End stops the open watch the way the OS can on its own (an ETW session
+// stopped from outside): events stop and Done is closed, but the watch
+// still waits for its owner's Close.
+func (f *Flows) End() {
+	f.mu.Lock()
+	w := f.watch
+	f.onEvent, f.watch = nil, nil
+	f.mu.Unlock()
+	if w != nil {
+		w.end()
+	}
+}
+
+// Watching reports whether a watch is open.
+func (f *Flows) Watching() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.onEvent != nil }
+
+// Starts counts the watches opened so far.
+func (f *Flows) Starts() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
+
+// Emit delivers ev to the open watch, as the OS would; false when none is
+// open.
+func (f *Flows) Emit(ev detect.FlowEvent) bool {
+	f.mu.Lock()
+	on := f.onEvent
+	f.mu.Unlock()
+	if on == nil {
+		return false
+	}
+	on(ev)
+	return true
+}
+
+type flowWatch struct {
+	f    *Flows
+	done chan struct{}
+	once sync.Once
+}
+
+func (w *flowWatch) end() { w.once.Do(func() { close(w.done) }) }
+
+func (w *flowWatch) Done() <-chan struct{} { return w.done }
+
+func (w *flowWatch) Close() error {
+	w.f.mu.Lock()
+	if w.f.watch == w {
+		w.f.onEvent, w.f.watch = nil, nil
+	}
+	w.f.mu.Unlock()
+	w.end()
+	return nil
 }

@@ -206,6 +206,20 @@ async function waitForServers(page, id, ms = 30000) {
   return l;
 }
 
+// waitForCurrent waits for the current server card's data to settle: a
+// server with its network looked up and a ping verdict.
+async function waitForCurrent(page, id, ms = 5000) {
+  const end = Date.now() + ms;
+  let c = null;
+  while (Date.now() < end) {
+    c = (await api(page, "GET", `/games/${id}/current-server`)).body;
+    const s = c?.server;
+    if (s && !s.looking_up && (s.received > 0 || (s.ping_note && s.sent >= 3))) return c;
+    await page.waitForTimeout(400);
+  }
+  return c;
+}
+
 async function openDetails(page) {
   const t = page.getByRole("button", { name: /Details/ });
   if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
@@ -456,6 +470,16 @@ async function main() {
     await page.waitForTimeout(12000);
     l = await live(page);
     await shot(page, "live-traffic", "Live: real traffic through the relay, ping in the button, packets moving on the route map");
+    const cur = await waitForCurrent(page, GAME_ID);
+    const cs = cur?.server;
+    check(
+      "Current server card names the game's server during the boost",
+      cur?.state === "live" && cur.source === "boost" && cs?.addr.startsWith(stunIP) && (cs.network?.asn > 0 || !!cs.network_note) && (cs.ping_ms != null || !!cs.ping_note),
+      cs && `${cs.addr} ${cs.network?.asn ? `AS${cs.network.asn} ${cs.network.isp || ""}` : cs.network_note}, ping ${cs.ping_ms != null ? cs.ping_ms.toFixed(1) + " ms" : cs.ping_note}, geo ${cs.geo?.state}`,
+    );
+    await page.getByRole("region", { name: "Current server" }).scrollIntoViewIfNeeded().catch(() => {});
+    await shot(page, "current-server", "Current server: the game's server, its network, a ping-checked location and live ping");
+    await scrollTop(page);
     await openDetails(page);
     await scrollPanel(page, "Live ping");
     await shot(page, "live-graph", "Live: 60 s ping graph, direct (before) vs Lowpath (after)");

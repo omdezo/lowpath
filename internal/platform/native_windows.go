@@ -7,7 +7,8 @@ import (
 )
 
 // Native is the Windows platform: WinDivert capture, the IP Helper socket
-// table, UAC, Steam detection and icons read from the program files.
+// table, UAC, Steam detection, icons read from the program files and flows
+// learned from ETW (Microsoft-Windows-Kernel-Network).
 func Native() *Platform {
 	owners := owner.New()
 	priv := NewUAC()
@@ -21,5 +22,6 @@ func Native() *Platform {
 		Games:      games,
 		Icons:      games,
 		Paths:      paths,
+		Flows:      detect.NewKernelNetwork(),
 	}
 }

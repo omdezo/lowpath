@@ -8,6 +8,7 @@ import { ArtImg, GameIcon, hasArt } from "./GameArt";
 import { LiveGraph, type Point } from "./LiveGraph";
 import { RouteMap } from "./RouteMap";
 import { TrafficCard } from "./Traffic";
+import { CurrentServer } from "./CurrentServer";
 import { ValveServers } from "./ValveServers";
 
 interface Props {
@@ -324,6 +325,7 @@ export function GamePanel(props: Props) {
           <section className="card setup-wrap">
             <Setup gameName={game.name} onOpenRelays={onOpenRelays} onEnableLoopback={onEnableLoopback} />
           </section>
+          <CurrentServer gameId={game.id} gameName={game.name} />
           {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
         </>
       ) : (
@@ -391,6 +393,7 @@ export function GamePanel(props: Props) {
             direct={beforeShown ? beforeShown.rtt_ms : null}
           />
 
+          <CurrentServer gameId={game.id} gameName={game.name} />
           {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
 
           {loopbackOnly && (
