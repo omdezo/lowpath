@@ -12,6 +12,7 @@ import (
 const (
 	Route     = 0
 	Netfilter = 12
+	SockDiag  = 4
 )
 
 // Conn is a netlink socket; netlink exists only on Linux.

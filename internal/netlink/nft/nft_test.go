@@ -44,6 +44,34 @@ func TestBatch(t *testing.T) {
 	}
 }
 
+func TestListTables(t *testing.T) {
+	l := ListTables(IPv4)
+	if l.Type != subsysNftables<<8|msgGetTable || !bytes.Equal(l.Data, []byte{byte(IPv4), 0, 0, 0}) {
+		t.Fatalf("list tables %+v", l)
+	}
+	// An answer as the kernel sends it: name, flags, use, handle.
+	var a netlink.Attrs
+	a.String(tableName, "lowpath")
+	a.BE32(tableFlags, TableOwner)
+	a.BE32(3, 2)
+	a.Add(tableHandle, binary.BigEndian.AppendUint64(nil, 0x1234))
+	r := netlink.Reply{Type: subsysNftables<<8 | msgNewTable, Data: append([]byte{byte(IPv4), 0, 0, 0}, a.Bytes()...)}
+	if got, ok := ParseTable(r); !ok || got != (Table{Name: "lowpath", Handle: 0x1234, Flags: TableOwner}) {
+		t.Fatalf("ParseTable = %+v %v", got, ok)
+	}
+	// Kernels before 4.16 send no handle.
+	var old netlink.Attrs
+	old.String(tableName, "filter")
+	if got, ok := ParseTable(netlink.Reply{Type: r.Type, Data: append([]byte{byte(IPv4), 0, 0, 0}, old.Bytes()...)}); !ok || got != (Table{Name: "filter"}) {
+		t.Fatalf("ParseTable without a handle = %+v %v", got, ok)
+	}
+	for _, bad := range []netlink.Reply{{Type: subsysNftables<<8 | msgNewChain, Data: r.Data}, {Type: r.Type, Data: []byte{2}}} {
+		if _, ok := ParseTable(bad); ok {
+			t.Errorf("%+v parsed as a table", bad)
+		}
+	}
+}
+
 func TestChainAndSet(t *testing.T) {
 	c := AddChain(IPv4, Chain{Table: "t", Name: "out", Type: "route", Hook: HookLocalOut, Priority: PriorityMangle, Policy: PolicyAccept})
 	a := attrs(c.Data[4:])

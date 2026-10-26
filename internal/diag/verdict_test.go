@@ -205,9 +205,16 @@ func TestVerdictOverloadedLine(t *testing.T) {
 		OtherDownMbps: ptr(88.0), LineDownMbps: ptr(100.0)}
 	d = diagnose(Evidence{Link: l, Passive: p})
 	wantVerdict(t, d, VerdictLine, ConfidenceHigh)
-	if f := strings.Join(d.Verdict.Facts, " "); !strings.Contains(f, "88 of 100 Mbit/s downloading") || !strings.Contains(f, "from 22 to 61 ms") {
+	if f := strings.Join(d.Verdict.Facts, " "); !strings.Contains(f, "88 of 100 Mbit/s downloading") || !strings.Contains(f, "from 22 to 61 ms") || strings.Contains(f, "this PC") {
 		t.Errorf("facts %q", f)
 	}
+	// With per-connection counters it names the program.
+	p.Top = &TopTalker{Name: "steam", DownMbps: 80.4, UpMbps: 0.6}
+	d = diagnose(Evidence{Link: l, Passive: p})
+	if f := strings.Join(d.Verdict.Facts, " "); !strings.Contains(f, "most of it is steam on this PC (80 Mbit/s down, 1 up)") {
+		t.Errorf("facts with the top program %q", f)
+	}
+	p.Top = nil
 	d = diagnose(Evidence{Link: l, Passive: &PassiveState{Watching: true}})
 	if c := check(t, d, ruleLine); c.Status != CheckClear {
 		t.Errorf("quiet boost: line = %s", c.Status)

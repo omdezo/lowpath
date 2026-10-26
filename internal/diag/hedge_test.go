@@ -139,7 +139,7 @@ func TestRIPEstatSendsOnlyTwoCopies(t *testing.T) {
 	s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: time.Hour})
 	s.set(nil, map[string]int{"network-info": 5})
 	_, err := r.LookupNetwork(context.Background(), docAddr)
-	if err == nil || !strings.Contains(err.Error(), "HTTP 502") || !transient(err) {
+	if err == nil || !strings.Contains(err.Error(), "HTTP 502") || !Transient(err) {
 		t.Fatalf("err %v", err)
 	}
 	if n := s.calls("network-info"); n != 2 {
@@ -161,8 +161,8 @@ func TestRIPEstatDoesNotRepeatFinalAnswers(t *testing.T) {
 		s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: time.Hour})
 		tc.setup(s)
 		_, err := r.LookupNetwork(context.Background(), docAddr)
-		if err == nil || !strings.Contains(err.Error(), tc.want) || transient(err) {
-			t.Fatalf("%s: err %v (transient %v)", tc.name, err, transient(err))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || Transient(err) {
+			t.Fatalf("%s: err %v (transient %v)", tc.name, err, Transient(err))
 		}
 		if n := s.calls("network-info"); n != 1 {
 			t.Fatalf("%s: network-info sent %d times, want 1", tc.name, n)
@@ -175,7 +175,7 @@ func TestRIPEstatBothCopiesStall(t *testing.T) {
 	s.set(map[string]int{"network-info": 2}, nil)
 	start := time.Now()
 	_, err := r.LookupNetwork(context.Background(), docAddr)
-	if err == nil || !transient(err) || describe(err) != "no reply in time" {
+	if err == nil || !Transient(err) || describe(err) != "no reply in time" {
 		t.Fatalf("err %v (%q)", err, describe(err))
 	}
 	if el := time.Since(start); el > 2*time.Second {
@@ -193,7 +193,7 @@ func TestRIPEstatBothCopiesStall(t *testing.T) {
 func TestRIPEstatHedgeOff(t *testing.T) {
 	s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: -1, Timeout: 100 * time.Millisecond})
 	s.set(map[string]int{"network-info": 1}, nil)
-	if _, err := r.LookupNetwork(context.Background(), docAddr); err == nil || !transient(err) {
+	if _, err := r.LookupNetwork(context.Background(), docAddr); err == nil || !Transient(err) {
 		t.Fatalf("err %v", err)
 	}
 	if n := s.calls("network-info"); n != 1 {
@@ -243,14 +243,14 @@ func TestRIPEstatSlowFollowUpIsTransientPartial(t *testing.T) {
 	if err != nil || got.ASN != 64500 || got.ISP != "" || got.City == "" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	if got.Partial != "ISP name unknown (no reply in time)" || !got.transient {
+	if got.Partial != "ISP name unknown (no reply in time)" || !got.Transient() {
 		t.Fatalf("partial %q, transient %v", got.Partial, got.transient)
 	}
 	// A failure that is RIPEstat's answer is a partial too, but not one
 	// to ask again about soon.
 	s.setFail("maxmind-geo-lite", 404)
 	got, _ = r.LookupNetwork(context.Background(), docAddr)
-	if got.Partial != "city unknown (RIPEstat maxmind-geo-lite: HTTP 404)" || got.transient {
+	if got.Partial != "city unknown (RIPEstat maxmind-geo-lite: HTTP 404)" || got.Transient() {
 		t.Fatalf("partial %q, transient %v", got.Partial, got.transient)
 	}
 }
@@ -307,8 +307,8 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 		if loc.State != StatePartial || loc.IPv4.ISP != "" || loc.Message != "Your ISP couldn't be looked up: no reply in time" {
 			t.Fatalf("first: %+v", loc)
 		}
-		if loc.RetryAfterS != 4 {
-			t.Fatalf("retry_after_s %d, want 4", loc.RetryAfterS)
+		if loc.RetryAfterS != 4 || !loc.IPv4.Transient() || loc.IPv4.NetworkInfo.Transient() {
+			t.Fatalf("retry_after_s %d, want 4 (endpoint transient %v)", loc.RetryAfterS, loc.IPv4.Transient())
 		}
 		// Asked again too soon: the same result, no new request.
 		clk.Add(time.Second)
@@ -327,7 +327,7 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 		s.setFail("network-info", 429)
 		l := newTestLocator(LocatorConfig{Finders: []AddrFinder{finder}, Lookup: NewCachedLookup(r, CacheOptions{})})
 		loc, _ := l.Locate(context.Background(), false)
-		if loc.State != StatePartial || loc.RetryAfterS != 0 || !strings.Contains(loc.Message, "HTTP 429") {
+		if loc.State != StatePartial || loc.RetryAfterS != 0 || !strings.Contains(loc.Message, "HTTP 429") || loc.IPv4.Transient() {
 			t.Fatalf("got %+v", loc)
 		}
 	})
@@ -368,8 +368,8 @@ func TestRIPEstatDoesNotRepeatPermanentTransportFailures(t *testing.T) {
 		d := &countingDial{err: tc.err}
 		r := NewRIPEstat(RIPEstatOptions{BaseURL: "http://stat.ripe.invalid", HedgeAfter: time.Hour, Dial: d.dial})
 		_, err := r.LookupNetwork(context.Background(), docAddr)
-		if err == nil || transient(err) != tc.transient {
-			t.Fatalf("%s: err %v, transient %v", tc.name, err, transient(err))
+		if err == nil || Transient(err) != tc.transient {
+			t.Fatalf("%s: err %v, transient %v", tc.name, err, Transient(err))
 		}
 		if n := d.count(); n != tc.dials {
 			t.Fatalf("%s: %d connections, want %d", tc.name, n, tc.dials)
@@ -397,8 +397,8 @@ func TestRIPEstatDoesNotRepeatCertificateFailures(t *testing.T) {
 	t.Cleanup(srv.Close)
 	r := NewRIPEstat(RIPEstatOptions{BaseURL: srv.URL, HedgeAfter: time.Hour})
 	_, err := r.LookupNetwork(context.Background(), docAddr)
-	if err == nil || transient(err) {
-		t.Fatalf("err %v, transient %v", err, transient(err))
+	if err == nil || Transient(err) {
+		t.Fatalf("err %v, transient %v", err, Transient(err))
 	}
 	mu.Lock()
 	defer mu.Unlock()

@@ -80,6 +80,14 @@ type FlowWatcher interface {
 	// the OS wants administrator rights, or errors.ErrUnsupported on a
 	// system without a watcher yet.
 	Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
+	// Reset stops a watch that an earlier Lowpath left running because it
+	// didn't exit cleanly (on Windows a real-time ETW session outlives its
+	// process). The app calls it once at start-up, before the first Watch.
+	// It reports whether there was one to stop; none, or a watch this
+	// process has open, is (false, nil). Missing rights give an error
+	// matching detect.ErrNeedAdmin. Systems whose watch ends with its
+	// process return (false, nil).
+	Reset() (bool, error)
 }
 
 // SystemInventory reads what else on the PC handles network traffic: running
@@ -92,6 +100,13 @@ type SystemInventory = compat.System
 // WiFi reads the Wi-Fi link (signal, band, rates, the access point's load)
 // and pauses the adapter's background scans during a boost (diag.WLAN).
 type WiFi = diag.WLAN
+
+// Connections reads per-connection TCP byte counters with the remote
+// address and owner, so the passive detector can leave LAN traffic out
+// and name the program filling the line (diag.ConnStats). It must work
+// without administrator rights; a system without such counters reports
+// errors.ErrUnsupported.
+type Connections = diag.ConnStats
 
 // IconProvider reads a program's own icon.
 type IconProvider interface {
@@ -135,6 +150,7 @@ type Platform struct {
 	Service    ServiceManager
 	ServiceAPI ServiceAPI
 	WiFi       WiFi
+	Conns      Connections
 }
 
 // Check reports a Platform with a missing part, which would otherwise fail
@@ -152,7 +168,7 @@ func (p *Platform) Check() error {
 		{"Privileges", p.Privileges == nil}, {"Games", p.Games == nil}, {"Icons", p.Icons == nil},
 		{"Paths", p.Paths == nil}, {"Flows", p.Flows == nil}, {"Inventory", p.Inventory == nil},
 		{"Service", p.Service == nil}, {"ServiceAPI", p.ServiceAPI == nil},
-		{"WiFi", p.WiFi == nil},
+		{"WiFi", p.WiFi == nil}, {"Conns", p.Conns == nil},
 	} {
 		if part.unset {
 			missing = append(missing, part.name)

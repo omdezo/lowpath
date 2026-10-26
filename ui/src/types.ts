@@ -132,6 +132,9 @@ export interface CaptureStats {
   errors: number;
   game_pids: number[] | null;
   last_error: string;
+  // Times another program removed the routing to the capture and Lowpath
+  // put it back (Linux).
+  route_repairs?: number;
 }
 
 export interface Live {
@@ -276,7 +279,17 @@ export interface LineState {
   other_up_mbps: number | null;
   line_down_mbps: number | null;
   line_up_mbps: number | null;
+  // "peak": the most other traffic seen in the last 10 minutes, used
+  // when no bufferbloat test measured the line.
   line_source?: "test" | "peak";
+  // No bufferbloat test yet: the line rate is a guess, so ask for one.
+  needs_test?: boolean;
+  // LAN traffic left out of the other traffic (null: this system can't
+  // tell it apart).
+  lan_down_mbps: number | null;
+  lan_up_mbps: number | null;
+  // The program on this PC moving the most internet traffic.
+  top?: { name: string; down_mbps: number; up_mbps: number };
 }
 
 export type BloatPhase = "picking" | "idle" | "download" | "upload" | "recovery";
@@ -526,6 +539,9 @@ export interface Analysis {
   // false when no game server is known yet or it ignores ping.
   direct_known?: boolean;
   paths: Record<string, Stats>;
+  // Measured while the bufferbloat test filled the line: the pings are
+  // higher than the routes' own, and a boost doesn't start from them.
+  loaded?: boolean;
 }
 
 export interface Mapping {
@@ -533,6 +549,7 @@ export interface Mapping {
   relays: number;
   best: string;
   best_ms: number;
+  loaded?: boolean;
 }
 
 export interface Platform {

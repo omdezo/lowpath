@@ -163,7 +163,7 @@ internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
 internal/compat    conflict detector: other boosters, WinpkFilter/WinDivert drivers, full-tunnel VPNs
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
 internal/capture   capture backend contract; per-process UDP capture with WinDivert (Windows) or a TUN device (Linux)
-internal/netlink   netlink messages without cgo: rtnl (links, addresses, routes, rules), nft (nftables)
+internal/netlink   netlink messages without cgo: rtnl (links, addresses, routes, rules), nft (nftables), sockdiag (TCP sockets with tcp_info)
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
@@ -173,7 +173,7 @@ internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, ca
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
-internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters per OS
+internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters and per-connection TCP bytes per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike and Gilbert-Elliott burst impairment; shared segments
 internal/gamesim   echo game server
@@ -258,15 +258,32 @@ go test ./...
 - **Current server:** the Kernel-Network event parser for every flow event
   id, the ETW struct layouts against the SDK sizes, the unelevated
   `ERROR_ACCESS_DENIED` path (as administrator the same test watches its own
-  UDP packet to 192.0.2.1), the flow learner's server choice, the city check
+  UDP packet to 192.0.2.1, and stops a left-behind session once without
+  touching an open watch's), start-up's reset of a left-behind watch (once,
+  before the first watch, never holding up start-up, whatever it returns),
+  the flow learner's server choice, the city check
   against the speed of light in fibre, the live pinger (loss, jitter,
   unanswered and unsendable pings), and the card's whole flow on
   `fakeplatform`: game starts, flow events, lookup, ping, saving, game exit.
 - **Bufferbloat:** grading grading against a simulated line (latency
   that rises under load, lost pings, a refusing load server, no target),
   the HTTP loader against a local speed-test server, target choice, the
-  passive detector's rules second by second, `/proc` and sysfs parsing from
-  fixtures, and the Windows IP Helper calls without admin rights.
+  passive detector's rules second by second (a LAN copy, the 10-minute
+  sliding peak without a test, the test suggestion, LAN traffic left out
+  and the top program named), the sliding maximum, `/proc` and sysfs
+  parsing from fixtures, and the Windows IP Helper calls without admin
+  rights. The LAN split: where each connection's bytes go (IPv4, IPv6,
+  v4-mapped, on-link /64, ULA, link-local, loopback, this PC's own
+  address, a container bridge, a VPN), per-second deltas (new, reused and
+  backwards counters, an interface change, unreadable addresses), owners
+  looked up only for a busy line, and Windows/macOS reporting
+  `ErrUnsupported` once; `sock_diag` requests and replies from bytes
+  (IPv4, IPv6, v4-mapped, a pre-4.1 `tcp_info`) on every OS, and on Linux
+  real loopback connections over IPv4 and IPv6 found with their exact byte
+  counts and this process as owner (passes as `nobody`). In the app:
+  Analyze and the route mapping waiting for a running test, a measurement
+  overlapping a loaded phase flagged and not seeding the boost, and the
+  line watch leaving a NAS copy out and naming the downloading program.
 - **Conflicts:** every rule against inventories (ExitLag running, only its
   service, only installed; the other boosters and WinDivert tools by name,
   and names that only look alike; WinpkFilter loaded and left behind;

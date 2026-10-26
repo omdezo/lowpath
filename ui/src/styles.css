@@ -1577,7 +1577,9 @@ select.input {
 
 .counters {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Four counters, five when route fixes show up: one row either way. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }

@@ -302,17 +302,56 @@ func (k *KernelNetwork) Watch(onEvent func(FlowEvent)) (FlowWatch, error) {
 	return w, nil
 }
 
+// Reset stops a session that a Lowpath which didn't exit cleanly left
+// behind: a real-time session outlives its process and keeps the provider
+// enabled and its buffers filling until someone stops it, and Watch, which
+// would replace it, only runs while a game does. Microsoft's StartTrace
+// guidance is the same: clean up the orphaned session when starting.
+//
+// It stops the session by name, never one this process is watching with.
+// No session (ERROR_WMI_INSTANCE_NOT_FOUND) or one already stopping
+// (ERROR_ACTIVE_CONNECTIONS) is (false, nil); without the rights to control
+// sessions it returns ErrNeedAdmin and the leftover stays until an elevated
+// start.
+func (k *KernelNetwork) Reset() (bool, error) {
+	if err := k.controlTrace.Find(); err != nil {
+		return false, fmt.Errorf("ETW: %w", err)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.current.Load() != nil {
+		return false, nil
+	}
+	err := k.stop(0)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, windows.ERROR_WMI_INSTANCE_NOT_FOUND), errors.Is(err, windows.ERROR_ACTIVE_CONNECTIONS):
+		return false, nil
+	case errors.Is(err, windows.ERROR_ACCESS_DENIED):
+		return false, ErrNeedAdmin
+	default:
+		return false, fmt.Errorf("ETW: stop the leftover session: %w", err)
+	}
+}
+
 // stop ends the session (by handle, or by name when session is 0).
-func (k *KernelNetwork) stop(session uint64) {
+func (k *KernelNetwork) stop(session uint64) error {
 	props, err := k.properties()
 	if err != nil {
-		return
+		return err
 	}
 	var name *uint16
 	if session == 0 {
 		name, _ = windows.UTF16PtrFromString(k.name)
 	}
-	k.controlTrace.Call(uintptr(session), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(props)), eventTraceControlStop)
+	r, _, _ := k.controlTrace.Call(uintptr(session), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(props)), eventTraceControlStop)
+	// ERROR_MORE_DATA only says the properties didn't fit: ETW stops the
+	// session before it reports that.
+	if r != 0 && windows.Errno(r) != windows.ERROR_MORE_DATA {
+		return windows.Errno(r)
+	}
+	return nil
 }
 
 // onRecord is the ETW event callback: decode and hand over, nothing more.
