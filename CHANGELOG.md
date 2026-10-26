@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Router pinger and segmented Home / ISP / Lowpath / Game server bar in
+  Settings → Diagnostics: the default gateway is pinged 20 times a second
+  while the tab is open and during a boost, with loss, median, p99, spikes
+  and a 60-second chart, and the verdict uses it (#10).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements
