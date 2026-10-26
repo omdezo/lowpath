@@ -810,8 +810,9 @@ async function main() {
     // does: the app looks for the game every 3 s, and stops once it saw it
     // during the session and then doesn't. Wait for the session itself to
     // end, then for the window to show it, and say which part missed (#201).
-    const ended = await until(page, () => live(page), (v) => !v?.session, 15000, 500);
-    const sessionEnded = !ended?.session;
+    // A failed read is not a session that ended: only an answer without one is.
+    const ended = await until(page, async () => (await api(page, "GET", "/bootstrap")).body?.live ?? null, (v) => v && !v.session, 15000, 500);
+    const sessionEnded = !!ended && !ended.session;
     const shownEnded = sessionEnded && (await waitForStop(page, 5000));
     if (!shownEnded) await stopBtn(page, "lpcheck").click();
     const seen = appLog(data, `msg="game seen during the session" game=${GAME_ID}`).at(-1);
@@ -823,7 +824,7 @@ async function main() {
       [
         seen ? `lpcheck seen ${secs(logTime(seen) - sessStart)} into the session` : "lpcheck never seen during the session",
         exited ? `stopped ${secs(logTime(exited) - pr.ended)} after it exited` : `no stop ${secs(Date.now() - pr.ended)} after it exited`,
-        sessionEnded ? (shownEnded ? "Boost button back" : "the window still showed Stop 5 s later; pressed it") : "pressed Stop",
+        sessionEnded ? (shownEnded ? "Boost button back" : "the window still showed Stop 5 s later; pressed it") : ended ? "pressed Stop" : "/api/bootstrap didn't answer; pressed Stop",
       ].join("; "),
     );
     await waitForStop(page, 5000);
