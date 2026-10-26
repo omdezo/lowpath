@@ -183,6 +183,19 @@ func TestTraceRateLimitedHopIsNotLoss(t *testing.T) {
 	}
 }
 
+func TestTraceSeveralRateLimitedHops(t *testing.T) {
+	t.Parallel()
+	f := testRoute()
+	f.hops[0].limitPct, f.hops[2].limitPct = 30, 60
+	res := runTrace(t, fastTrace(f))
+	if res.LossFrom != nil || !res.Hops[0].Limited || !res.Hops[2].Limited {
+		t.Fatalf("loss from %v, hops %+v", res.LossFrom, res.Hops)
+	}
+	if n := strings.Join(res.Notes, " "); !strings.Contains(n, "Hops 1 and 3 drop some replies, but the hops after them don't: those routers limit answers") {
+		t.Fatalf("notes %q", n)
+	}
+}
+
 func TestTraceLossThatPersists(t *testing.T) {
 	t.Parallel()
 	f := testRoute()

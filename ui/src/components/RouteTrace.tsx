@@ -267,8 +267,8 @@ function HopRow({ h, r, noDest }: { h: TraceHop; r: TraceResult; noDest: boolean
   const udp = h.probe === "udp";
   const silent = h.recv === 0;
   const lossBad = h.persist_pct != null && h.persist_pct >= r.threshold_pct;
-  const host = udp ? (r.end_name ?? "Relay UDP port") : h.name || h.addr;
-  const sub = udp ? "" : h.name ? h.addr : h.private ? "private address" : "";
+  const host = udp ? "Relay's UDP port" : h.name || h.addr;
+  const sub = udp ? (r.end_name ?? "") : h.name ? h.addr : h.private ? "private address" : "";
   const persistWhy = noDest ? "The destination didn't answer, so no loss can be confirmed" : r.running ? "Known when the trace finishes" : undefined;
   return (
     <tr className={`${h.loss_starts ? "starts" : ""}${silent ? " silent" : ""}`}>

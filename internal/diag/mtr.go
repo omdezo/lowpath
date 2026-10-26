@@ -380,7 +380,8 @@ func (t *Trace) endLoop(ctx context.Context, st *traceState, probes *sync.WaitGr
 
 // lookup starts a reverse DNS lookup the first time an address answers.
 func (t *Trace) lookup(ctx context.Context, st *traceState, wg *sync.WaitGroup, a netip.Addr) {
-	if t.cfg.Names == nil || !a.IsValid() {
+	// Loopback names come from the hosts file and say nothing about a route.
+	if t.cfg.Names == nil || !a.IsValid() || a.IsLoopback() {
 		return
 	}
 	st.mu.Lock()
@@ -607,8 +608,12 @@ func verdict(res *TraceResult, maxHops int) (string, []string) {
 		}
 	}
 	if len(limited) > 0 {
-		notes = append(notes, fmt.Sprintf("%s some replies, but the hops after %s don't: %s limits answers to trace probes. That isn't lost traffic.",
-			hopList("Hop", limited, "drops", "drop"), pronoun(limited), routerWord(limited)))
+		verb := "limits"
+		if len(limited) > 1 {
+			verb = "limit"
+		}
+		notes = append(notes, fmt.Sprintf("%s some replies, but the hops after %s don't: %s %s answers to trace probes. That isn't lost traffic.",
+			hopList("Hop", limited, "drops", "drop"), pronoun(limited), routerWord(limited), verb))
 	}
 	switch {
 	case answered == 0 && (res.End == nil || res.End.Recv == 0):

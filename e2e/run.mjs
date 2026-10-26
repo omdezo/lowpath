@@ -386,7 +386,7 @@ async function main() {
     const report = await page.evaluate(async () => (await fetch("/api/diag/trace/report")).text());
     check("Route trace report exports as text", report.startsWith("Lowpath route trace to Cloudflare DNS (1.1.1.1)") && report.includes("Persist%"), `${report.split("\n").length} lines`);
     await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
-    await scrollPanel(page, "Export report");
+    await page.locator(".trace-foot").scrollIntoViewIfNeeded();
     await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
     await closeSettings(page);
 
