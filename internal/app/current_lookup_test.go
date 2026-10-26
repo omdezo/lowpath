@@ -33,9 +33,12 @@ type scriptedLookup struct {
 }
 
 func (s *scriptedLookup) LookupNetwork(ctx context.Context, _ netip.Addr) (diag.NetworkInfo, error) {
-	if s.gate != nil {
+	s.mu.Lock()
+	gate := s.gate
+	s.mu.Unlock()
+	if gate != nil {
 		select {
-		case <-s.gate:
+		case <-gate:
 		case <-ctx.Done():
 			return diag.NetworkInfo{}, ctx.Err()
 		}
