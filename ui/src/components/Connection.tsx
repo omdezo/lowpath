@@ -66,6 +66,9 @@ export function Connection() {
         const wait = l.retry_after_s ?? 0;
         if (!auto && wait > 0 && wait <= MAX_RETRY_S) {
           setRetrying(true);
+          // Two loads can overlap (StrictMode mounts twice in dev): keep
+          // one timer, so there is one retry and unmount can still clear it.
+          window.clearTimeout(retryTimer.current);
           retryTimer.current = window.setTimeout(() => {
             retryTimer.current = undefined;
             if (alive.current) load(false, true);

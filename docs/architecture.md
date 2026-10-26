@@ -399,9 +399,11 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   hedged ("The Tail at Scale"; gRPC's `hedgingDelay`): a second copy goes
   out on a fresh connection after 2.5 s without a reply, or at once after a
   timeout, reset or HTTP 500/502/503/504, and the first good reply wins.
-  At most two copies; a 429 or an error status is never repeated; at most
-  6 requests in flight (RIPEstat allows 8 per address), and a hedge is
-  skipped when none is free. `whats-my-ip` is not hedged.
+  At most two copies; a 429, an error status, a certificate that does not
+  verify or a DNS "no such host" is never repeated; at most 6 requests in
+  flight (RIPEstat allows 8 per address) for the whole app, since the
+  Network card and the Current server card share one client, and a hedge
+  is skipped when none is free. `whats-my-ip` is not hedged.
 - One lookup runs at a time, with a 15 s budget that does not depend on a
   caller who gives up; a result is reused for 2 min (an offline or partial
   one for 15 s, one spoiled by a slow or busy registry 4 s) unless

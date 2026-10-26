@@ -522,9 +522,13 @@ func isLeafNoRoute(err error) bool {
 
 // NewInternetLocator is the Locator the app uses: STUN first (what a game's
 // UDP traffic would see), RIPEstat's whats-my-ip over HTTPS when UDP is
-// blocked, and RIPEstat for the network, cached.
-func NewInternetLocator() *Locator {
-	ripe := NewRIPEstat(RIPEstatOptions{})
+// blocked, and RIPEstat for the network, cached. Pass the app's one
+// RIPEstat client so its cap on requests in flight covers every caller
+// (nil: a client of its own).
+func NewInternetLocator(ripe *RIPEstat) *Locator {
+	if ripe == nil {
+		ripe = NewRIPEstat(RIPEstatOptions{})
+	}
 	return NewLocator(LocatorConfig{
 		Finders: []AddrFinder{NewSTUNFinder(stun.NewClient(stun.ClientOptions{}), DefaultSTUNServers(), 0), ripe},
 		Lookup:  NewCachedLookup(ripe, CacheOptions{}),

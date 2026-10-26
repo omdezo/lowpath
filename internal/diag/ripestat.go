@@ -2,6 +2,8 @@ package diag
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -164,6 +166,20 @@ func transient(err error) bool {
 	return errors.As(err, &te) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
 }
 
+// permanent reports transport failures that a second copy a moment later
+// cannot fix: a certificate that does not verify (an intercepting proxy or
+// antivirus, a wrong clock) or a host name that does not exist. A DNS
+// timeout or temporary failure is not one of them.
+func permanent(err error) bool {
+	var cv *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	var he x509.HostnameError
+	var ci x509.CertificateInvalidError
+	var dns *net.DNSError
+	return errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) ||
+		(errors.As(err, &dns) && dns.IsNotFound)
+}
+
 // anyFamily lets a request use whichever family reaches RIPEstat.
 const anyFamily Family = ""
 
@@ -259,7 +275,8 @@ func (r *RIPEstat) hedged(ctx context.Context, name, resource string) (json.RawM
 // attempt does one GET of /data/<name>/data.json and returns the reply's
 // data object. With wait it queues for a request slot; without, the caller
 // already holds one. Transport failures and HTTP 500/502/503/504 come back
-// as a transientError, unless ctx ended (that is the caller's doing).
+// as a transientError, unless ctx ended (that is the caller's doing) or the
+// failure is permanent.
 func (r *RIPEstat) attempt(ctx context.Context, c *http.Client, name, resource string, wait bool) (json.RawMessage, error) {
 	if wait {
 		if err := r.slots.acquire(ctx); err != nil {
@@ -278,11 +295,11 @@ func (r *RIPEstat) attempt(ctx context.Context, c *http.Client, name, resource s
 	}
 	req.Header.Set("Accept", "application/json")
 	fail := func(err error) error {
-		err = fmt.Errorf("RIPEstat %s: %w", name, err)
-		if ctx.Err() == nil {
-			err = transientError{err}
+		wrapped := fmt.Errorf("RIPEstat %s: %w", name, err)
+		if ctx.Err() == nil && !permanent(err) {
+			return transientError{wrapped}
 		}
-		return err
+		return wrapped
 	}
 	resp, err := c.Do(req)
 	if err != nil {

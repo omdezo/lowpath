@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -328,4 +331,119 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 			t.Fatalf("got %+v", loc)
 		}
 	})
+}
+
+// countingDial fails every dial with err and counts the attempts: a second
+// copy of a request opens a second connection.
+type countingDial struct {
+	mu  sync.Mutex
+	n   int
+	err error
+}
+
+func (d *countingDial) dial(context.Context, string, string) (net.Conn, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.n++
+	return nil, d.err
+}
+
+func (d *countingDial) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.n
+}
+
+func TestRIPEstatDoesNotRepeatPermanentTransportFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		transient bool
+		dials     int
+	}{
+		{"no such host", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "stat.ripe.net", IsNotFound: true}}, false, 1},
+		{"DNS timeout", &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "i/o timeout", Name: "stat.ripe.net", IsTimeout: true}}, true, 2},
+		{"reset", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection reset by peer")}, true, 2},
+	} {
+		d := &countingDial{err: tc.err}
+		r := NewRIPEstat(RIPEstatOptions{BaseURL: "http://stat.ripe.invalid", HedgeAfter: time.Hour, Dial: d.dial})
+		_, err := r.LookupNetwork(context.Background(), docAddr)
+		if err == nil || transient(err) != tc.transient {
+			t.Fatalf("%s: err %v, transient %v", tc.name, err, transient(err))
+		}
+		if n := d.count(); n != tc.dials {
+			t.Fatalf("%s: %d connections, want %d", tc.name, n, tc.dials)
+		}
+	}
+}
+
+func TestRIPEstatDoesNotRepeatCertificateFailures(t *testing.T) {
+	// A certificate the client doesn't trust (here httptest's own; in the
+	// field an intercepting proxy or a wrong clock) won't verify on a
+	// second try either.
+	f, _ := newFakeRIPE(t)
+	var mu sync.Mutex
+	conns := 0
+	srv := httptest.NewUnstartedServer(f)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			mu.Lock()
+			conns++
+			mu.Unlock()
+		}
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	r := NewRIPEstat(RIPEstatOptions{BaseURL: srv.URL, HedgeAfter: time.Hour})
+	_, err := r.LookupNetwork(context.Background(), docAddr)
+	if err == nil || transient(err) {
+		t.Fatalf("err %v, transient %v", err, transient(err))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if conns != 1 {
+		t.Fatalf("%d connections, want 1", conns)
+	}
+}
+
+// One RIPEstat serves the Network card and the Current server card; its
+// cap on requests in flight holds across both.
+func TestRIPEstatCapCoversEveryCaller(t *testing.T) {
+	f, _ := newFakeRIPE(t)
+	var mu sync.Mutex
+	now, peak := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		now++
+		peak = max(peak, now)
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		f.ServeHTTP(w, req)
+		mu.Lock()
+		now--
+		mu.Unlock()
+	}))
+	t.Cleanup(srv.Close)
+	r := NewRIPEstat(RIPEstatOptions{BaseURL: srv.URL, MaxInFlight: 3})
+	card, servers := NewCachedLookup(r, CacheOptions{}), NewCachedLookup(r, CacheOptions{Max: 256})
+	var wg sync.WaitGroup
+	for i := range 8 {
+		a := netip.AddrFrom4([4]byte{203, 0, 113, byte(i + 1)})
+		lookup := NetworkLookup(card)
+		if i%2 == 1 {
+			lookup = servers
+		}
+		wg.Go(func() {
+			if _, err := lookup.LookupNetwork(context.Background(), a); err != nil {
+				t.Errorf("%s: %v", a, err)
+			}
+		})
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if peak > 3 || peak == 0 {
+		t.Fatalf("%d requests in flight at once, cap 3", peak)
+	}
 }
