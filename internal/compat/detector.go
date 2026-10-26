@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -211,7 +210,7 @@ func (d *Detector) foreignDivert(svcs []Service) (c Conflict, ok bool, why strin
 		}
 		return Conflict{
 			ID: "windivert", Name: "Another WinDivert program", Kind: KindPacketFilter, Level: LevelWarn,
-			Found:  []string{"the WinDivert driver was loaded from " + filepath.Dir(path)},
+			Found:  []string{"the WinDivert driver was loaded from " + winDir(path)},
 			Action: "If a program such as GoodbyeDPI, zapret or clumsy still runs, close it. If none does, this clears when you restart the PC.",
 			Why:    "WinDivert is the packet driver Lowpath uses too. Two programs can use it at once, but whichever takes the game's packets first decides where they go, and if the other program loaded a different WinDivert version, route mode can't start until the PC restarts.",
 		}, true, ""
@@ -221,13 +220,29 @@ func (d *Detector) foreignDivert(svcs []Service) (c Conflict, ok bool, why strin
 
 // ours reports whether a driver file is in one of Lowpath's driver folders.
 func (d *Detector) ours(path string) bool {
-	dir := filepath.Clean(filepath.Dir(path))
+	dir := samePath(winDir(path))
 	for _, o := range d.ownDirs {
-		if strings.EqualFold(dir, filepath.Clean(o)) {
+		if dir == samePath(o) {
 			return true
 		}
 	}
 	return false
+}
+
+// winDir is the folder of a Windows path. Service paths are Windows paths
+// whatever OS reads them (the tests run everywhere), so this doesn't use
+// path/filepath.
+func winDir(p string) string {
+	if i := strings.LastIndexAny(p, `\/`); i > 0 {
+		return p[:i]
+	}
+	return p
+}
+
+// samePath folds a Windows path for comparison: case, separators and a
+// trailing separator don't matter.
+func samePath(p string) string {
+	return strings.TrimRight(strings.ToLower(strings.ReplaceAll(p, "/", `\`)), `\`)
 }
 
 // cleanDriverPath turns a service ImagePath into a file path: drivers are
