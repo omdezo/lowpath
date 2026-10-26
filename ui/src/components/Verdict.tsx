@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleCheck, CircleDashed, CircleAlert, Download, Stethoscope } from "lucide-react";
+import { ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Download, Stethoscope } from "lucide-react";
 import { api } from "../api";
 import type { CheckStatus, Confidence, Diagnosis, VerdictCheck, VerdictId } from "../types";
 import "../diag.css";
@@ -43,6 +43,8 @@ const CONFIDENCE: Record<Confidence, string> = { high: "High confidence", medium
 export function Verdict() {
   const [d, setD] = useState<Diagnosis | null>(null);
   const [failed, setFailed] = useState(false);
+  // The measurements under each check are long; they open on request.
+  const [details, setDetails] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   const alive = useRef(true);
 
@@ -117,19 +119,14 @@ export function Verdict() {
 
           <ul className="verdict-checks" aria-label="Checks">
             {(d.checks ?? []).map((c) => (
-              <CheckRow key={c.rule} c={c} hideFacts={c.rule === winner} />
+              <CheckRow key={c.rule} c={c} showFacts={details && c.rule !== winner} />
             ))}
           </ul>
 
-          {d.next && d.next.length > 0 && (
-            <div className="verdict-next">
-              <span className="faint">For a surer answer:</span>
-              <ul>
-                {d.next.map((n) => (
-                  <li key={n.id}>{n.text}</li>
-                ))}
-              </ul>
-            </div>
+          {(d.checks ?? []).some((c) => c.rule !== winner && c.facts && c.facts.length > 0) && (
+            <button className="btn btn-ghost verdict-more" onClick={() => setDetails(!details)} aria-expanded={details}>
+              {details ? <ChevronUp size={14} /> : <ChevronDown size={14} />} {details ? "Hide the measurements" : "Show the measurements behind each check"}
+            </button>
           )}
         </>
       )}
@@ -137,7 +134,7 @@ export function Verdict() {
   );
 }
 
-function CheckRow({ c, hideFacts }: { c: VerdictCheck; hideFacts: boolean }) {
+function CheckRow({ c, showFacts }: { c: VerdictCheck; showFacts: boolean }) {
   const tone = checkTone(c);
   const Icon = tone === "none" ? CircleDashed : tone === "bad" ? CircleAlert : CircleCheck;
   return (
@@ -149,7 +146,7 @@ function CheckRow({ c, hideFacts }: { c: VerdictCheck; hideFacts: boolean }) {
           <span className="state">{checkLabel(c)}</span>
         </div>
         <div className="sum">{c.summary}</div>
-        {!hideFacts && c.facts && c.facts.length > 0 && (
+        {showFacts && c.facts && c.facts.length > 0 && (
           <ul className="facts">
             {c.facts.map((f, i) => (
               <li key={i}>{f}</li>
