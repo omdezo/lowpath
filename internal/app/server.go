@@ -85,6 +85,14 @@ type Config struct {
 	// record (tests); cmd/lowpath keeps capture-session.json in the data
 	// folder.
 	Marker SessionMarker
+	// PingTTL sends one TTL-limited echo for the route trace. Nil:
+	// icmp.PingTTL. Names looks up hop names; nil: reverse DNS.
+	PingTTL diag.TTLPingFunc
+	Names   diag.NameFunc
+	// TraceCount and TraceInterval shorten the route trace (tests, the
+	// end-to-end run); zero: 200 probes per hop, one per second.
+	TraceCount    int
+	TraceInterval time.Duration
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -111,6 +119,7 @@ type Server struct {
 	auth    *auth
 	art     *artStore
 	bloat   *bloatRunner
+	trace   *traceRunner
 	line    *lineWatch
 	marker  SessionMarker // nil: none
 
@@ -179,6 +188,12 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Ping == nil {
 		cfg.Ping = icmp.Ping
 	}
+	if cfg.PingTTL == nil {
+		cfg.PingTTL = icmp.PingTTL
+	}
+	if cfg.Names == nil {
+		cfg.Names = reverseName
+	}
 	if cfg.BloatLoader == nil {
 		l, err := diag.NewHTTPLoader(diag.HTTPLoaderConfig{UserAgent: "Lowpath/" + Version + " (bufferbloat test)"})
 		if err != nil {
@@ -207,6 +222,10 @@ func NewServer(cfg Config) (*Server, error) {
 		log:    cfg.Log.With("component", "bufferbloat"),
 		relays: func() []engine.PathSpec { return cfg.Relays.Paths("") },
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
+	}
+	s.trace = &traceRunner{
+		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
+		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
 	s.recoverLeftover()
 	return s, nil
@@ -259,6 +278,7 @@ func (s *Server) Close() {
 	close(s.done)
 	s.mu.Unlock()
 	s.bloat.stop("Lowpath is shutting down.")
+	s.trace.stop()
 	s.endLife()
 	s.stopSession()
 	s.relays.Close()
@@ -350,6 +370,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/diag/bloat", s.handleBloat)
 	mux.HandleFunc("POST /api/diag/bloat", s.handleStartBloat)
 	mux.HandleFunc("DELETE /api/diag/bloat", s.handleStopBloat)
+	mux.HandleFunc("GET /api/diag/trace", s.handleTrace)
+	mux.HandleFunc("POST /api/diag/trace", s.handleStartTrace)
+	mux.HandleFunc("DELETE /api/diag/trace", s.handleStopTrace)
+	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -694,6 +718,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"analysis":     analysis,
 		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"bufferbloat":  s.store.Bloat(),
+		"route_trace":  s.lastTrace(), // addresses cut to /24 and /48
 		"live":         s.live(),
 	})
 }

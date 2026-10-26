@@ -441,6 +441,9 @@ type Loader interface { Download(ctx, add func(int64)) error; Upload(...) error;
 func NewHTTPLoader(HTTPLoaderConfig) (*HTTPLoader, error) // speed.cloudflare.com by default
 func NewBloatTest(BloatConfig) *BloatTest; (*BloatTest).Run(ctx, progress) (BloatResult, error)
 func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDetector).Observe(PassiveSample) PassiveState
+type TTLPingFunc func(dst netip.Addr, ttl int, timeout time.Duration) (icmp.Reply, error) // icmp.PingTTL
+func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, error)
+func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 ```
 
 - **NetStats.** Windows: `GetBestInterfaceEx` (toward 1.1.1.1, else
@@ -478,6 +481,37 @@ func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDete
 - The app keeps the last result in `state.json` (`bloat`), refuses the test
   during a session (409 `session_active`) and stops a running test when a
   boost starts.
+- **Route trace (MTR)** (on demand, 200 rounds at 1 Hz, about 3½ min):
+  `icmp.PingTTL` sends a 64-byte echo with TTL 1 to 30 (WinMTR's defaults),
+  one goroutine per TTL, staggered over half the interval, 2 s timeout.
+  Windows: `IcmpSendEcho2Ex` / `Icmp6SendEcho2` with
+  `IP_OPTION_INFORMATION.Ttl`, no admin rights; the reply status says who
+  answered (`IP_SUCCESS` = the destination, `IP_TTL_EXPIRED_TRANSIT` /
+  `IP_HOP_LIMIT_EXCEEDED` = a router, unreachable codes). Linux and macOS:
+  a raw ICMP socket (root or `CAP_NET_RAW`), matching "time exceeded" and
+  "unreachable" replies to the probe by the echo ID and sequence quoted
+  inside them; without privileges the trace says so. TTLs past the one the
+  destination answered at stop; silent trailing hops are left out. Per hop:
+  sent, received, raw loss (as WinMTR counts it), best/avg/worst/last/stdev,
+  every address that answered (load balancing), reverse DNS.
+  **Persistence rule:** a hop's *persisting* loss is the lowest loss at it
+  or any later hop up to the destination (`persist_pct`); loss starts at
+  the first hop where it reaches the threshold (1 point, or 2 probes when
+  fewer than 200 were sent); a hop that loses more than persists is
+  `limited` (it rate-limits replies, as Linux routers do at about one per
+  second per destination), and a rise seen at a limited hop is credited to
+  the next hop whose own numbers match. The same rule on average delay
+  (`persist_ms`) finds the hop that adds the most delay; a hop that only
+  answers slowly is skipped. With no answer from the destination nothing
+  is confirmed (`persist_pct: null`). **UDP mode** (relays only): the hops
+  as above, plus a last row of overlay probes to the relay's own UDP port,
+  which becomes the destination for the rule. Windows delivers no ICMP
+  errors for UDP sockets to unprivileged programs, so the routers are found
+  with ICMP.
+- The app keeps the last trace in `state.json` (`trace`), refuses it during
+  the bufferbloat test and the other way round (409 `bloat_running`,
+  `trace_running`), allows it during a boost (about 2 kB/s of probes), and
+  puts it in the diagnostics report with addresses cut to /24 and /48.
 
 ## App, desktop shell, build
 
@@ -555,6 +589,10 @@ polls while `state` is `loading` or `pinging` is true.
 | GET | /api/diag/bloat | | `{running, progress: null \| {phase, elapsed_s, total_s, last_ms, load_mbps, target}, result: null \| BloatResult, error?}` |
 | POST | /api/diag/bloat | | 202 + the same; 409 `bloat_running` or `session_active` |
 | DELETE | /api/diag/bloat | | stops a running test; the same view |
+| GET | /api/diag/trace | | `{running, progress: null \| TraceResult, result: null \| TraceResult, error?, targets: [{id, label, addr, udp, kind}], defaults: {count, interval_s}}` |
+| POST | /api/diag/trace | `{target_id}` or `{host}`, `mode: "icmp"\|"udp"` | 202 + the same; 400 `bad_target`; 409 `trace_running` or `bloat_running` |
+| DELETE | /api/diag/trace | | stops a running trace and keeps what it measured; the same view |
+| GET | /api/diag/trace/report | | the last trace as a text table (`lowpath-route-trace.txt`); 404 `no_trace` |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,

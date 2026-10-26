@@ -108,6 +108,12 @@ select {
   white-space: nowrap;
 }
 
+/* Download links styled as buttons (report exports). */
+a.btn {
+  color: inherit;
+  text-decoration: none;
+}
+
 .btn:hover:not(:disabled) {
   background: var(--panel-3);
 }

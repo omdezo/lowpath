@@ -75,6 +75,8 @@ type persisted struct {
 	// Bloat is the last finished bufferbloat test; its throughput is the
 	// line rate the passive detector compares against.
 	Bloat *diag.BloatResult `json:"bloat,omitempty"`
+	// Trace is the last finished route trace.
+	Trace *diag.TraceResult `json:"trace,omitempty"`
 }
 
 type Store struct {
@@ -287,6 +289,21 @@ func (s *Store) Bloat() *diag.BloatResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.d.Bloat
+}
+
+// Trace is the last finished route trace, or nil.
+func (s *Store) Trace() *diag.TraceResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.d.Trace
+}
+
+// SetTrace saves a finished route trace.
+func (s *Store) SetTrace(r diag.TraceResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.d.Trace = &r
+	return s.saveLocked()
 }
 
 // SetBloat saves a finished bufferbloat test.
