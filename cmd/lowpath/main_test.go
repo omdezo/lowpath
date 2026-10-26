@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,6 +20,7 @@ import (
 	"lowpath/internal/capture"
 	"lowpath/internal/platform"
 	"lowpath/internal/platform/fakeplatform"
+	"lowpath/ui"
 )
 
 func TestChildArgsReplaceWaitPID(t *testing.T) {
@@ -170,6 +172,38 @@ func TestNoElevateWithoutPrompt(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 501 || len(fp.Privileges.Relaunches()) != 0 {
 		t.Fatalf("elevate without a prompt: %d, relaunches %v", res.StatusCode, fp.Privileges.Relaunches())
+	}
+}
+
+// The window gets the embedded front end at / and at its client routes:
+// the UI after npm run build, the placeholder page in a fresh clone.
+func TestServesEmbeddedFrontEnd(t *testing.T) {
+	fp := fakeplatform.New(t.TempDir())
+	srv, err := buildServer(t.Context(), options{data: t.TempDir()}, fp.Platform(), slog.New(slog.NewTextHandler(io.Discard, nil)), func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	defer srv.Close()
+	fsys, err := ui.FS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := fs.ReadFile(fsys, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/settings/network"} {
+		res, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") || string(got) != string(want) {
+			t.Fatalf("GET %s: %d %s, %d bytes; want index.html (%d bytes, built %v)", path, res.StatusCode, res.Header.Get("Content-Type"), len(got), len(want), ui.Built())
+		}
 	}
 }
 

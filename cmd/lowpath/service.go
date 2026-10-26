@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"time"
 
@@ -75,7 +74,7 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		}
 	}
 
-	dist, err := fs.Sub(ui.Dist, "dist")
+	dist, err := ui.FS()
 	if err != nil {
 		logger.Warn("no UI to serve in front of the service", "err", err)
 		return nil, fmt.Sprintf("this build has no UI to show in front of it (%v)", err), nil

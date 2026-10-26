@@ -30,7 +30,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -168,6 +167,11 @@ func run(parent context.Context, o options, plat *platform.Platform, desk platfo
 
 	ctx, cancel := signal.NotifyContext(parent, stopSignals()...)
 	defer cancel()
+	if !ui.Built() {
+		// Built before npm run build (a fresh clone): the window shows a
+		// page that says how to build the UI instead of the UI.
+		logger.Warn("this build has no UI, only a placeholder page: run npm run build in ui, then build Lowpath again")
+	}
 
 	// The background service holds the rights route mode needs, so with it
 	// this process needs none and shows no prompt.
@@ -356,7 +360,7 @@ func newServer(ctx context.Context, o options, plat *platform.Platform, logger *
 // restart, without starting background work, so tests can run it on a fake
 // platform.
 func buildServer(ctx context.Context, o options, plat *platform.Platform, logger *slog.Logger, quit func()) (*app.Server, error) {
-	dist, err := fs.Sub(ui.Dist, "dist")
+	dist, err := ui.FS()
 	if err != nil {
 		return nil, err
 	}
