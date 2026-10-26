@@ -112,6 +112,32 @@ func TestTrackerAccounting(t *testing.T) {
 				pair: &Pair{A: 0, B: 1, Both: 4, LostA: 1}},
 		},
 		{
+			// Settling waits for lane 1 (it is still within Hold), but its
+			// copies come 305 ms after lane 0's: no use to a game.
+			name: "a lane that falls more than Settle behind loses what it delivers",
+			cps:  merge(run(0, 1, 40, 0), run(1, 1, 20, 5), run(1, 21, 40, 505)),
+			at:   5000,
+			want: want{seqs: 40, late: 20,
+				lanes: []Lane{
+					{Index: 0, Expected: 40, N00: 39},
+					{Index: 1, Expected: 40, Lost: 20, Late: 20, N00: 19, N01: 1, N11: 19},
+				},
+				pair: &Pair{A: 0, B: 1, Both: 40, LostB: 20}},
+		},
+		{
+			// Its first copies come after their numbers settled; from the
+			// first number still open, settling waits for it and charges it.
+			name: "a lane always more than Settle behind is lost, not lossless",
+			cps:  merge(run(0, 1, 20, 0), run(1, 1, 20, 300)),
+			at:   5000,
+			want: want{seqs: 20, late: 20,
+				lanes: []Lane{
+					{Index: 0, Expected: 20, N00: 19},
+					{Index: 1, Expected: 14, Lost: 14, Late: 20, N11: 13},
+				},
+				pair: &Pair{A: 0, B: 1, Both: 14, LostB: 14}},
+		},
+		{
 			name: "a slower lane's copies from before the first copy count",
 			cps:  merge(run(0, 1, 10, 0, 1, 2), run(1, 1, 10, 25)),
 			at:   2000,

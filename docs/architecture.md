@@ -604,8 +604,9 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   From that come per-lane loss `p_A`, joint loss `p_AB` and `ρ = p_AB /
   (p_A·p_B)` per pair (the redundancy policy's ρ: 1 = independent, above 5
   = shared loss), Pearson `φ`, the Gilbert estimates `p01 = n01/(n00+n01)`
-  and `p10 = n10/(n10+n11)` (mean burst `1/p10`), late copies (after
-  settling; counted lost), and RFC 3550 interarrival jitter per lane
+  and `p10 = n10/(n10+n11)` (mean burst `1/p10`), late copies (more
+  than 250 ms after their number's first copy, even while settling waits
+  for a lane; counted lost), and RFC 3550 interarrival jitter per lane
   (`J += (|D| − J)/16`, in arrival order; the client stamps whole
   milliseconds, so a steady path still reads a few hundred microseconds).
   `Options.StatsInterval` (default 1 s, negative = off) paces the `TStats`

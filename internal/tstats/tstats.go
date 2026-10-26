@@ -65,7 +65,11 @@ type Lane struct {
 	// first copy to its newest one (per span, see Hold).
 	Expected uint32 `json:"expected"`
 	Lost     uint32 `json:"lost"` // of Expected, not delivered within Settle
-	Late     uint32 `json:"late"` // copies that came after their number settled (counted in Lost)
+	// Late counts copies that came more than Settle after their number's
+	// first copy (or a later number's, if it had none): too late for a
+	// game. Their numbers count in Lost, except ones that had settled
+	// before the lane's span reached them.
+	Late uint32 `json:"late"`
 	// N00..N11 count transitions between consecutive expected numbers,
 	// 0 = delivered, 1 = lost: N01 is delivered then lost. They are what
 	// the Gilbert estimates P01 and P10 come from.

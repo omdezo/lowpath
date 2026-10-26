@@ -65,7 +65,7 @@ func ms(d time.Duration) uint32 { return uint32(d / time.Millisecond) }
 // Add records a copy of seq that arrived on lane i at time at (the
 // receiver's clock, any fixed origin); ts is the sender's timestamp in
 // milliseconds, as in the overlay header. It reports whether the copy came
-// after its number had settled (and so counts as lost on its lane).
+// too late (see Lane.Late), and so counts as lost on its lane.
 //
 // At most ringSize numbers stay open: past that the oldest settle at once,
 // with lanes that haven't reached them taken as not carrying them. A jump
@@ -116,19 +116,31 @@ func (t *Tracker) Add(i int, seq, ts uint32, at time.Duration) (late bool) {
 			t.next, t.okThrough = seq, seq
 			break
 		}
+		// The lane still carries the flow, only too slowly: settling waits
+		// for it from now on, and its copies count as lost.
 		l.c.Late++
-		if l.on {
-			l.lastAt = at
-		}
+		l.carry(seq, at)
 		return true
 	}
 
 	k := seq & mask
-	if t.ring.got[k] == 0 {
-		t.ring.at[k] = ms(at)
+	if t.tooLate(seq, ms(at)) {
+		// The number is still open, held for a lane behind it (see Hold),
+		// but Settle has passed: the copy is no use to a game.
+		late = true
+		l.c.Late++
+	} else {
+		if t.ring.got[k] == 0 {
+			t.ring.at[k] = ms(at)
+		}
+		t.ring.got[k] |= 1 << i
 	}
-	t.ring.got[k] |= 1 << i
+	l.carry(seq, at)
+	return late
+}
 
+// carry extends the lane's span to a copy of seq that came at at.
+func (l *lane) carry(seq uint32, at time.Duration) {
 	switch {
 	case !l.on || at-l.lastAt >= Hold:
 		l.on, l.first, l.last, l.hasPrev = true, seq, seq, false
@@ -138,6 +150,17 @@ func (t *Tracker) Add(i int, seq, ts uint32, at time.Duration) (late bool) {
 		l.first = seq // a reordered copy from before the span's first
 	}
 	l.lastAt = at
+}
+
+// tooLate reports whether a copy of the open number seq that came at nowMS
+// is past Settle: since its number's first copy or, if it had none, since
+// the first copy of the next number that has one (as in ready).
+func (t *Tracker) tooLate(seq, nowMS uint32) bool {
+	for s := seq; int32(t.top-s) >= 0; s++ {
+		if k := s & mask; t.ring.got[k] != 0 {
+			return int32(nowMS-t.ring.at[k]) >= settleMS
+		}
+	}
 	return false
 }
 
