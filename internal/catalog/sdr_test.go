@@ -138,7 +138,7 @@ func TestParseRejectsBadData(t *testing.T) {
 			{"ipv4":"192.168.1.1","port_range":[27015,27060]},
 			{"ipv4":"10.0.0.1"},{"ipv4":"127.0.0.1"},{"ipv4":"100.64.1.1"},{"ipv4":"0.0.0.0"},
 			{"ipv4":"not an ip"},{"ipv4":"8.8.8.8","port_range":[27060,27015]},
-			{"ipv4":"8.8.8.8"},{"ipv6":"2606:4700::1111"},{"ipv6":"::ffff:10.0.0.1"}]},
+			{"ipv4":"8.8.8.8"},{"ipv6":"2606:4700:4700::1111"},{"ipv6":"::ffff:10.0.0.1"}]},
 		"BAD ID!":{"desc":"x","relays":[{"ipv4":"8.8.4.4"}]},
 		"ctl":{"desc":"Bell\u0007 City","geo":[1,2]}}}`))
 	if err != nil {
@@ -149,7 +149,7 @@ func TestParseRejectsBadData(t *testing.T) {
 	}
 	ok := popByID(t, cfg, "ok1")
 	if len(ok.Relays) != 2 {
-		t.Fatalf("relays = %+v, want 8.8.8.8 and 2606:4700::1111 only", ok.Relays)
+		t.Fatalf("relays = %+v, want 8.8.8.8 and 2606:4700:4700::1111 only", ok.Relays)
 	}
 	if r := ok.Relays[0]; r.Addr.String() != "8.8.8.8" || r.PortFirst != 0 {
 		t.Fatalf("relay 0 = %+v (bad port range must be dropped)", r)

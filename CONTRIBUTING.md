@@ -74,6 +74,12 @@ Every change, including maintainers' own, goes through a pull request.
   player's connection broken.
 - Be honest in the UI: never show a number that wasn't measured, and say so
   when something can't be measured.
+- Tests, examples and docs use documentation addresses and AS numbers only:
+  192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32 and
+  AS64496–AS64511, with neutral names such as "Example Broadband". The CI's
+  `addrs` stage checks the addresses; a real one that is truly needed (a
+  public resolver, a live-test target) goes in the allow-list in
+  `scripts/docaddrs` with its reason.
 
 ## Ground rules
 

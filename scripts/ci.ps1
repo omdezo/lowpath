@@ -5,6 +5,8 @@
 .DESCRIPTION
     Stages, in order (stops at the first failure):
       format    gofmt finds nothing to change
+      addrs     tests, e2e and docs name no real public IP address
+                (documentation ranges only; see scripts/docaddrs)
       vet       go vet ./...
       test      go test ./...
       cross     app + relay + lpcheck build for linux/amd64, linux/arm64,
@@ -164,9 +166,11 @@ $reportTarget = if ($Report) { Get-ReportTarget } else { $null }
 Push-Location $root
 try {
     Invoke-Stage 'format' {
-        $files = gofmt -l cmd internal
+        $files = gofmt -l cmd internal scripts
         if ($files) { Write-Host "Not gofmt'd:`n$files" -ForegroundColor Red; $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
     }
+
+    Invoke-Stage 'addrs' { go run ./scripts/docaddrs }
 
     Invoke-Stage 'vet' { go vet ./... }
 
