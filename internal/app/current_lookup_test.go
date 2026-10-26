@@ -298,3 +298,39 @@ func TestNetLookupsKeepCompleteOverTransientPartial(t *testing.T) {
 		t.Fatalf("another network didn't replace the known one: %+v", info)
 	}
 }
+
+// When the cache is full, the oldest answer goes, never an entry whose
+// lookup is still running: that lookup stores its answer in it.
+func TestNetLookupsEvictOldestSettled(t *testing.T) {
+	fake := &scriptedLookup{replies: []lookupReply{{info: ripeAnswer(t, 200, 200)}}}
+	n := newTestLookups(fake)
+	addr := func(i int) netip.Addr { return netip.AddrFrom4([4]byte{203, 0, 113, byte(i)}) }
+	// The first address is looked up last and stays running.
+	for i := 2; i <= netLookupMax; i++ {
+		n.get(addr(i))
+		n.settle(t, addr(i))
+		n.clock = n.clock.Add(time.Second)
+	}
+	fake.mu.Lock()
+	fake.gate = make(chan struct{})
+	fake.mu.Unlock()
+	n.clock = time.Unix(1_700_000_000, 0) // the oldest "added" of all
+	n.get(addr(1))
+	n.clock = time.Unix(1_800_000_000, 0).Add(time.Hour)
+	n.get(addr(200))
+
+	n.mu.Lock()
+	_, running := n.m[addr(1)]
+	_, oldest := n.m[addr(2)]
+	size := len(n.m)
+	n.mu.Unlock()
+	if !running || oldest || size != netLookupMax {
+		t.Fatalf("running kept %v, oldest kept %v, %d entries", running, oldest, size)
+	}
+	close(fake.gate)
+	n.settle(t, addr(1))
+	n.settle(t, addr(200))
+	if info, _, pending := n.get(addr(1)); pending || info == nil {
+		t.Fatalf("running lookup lost its answer: %+v, pending %v", info, pending)
+	}
+}
