@@ -148,6 +148,86 @@ export interface Live {
   // Other boosters, packet filter drivers and full-tunnel VPNs (null
   // until the first check ends).
   conflicts?: ConflictReport | null;
+  // The boost's Wi-Fi scan pause (null: no boost, not on Wi-Fi, or off).
+  wifi?: WiFiTuning | null;
+}
+
+// --- Wi-Fi (GET /api/diag/wifi) ------------------------------------------
+
+export type WiFiState = "ok" | "no_wifi" | "disconnected" | "unsupported" | "error" | "location";
+
+export interface RadioLink {
+  band: string;
+  channel: number | null;
+  freq_mhz: number;
+  width_mhz: number | null;
+  rssi_dbm: number | null;
+}
+
+// One reading of the Wi-Fi link; null fields weren't reported (notes say why).
+export interface WiFiLink {
+  at: string;
+  interface: string;
+  adapter: string;
+  rssi_dbm: number | null;
+  quality_pct: number | null;
+  band: string; // "2.4" | "5" | "6" | ""
+  channel: number | null;
+  freq_mhz: number | null;
+  width_mhz: number | null;
+  standard: string;
+  generation: string;
+  tx_mbps: number | null;
+  rx_mbps: number | null;
+  mlo: boolean;
+  links?: RadioLink[] | null;
+  source: string;
+  notes?: string[] | null;
+}
+
+export interface BSSLoad {
+  stations: number;
+  busy_pct: number;
+  admission_capacity?: number | null;
+}
+
+export interface WiFiSurvey {
+  at: string;
+  load: BSSLoad | null;
+  load_note?: string;
+  networks: number;
+  same_channel: number;
+  overlapping: number;
+  loudest_neighbor_dbm: number | null;
+  freq_mhz: number;
+}
+
+export interface WiFiSurveyView {
+  state: WiFiState;
+  message?: string;
+  result: WiFiSurvey | null;
+  at: string;
+}
+
+export type WiFiTuningState = "applying" | "on" | "partial" | "failed" | "off";
+
+export interface WiFiTuning {
+  state: WiFiTuningState;
+  scan_paused: boolean;
+  streaming: boolean;
+  message?: string;
+  notes?: string[] | null;
+}
+
+export interface WiFiView {
+  at: string;
+  state: WiFiState;
+  message?: string;
+  link: WiFiLink | null;
+  in_use: boolean;
+  route: string;
+  survey: WiFiSurveyView | null;
+  tuning: WiFiTuning | null;
 }
 
 // Other software that competes with Lowpath (internal/compat). "block":
@@ -436,6 +516,8 @@ export interface Settings {
   notifications: boolean;
   capture_mode?: CaptureMode;
   loopback_relay?: boolean;
+  // Pause the Wi-Fi adapter's background scans while boosting over Wi-Fi.
+  wifi_tuning?: boolean;
 }
 
 export interface Analysis {

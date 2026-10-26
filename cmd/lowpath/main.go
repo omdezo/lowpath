@@ -62,6 +62,7 @@ type options struct {
 	// serviceNote is set by run, not a flag: why the installed service
 	// isn't used (connectService).
 	serviceNote string
+	wifiReading string
 }
 
 func main() {
@@ -80,6 +81,7 @@ func main() {
 	flag.StringVar(&o.compatInventory, "compat-inventory", "", "read the other network software (boosters, drivers, VPN adapters) from this JSON file instead of the system (for tests)")
 	flag.BoolVar(&o.noService, "no-service", false, "run the engine in this process even when the background service (LowpathSvc) is installed")
 	flag.StringVar(&o.servicePipe, "service-pipe", "", "talk to a service run by hand on this pipe (Windows) or socket (elsewhere) instead of the installed one (for development and tests)")
+	flag.StringVar(&o.wifiReading, "wifi-reading", "", "read the Wi-Fi link, survey and scan pause from this JSON file instead of the adapter (for tests)")
 	flag.IntVar(&o.waitPID, "wait-pid", 0, "wait for this process to exit before starting (used when restarting elevated)")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
@@ -87,6 +89,11 @@ func main() {
 		// The end-to-end test plays "ExitLag is running" on any PC, and the
 		// real system's software doesn't change its results.
 		plat.Inventory = compat.NewFileSystem(o.compatInventory)
+	}
+	if o.wifiReading != "" {
+		// The end-to-end test shows a Wi-Fi card on any PC; the real
+		// adapter is never read or tuned.
+		plat.WiFi = diag.NewFileWLAN(o.wifiReading)
 	}
 
 	if err := run(o, plat); err != nil {

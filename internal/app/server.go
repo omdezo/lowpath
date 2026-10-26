@@ -139,6 +139,7 @@ type Server struct {
 	// full-tunnel VPNs (internal/compat).
 	conflicts *conflictWatch
 	verdict   *verdicts
+	wifi      *wifiWatch
 	gateway   *diag.GatewayPinger // router pings for Diagnostics and the verdict
 	marker    SessionMarker       // nil: none
 	inService bool
@@ -248,6 +249,7 @@ func NewServer(cfg Config) (*Server, error) {
 		lifetime: life, endLife: endLife,
 		line:        newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
 		verdict:     newVerdicts(cfg.NetStats),
+		wifi:        newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
 		marker:      cfg.Marker,
 		inService:   cfg.InService,
 		serviceNote: cfg.ServiceNote,
@@ -459,6 +461,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/diag/gateway", s.handleGateway)
 	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
 	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
+	mux.HandleFunc("GET /api/diag/wifi", s.handleWiFi)
+	mux.HandleFunc("POST /api/diag/wifi/survey", s.handleWiFiSurvey)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathVersion, handleVersion)
 	return mux
@@ -685,6 +689,9 @@ type liveView struct {
 	// Conflicts is the last scan for other boosters, packet filter drivers
 	// and full-tunnel VPNs (nil until the first scan ends).
 	Conflicts *compat.Report `json:"conflicts"`
+	// WiFi is the boost's Wi-Fi scan pause (nil: no boost, not on Wi-Fi,
+	// or turned off in Settings).
+	WiFi *wifiTuneView `json:"wifi"`
 }
 
 func (s *Server) live() liveView {
@@ -702,6 +709,7 @@ func (s *Server) live() liveView {
 			v.Capture = &captureView{Mode: CaptureRoute, Stats: sess.capt.Stats()}
 		}
 		v.Line = s.line.view()
+		v.WiFi = sess.wifi.current()
 	}
 	return v
 }
@@ -781,6 +789,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"conflicts":    s.conflicts.current().Redacted(), // user folder names cut out
 		"verdict":      s.diagnosis(),
 		"gateway":      s.gateway.View().Redacted(),
+		"wifi":         s.wifiView(), // no network name or access point address
 		"live":         live,
 	})
 }

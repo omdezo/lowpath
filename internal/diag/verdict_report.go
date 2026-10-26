@@ -40,6 +40,9 @@ func (r DiagnosisReport) Text() string {
 		conn = linkWords(d.Link, d.Interface)
 	}
 	fmt.Fprintf(&b, "Connection: %s.\n", conn)
+	if w := wifiLine(r.Evidence.WiFi); w != "" && d.Link == LinkWiFi {
+		fmt.Fprintf(&b, "Wi-Fi: %s.\n", w)
+	}
 	if n := networkLine(r.Location); n != "" {
 		fmt.Fprintf(&b, "Network: %s.\n", n)
 	}
@@ -248,4 +251,37 @@ func wrap(b *strings.Builder, prefix, text string) {
 		empty = false
 	}
 	b.WriteString(cur + "\n")
+}
+
+// wifiLine is the radio link in one line: "-61 dBm, 5 GHz channel 36
+// (80 MHz), Wi-Fi 6, 866 Mbit/s Tx, channel 12% busy". No network name or
+// access point address: those can locate a home.
+func wifiLine(w *WiFiSignal) string {
+	if w == nil {
+		return ""
+	}
+	var parts []string
+	if w.RSSI != nil {
+		parts = append(parts, fmt.Sprintf("%d dBm", *w.RSSI))
+	}
+	if w.Band != "" {
+		ch := w.Band + " GHz"
+		if w.Channel != nil {
+			ch += fmt.Sprintf(" channel %d", *w.Channel)
+		}
+		if w.WidthMHz != nil {
+			ch += fmt.Sprintf(" (%d MHz)", *w.WidthMHz)
+		}
+		parts = append(parts, ch)
+	}
+	if w.Generation != "" {
+		parts = append(parts, w.Generation)
+	}
+	if w.TxMbps != nil {
+		parts = append(parts, fmt.Sprintf("%.0f Mbit/s Tx", *w.TxMbps))
+	}
+	if w.BusyPct != nil {
+		parts = append(parts, fmt.Sprintf("channel %.0f%% busy", *w.BusyPct))
+	}
+	return strings.Join(parts, ", ")
 }

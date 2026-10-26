@@ -33,6 +33,7 @@ type session struct {
 	eng     *engine.Engine
 	capt    capture.Session    // route mode only
 	cancel  context.CancelFunc // demo traffic, server recorder
+	wifi    *wifiTuner         // the Wi-Fi scan pause; nil: not on Wi-Fi or turned off
 }
 
 type captureView struct {
@@ -171,6 +172,8 @@ func (s *Server) apply(req applyReq) error {
 		s.mu.Unlock()
 		return err
 	}
+	// The demo's network is simulated: its boosts leave the PC's Wi-Fi alone.
+	sess.wifi = s.wifi.startTuning(st.WiFiTuning && !s.net.Demo())
 	s.mu.Lock()
 	s.sess = sess
 	s.status = "optimizing"
@@ -350,6 +353,7 @@ func (s *Server) stopSessionLocked() {
 		s.unmarkSession() // the game's traffic is direct again
 	}
 	s.stopEngine(sess)
+	sess.wifi.stop()
 	s.log.Info("stopped", "game", sess.GameID)
 }
 

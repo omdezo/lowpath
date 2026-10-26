@@ -40,6 +40,7 @@ type Fake struct {
 	Inventory  *Inventory
 	Service    *Service
 	ServiceAPI *ServiceAPI
+	WiFi       *WiFi
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -58,6 +59,7 @@ func New(dir string) *Fake {
 		Inventory:  &Inventory{},
 		Service:    &Service{},
 		ServiceAPI: NewServiceAPI(),
+		WiFi:       &WiFi{linkErr: diag.ErrNoWiFi, surveyErr: diag.ErrNoWiFi, tuneErr: diag.ErrNoWiFi},
 	}
 }
 
@@ -65,10 +67,131 @@ func New(dir string) *Fake {
 func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
-		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory,
+		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory, WiFi: f.WiFi,
 		Service: f.Service, ServiceAPI: f.ServiceAPI,
 	}
 }
+
+// WiFi is a Wi-Fi adapter the test describes. It starts with no adapter
+// (diag.ErrNoWiFi), like a desktop on a cable.
+type WiFi struct {
+	mu        sync.Mutex
+	link      diag.WiFiLink
+	linkErr   error
+	survey    diag.WiFiSurvey
+	surveyErr error
+	// surveyCalls counts Survey calls as they start.
+	surveyCalls int
+	tuneErr     error
+	tuneState   diag.WiFiTuningState
+	hang        chan struct{}
+	indexes     []int
+	tunings     []*Tuning
+}
+
+// SetLink makes Link return l (err nil) or fail with err.
+func (w *WiFi) SetLink(l diag.WiFiLink, err error) {
+	w.mu.Lock()
+	w.link, w.linkErr = l, err
+	w.mu.Unlock()
+}
+
+// SetSurvey makes Survey return s or fail with err.
+func (w *WiFi) SetSurvey(s diag.WiFiSurvey, err error) {
+	w.mu.Lock()
+	w.survey, w.surveyErr = s, err
+	w.mu.Unlock()
+}
+
+// SetTune makes Tune fail with err, or succeed with state when err is nil.
+func (w *WiFi) SetTune(state diag.WiFiTuningState, err error) {
+	w.mu.Lock()
+	w.tuneState, w.tuneErr = state, err
+	w.mu.Unlock()
+}
+
+// Hang makes every call block until release is closed, like a Wi-Fi
+// service that stopped answering.
+func (w *WiFi) Hang(release chan struct{}) { w.mu.Lock(); w.hang = release; w.mu.Unlock() }
+
+func (w *WiFi) wait() {
+	w.mu.Lock()
+	hang := w.hang
+	w.mu.Unlock()
+	if hang != nil {
+		<-hang
+	}
+}
+
+// Indexes lists the interface indexes Link, Survey and Tune were asked for.
+func (w *WiFi) Indexes() []int { w.mu.Lock(); defer w.mu.Unlock(); return slices.Clone(w.indexes) }
+
+func (w *WiFi) Link(index int) (diag.WiFiLink, error) {
+	w.wait()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.indexes = append(w.indexes, index)
+	return w.link, w.linkErr
+}
+
+// SurveyCalls counts Survey calls, hung ones included.
+func (w *WiFi) SurveyCalls() int { w.mu.Lock(); defer w.mu.Unlock(); return w.surveyCalls }
+
+func (w *WiFi) Survey(index int) (diag.WiFiSurvey, error) {
+	w.mu.Lock()
+	w.surveyCalls++
+	w.mu.Unlock()
+	w.wait()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.indexes = append(w.indexes, index)
+	return w.survey, w.surveyErr
+}
+
+func (w *WiFi) Tune(index int) (diag.WiFiTuning, error) {
+	w.wait()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.indexes = append(w.indexes, index)
+	if w.tuneErr != nil {
+		return nil, w.tuneErr
+	}
+	t := &Tuning{state: w.tuneState}
+	w.tunings = append(w.tunings, t)
+	return t, nil
+}
+
+// Tunings lists every tuning started so far, oldest first.
+func (w *WiFi) Tunings() []*Tuning { w.mu.Lock(); defer w.mu.Unlock(); return slices.Clone(w.tunings) }
+
+// Tuning is a fake diag.WiFiTuning that counts its calls.
+type Tuning struct {
+	mu        sync.Mutex
+	state     diag.WiFiTuningState
+	refreshes int
+	closed    int
+}
+
+func (t *Tuning) State() diag.WiFiTuningState { t.mu.Lock(); defer t.mu.Unlock(); return t.state }
+
+func (t *Tuning) Refresh() diag.WiFiTuningState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.refreshes++
+	return t.state
+}
+
+func (t *Tuning) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed++
+	t.state = diag.WiFiTuningState{}
+	return nil
+}
+
+// Refreshes and Closes count Refresh and Close calls.
+func (t *Tuning) Refreshes() int { t.mu.Lock(); defer t.mu.Unlock(); return t.refreshes }
+func (t *Tuning) Closes() int    { t.mu.Lock(); defer t.mu.Unlock(); return t.closed }
 
 // Inventory is the other network software the test says is there. It starts
 // empty and offline: no conflicts.

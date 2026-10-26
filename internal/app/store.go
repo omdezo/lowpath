@@ -27,6 +27,9 @@ type Settings struct {
 	Notifications  bool   `json:"notifications"`
 	CaptureMode    string `json:"capture_mode"`   // route | proxy
 	LoopbackRelay  bool   `json:"loopback_relay"` // run the built-in test relay on 127.0.0.1
+	// WiFiTuning pauses the Wi-Fi adapter's background scans (and turns on
+	// its streaming mode) while a game is boosted over Wi-Fi.
+	WiFiTuning bool `json:"wifi_tuning"`
 }
 
 const (
@@ -44,7 +47,7 @@ func defaultCaptureMode() string {
 }
 
 func DefaultSettings() Settings {
-	return Settings{AutoSwitch: true, AutoAnalyze: true, StopOnGameExit: true, Theme: "dark", MinimizeToTray: true, Notifications: true, CaptureMode: defaultCaptureMode()}
+	return Settings{AutoSwitch: true, AutoAnalyze: true, StopOnGameExit: true, Theme: "dark", MinimizeToTray: true, Notifications: true, CaptureMode: defaultCaptureMode(), WiFiTuning: true}
 }
 
 // StoredRelay is a relay the user added in Settings → Relays.
