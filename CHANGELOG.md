@@ -9,6 +9,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Route trace (MTR) in Settings → Diagnostics: per-hop loss and latency
+  over ICMP with rising TTL, or UDP to a relay's port, where loss only
+  counts when it persists to the destination (#13).
 - Valve server list: Counter-Strike 2, Dota 2 and Deadlock show their Steam
   Datagram Relay data centers with live ping and loss on the game page,
   refreshed in the background and cached for offline starts (#16).
