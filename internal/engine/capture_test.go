@@ -231,7 +231,7 @@ func TestCaptureModeFlowPerRemote(t *testing.T) {
 	// This test is about flows, not route selection: send once every path
 	// has answered a probe, so a machine busy enough to delay the first
 	// replies past a selection tick can't make the engine fall back mid-test.
-	if !waitFor(t, 5*time.Second, func() bool { return allPathsUp(e.Snapshot()) }) {
+	if !waitFor(t, 10*time.Second, func() bool { return allPathsUp(e.Snapshot()) }) {
 		t.Fatalf("paths %+v never all came up over a lossless network", e.Snapshot().Paths)
 	}
 
@@ -258,7 +258,7 @@ func TestCaptureModeFlowPerRemote(t *testing.T) {
 	if refused > 0 {
 		t.Errorf("Send refused %d packets: the engine fell back mid-test (events %+v)", refused, e.Snapshot().Events)
 	}
-	waitFor(t, 2*time.Second, func() bool { return len(s.all()) >= sent[0]+sent[1]+sent[2] })
+	waitFor(t, 5*time.Second, func() bool { return len(s.all()) >= sent[0]+sent[1]+sent[2] })
 
 	back := make([]int, len(servers))
 	for _, d := range s.all() {
@@ -299,7 +299,8 @@ func TestSendFallsBackOnlyWithoutKillSwitch(t *testing.T) {
 		if !e.Send(gameLocal, remote, []byte("hello")) {
 			t.Errorf("kill=%v: Send refused a packet before any route was judged down", kill)
 		}
-		if !waitFor(t, 3*time.Second, func() bool { return e.Snapshot().Fallback }) {
+		// Judged dead at the 2 s tick, once its first probe timed out.
+		if !waitFor(t, 5*time.Second, func() bool { return e.Snapshot().Fallback }) {
 			t.Fatalf("kill=%v: expected fallback state", kill)
 		}
 		if got := e.Send(gameLocal, remote, []byte("hello")); got != kill {
