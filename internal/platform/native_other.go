@@ -35,8 +35,11 @@ func Native() *Platform {
 		Flows:      detect.NewKernelNetwork(),
 		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
 		Service:    NewServiceManager(),
-		// The socket's folder is root's, so only a root service can take the name.
-		ServiceAPI: NewSocketAPI(DefaultSocketPath, 0o666),
+		// The socket's folder is root's, so only a root service can take the
+		// name, and the window checks that root serves it. Every account may
+		// connect (0666); the service only serves root and the accounts
+		// signed in at the computer (NewSessionPolicy).
+		ServiceAPI: NewSocketAPI(DefaultSocketPath, 0o666, NewSessionPolicy()).WithServer(0),
 		WiFi:       diag.NewWLAN(),
 	}
 }

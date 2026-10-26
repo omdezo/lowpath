@@ -124,6 +124,11 @@ func (f *Frontend) Check(ctx context.Context) (string, error) {
 	var v struct {
 		Version string `json:"version"`
 	}
+	if res.StatusCode == http.StatusForbidden {
+		// Only the socket's peer check answers 403: the API itself has no
+		// guard behind the pipe or socket.
+		return "", fmt.Errorf("%w (the service answered %s)", platform.ErrPeerRefused, res.Status)
+	}
 	if res.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("the service answered %s", res.Status)
 	}
