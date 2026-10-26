@@ -11,6 +11,9 @@
 //
 // Nothing persistent is installed besides the driver files: when the handle
 // is closed (Close, or the process exits) networking is back to normal.
+// Capture also fails open on its own (watchdog.go): when a packet is stuck
+// in the handler, the handler panics or the handle keeps failing, it closes
+// the handle and reports why through Done and Err.
 //
 // Backend (backend.go) is the OS-neutral contract the app depends on;
 // WinDivert implements it on Windows, and Unavailable stands in where no
@@ -22,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +46,10 @@ type Config struct {
 	// consumed (tunneled, or dropped by the kill switch); false = the original
 	// packet is put back unchanged and goes out directly.
 	OnPacket func(local, remote netip.AddrPort, payload []byte) bool
+
+	// StallLimit is how long one packet may stay in the handler before the
+	// watchdog stops capturing (0 = DefaultStallLimit).
+	StallLimit time.Duration
 
 	Log *slog.Logger
 }
@@ -103,9 +111,13 @@ type Capture struct {
 	ipID    atomic.Uint32
 	injBufs sync.Pool // *injectBuf
 
+	workers []*workerState // one per receive goroutine, for the watchdog
+
 	wg        sync.WaitGroup
 	stop      chan struct{}
+	done      chan struct{} // closed once the handle is closed
 	closed    atomic.Bool
+	reason    atomic.Pointer[error] // why capture stopped on its own
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -149,24 +161,40 @@ func newCapture(cfg Config, dev device, o *owners) *Capture {
 		flows:   map[flowKey]*route{},
 		byLocal: map[netip.AddrPort]*route{},
 		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	c.tick.Store(time.Now().Unix())
 	c.injBufs.New = func() any { return &injectBuf{pkt: make([]byte, 0, 1500)} }
 	return c
 }
 
-// run starts the receive goroutines and the background refresher.
+// run starts the receive goroutines, the background refresher and the
+// watchdog.
 func (c *Capture) run(workers int) {
-	for range workers {
-		c.wg.Add(1)
-		go c.recvLoop()
+	c.workers = make([]*workerState, workers)
+	for i := range c.workers {
+		c.workers[i] = &workerState{}
 	}
-	c.wg.Add(1)
+	for _, w := range c.workers {
+		c.wg.Add(1)
+		go c.recvLoop(w)
+	}
+	c.wg.Add(2)
 	go c.maintain()
+	go c.watch()
 }
 
-func (c *Capture) recvLoop() {
+func (c *Capture) recvLoop(w *workerState) {
 	defer c.wg.Done()
+	// A panic in the packet path (OnPacket is the engine) must not leave the
+	// handle open with nobody reading it: stop capturing so traffic goes
+	// direct, and keep the app alive to say what happened.
+	defer func() {
+		if r := recover(); r != nil {
+			c.log.Error("capture: packet handler panicked", "panic", r, "stack", string(debug.Stack()))
+			c.abort(fmt.Errorf("capture stopped: the packet handler crashed (%v)", r))
+		}
+	}()
 	buf := make([]byte, divert.MTUMax) // one per goroutine: no per-packet allocation
 	var addr divert.Address
 	fails := 0
@@ -178,16 +206,55 @@ func (c *Capture) recvLoop() {
 			}
 			c.fail(err)
 			if fails++; fails >= maxRecvFailures {
-				c.fail(fmt.Errorf("capture stopped: %w", err))
-				go c.Close() // Close waits for this goroutine, so not inline
+				c.abort(fmt.Errorf("capture stopped: %w", err))
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
 		fails = 0
+		w.enter()
 		c.handle(buf[:n], &addr)
+		w.leave()
 	}
+}
+
+// watch is the watchdog: when a packet has been in the handler for longer
+// than the stall limit (the engine is deadlocked, an owner lookup hangs),
+// capture stops, so the game and everything else the filter matches goes
+// out directly instead of waiting in the driver's queue.
+func (c *Capture) watch() {
+	defer c.wg.Done()
+	sw := newStallWatch(c.cfg.StallLimit, c.workers, time.Now())
+	t := time.NewTicker(sw.every)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case now := <-t.C:
+			if d, stuck := sw.check(now); stuck {
+				c.abort(fmt.Errorf("capture stopped: a packet was stuck in the handler for %v", d.Round(time.Millisecond)))
+				return
+			}
+		}
+	}
+}
+
+// abort stops capturing on its own (watchdog, panic, broken handle) and
+// records why; the first reason wins. It never waits: it may run on a
+// goroutine Close would wait for.
+func (c *Capture) abort(err error) {
+	if c.closed.Load() {
+		return // already stopping; a failure while draining isn't news
+	}
+	if c.reason.CompareAndSwap(nil, &err) {
+		c.errs.Add(1)
+		msg := err.Error()
+		c.lastErr.Store(&msg)
+		c.log.Error("capture: failing open, game traffic goes direct", "err", err)
+	}
+	go c.shutdown(abortWait)
 }
 
 // handle decides one diverted packet: game packets go to OnPacket, everything
@@ -348,12 +415,31 @@ func (c *Capture) Stats() Stats {
 	return s
 }
 
+// Done is closed once capture has stopped and the handle is closed, whether
+// by Close or on its own.
+func (c *Capture) Done() <-chan struct{} { return c.done }
+
+// Err says why capture stopped on its own (watchdog, panic, broken handle).
+// It is nil while capturing and after a plain Close.
+func (c *Capture) Err() error {
+	if e := c.reason.Load(); e != nil {
+		return *e
+	}
+	return nil
+}
+
 // Close stops capturing and releases the handle, after which the driver no
 // longer sees any traffic. Packets already taken off the wire are still put
 // back (or handed to OnPacket) while the queue drains. It is safe to call more
 // than once and from any goroutine.
-func (c *Capture) Close() error {
+func (c *Capture) Close() error { return c.shutdown(closeWait) }
+
+// shutdown stops receiving, waits up to wait for the workers to finish the
+// packets they hold, then closes the handle. Packets still in the driver's
+// queue are reinjected by the driver when the handle closes.
+func (c *Capture) shutdown(wait time.Duration) error {
 	c.closeOnce.Do(func() {
+		defer close(c.done)
 		c.closed.Store(true)
 		close(c.stop)
 		if err := c.dev.ShutdownRecv(); err != nil && !errors.Is(err, divert.ErrClosed) {
@@ -363,7 +449,7 @@ func (c *Capture) Close() error {
 		go func() { c.wg.Wait(); close(done) }()
 		select {
 		case <-done:
-		case <-time.After(closeWait):
+		case <-time.After(wait):
 			c.log.Warn("capture: receivers did not stop; closing the handle anyway")
 		}
 		c.closeErr = c.dev.Close()

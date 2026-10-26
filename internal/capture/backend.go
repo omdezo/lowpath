@@ -24,6 +24,12 @@ type Backend interface {
 	// Start begins capturing. cfg.OnPacket is required; the backend fills in
 	// what it owns (driver folder, socket owners).
 	Start(cfg Config) (Session, error)
+	// Recover undoes whatever a session of this backend that never reached
+	// Close left behind (the process was killed, crashed or lost power).
+	// The app calls it at start for a Marker whose process is gone. It must
+	// be safe to call when there is nothing to undo, and must not need
+	// rights that Start would not need.
+	Recover(m Marker) error
 }
 
 // Session is a running capture.
@@ -35,6 +41,13 @@ type Session interface {
 	// Close stops capturing and must leave networking as it was. Safe to call
 	// more than once.
 	Close() error
+	// Done is closed once the capture has stopped, by Close or on its own
+	// (the fail-open watchdog, a broken handle), and networking is back to
+	// normal.
+	Done() <-chan struct{}
+	// Err says why the capture stopped on its own; nil while it runs and
+	// after a plain Close.
+	Err() error
 }
 
 // Elevation reports whether this process has the rights capture needs
@@ -94,6 +107,14 @@ func (w *WinDivert) Start(cfg Config) (Session, error) {
 	return c, nil
 }
 
+// Recover has nothing to undo for WinDivert. A WinDivert handle is a kernel
+// handle: when the process ends in any way, Windows closes it, the driver
+// reinjects the packets still queued for it and deletes its filters, so the
+// traffic it diverted goes out directly again. The driver service stays
+// registered until WinDivert removes it at the next reboot, which is
+// harmless: it diverts nothing without a handle.
+func (w *WinDivert) Recover(Marker) error { return nil }
+
 // installDriver writes the driver files to the first folder that takes
 // them, and keeps using it: a process loads WinDivert.dll once.
 func (w *WinDivert) installDriver() (string, error) {
@@ -129,3 +150,4 @@ func NewUnavailable(err error) *Unavailable { return &Unavailable{err: err} }
 func (u *Unavailable) Name() string                  { return "none" }
 func (u *Unavailable) Available() error              { return u.err }
 func (u *Unavailable) Start(Config) (Session, error) { return nil, u.err }
+func (u *Unavailable) Recover(Marker) error          { return nil }
