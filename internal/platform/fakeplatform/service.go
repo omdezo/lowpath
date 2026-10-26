@@ -144,6 +144,10 @@ type ServiceAPI struct {
 	mu      sync.Mutex
 	ln      *memListener
 	dialErr error
+	// refusal, when not nil, is why the service turns this window's
+	// account (peer) away.
+	refusal error
+	peer    platform.PeerCred
 	dials   int
 }
 
@@ -165,16 +169,33 @@ func (a *ServiceAPI) Listen() (net.Listener, error) {
 // nil makes it work again.
 func (a *ServiceAPI) SetDialErr(err error) { a.mu.Lock(); a.dialErr = err; a.mu.Unlock() }
 
+// SetRefused makes the service turn the window's account (peer) away for
+// reason, as the Unix socket does an account that isn't signed in: Dial
+// connects, the listener reports the refusal (platform.RefusingListener),
+// and the answer is the socket's 403 (platform.RefusePeer). A nil reason
+// serves the window again.
+func (a *ServiceAPI) SetRefused(peer platform.PeerCred, reason error) {
+	a.mu.Lock()
+	a.peer, a.refusal = peer, reason
+	a.mu.Unlock()
+}
+
 // Dials counts Dial calls.
 func (a *ServiceAPI) Dials() int { a.mu.Lock(); defer a.mu.Unlock(); return a.dials }
 
 func (a *ServiceAPI) Dial(ctx context.Context) (net.Conn, error) {
 	a.mu.Lock()
 	a.dials++
-	ln, err := a.ln, a.dialErr
+	ln, err, refusal, peer := a.ln, a.dialErr, a.refusal, a.peer
 	a.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if refusal != nil && ln != nil && !ln.isClosed() {
+		ln.refused(peer, refusal)
+		client, server := net.Pipe()
+		go platform.RefusePeer(server)
+		return client, nil
 	}
 	if ln == nil {
 		return nil, fmt.Errorf("%w (fake)", platform.ErrServiceNotRunning)
@@ -198,6 +219,26 @@ type memListener struct {
 	conns chan net.Conn
 	once  sync.Once
 	done  chan struct{}
+
+	mu     sync.Mutex
+	report func(platform.PeerCred, error)
+}
+
+// OnRefused makes the fake a platform.RefusingListener: fn hears of every
+// refusal SetRefused sets up.
+func (l *memListener) OnRefused(fn func(platform.PeerCred, error)) {
+	l.mu.Lock()
+	l.report = fn
+	l.mu.Unlock()
+}
+
+func (l *memListener) refused(p platform.PeerCred, err error) {
+	l.mu.Lock()
+	fn := l.report
+	l.mu.Unlock()
+	if fn != nil {
+		fn(p, err)
+	}
 }
 
 func (l *memListener) Accept() (net.Conn, error) {

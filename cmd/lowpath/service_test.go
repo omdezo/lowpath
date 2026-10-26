@@ -68,6 +68,11 @@ func TestConnectService(t *testing.T) {
 			answer(t, fp)
 			fp.ServiceAPI.SetDialErr(platform.ErrNotService)
 		}, false, 0, "not the installed service"},
+		{"this account is refused", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
+			fp.Service.Set(platform.ServiceState{}, errors.ErrUnsupported) // Linux and macOS
+			answer(t, fp)
+			fp.ServiceAPI.SetRefused(platform.PeerCred{UID: 65534}, platform.ErrPeerRefused)
+		}, false, 0, "only serves accounts signed in at this computer"},
 		{"no service manager, started by hand", options{}, func(t *testing.T, fp *fakeplatform.Fake) {
 			fp.Service.Set(platform.ServiceState{}, errors.ErrUnsupported)
 			answer(t, fp)

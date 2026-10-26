@@ -127,7 +127,7 @@ type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platf
 | Paths | `%APPDATA%\Lowpath` (data and log), `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); log in `$XDG_STATE_HOME/Lowpath` (`~/.local/state`) or `~/Library/Logs/Lowpath`; no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
-| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
+| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder; each connection's account is checked with `SO_PEERCRED` or `LOCAL_PEERCRED`: root, the service's own account and accounts with a logind or utmpx session are served, others get 403 (`platform.SessionPolicy`), and the window refuses a socket root doesn't serve), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -223,7 +223,7 @@ type Handle struct{ ... }
 func Open(filter string, layer Layer, priority int16, flags uint64) (*Handle, error)
 func (h *Handle) Recv(buf []byte, addr *Address) (int, error)
 func (h *Handle) Send(pkt []byte, addr *Address) (int, error)
-func (h *Handle) Shutdown() error; func (h *Handle) Close() error
+func (h *Handle) Shutdown() error; func (h *Handle) Close() error  // Close waits up to 100 ms for calls in flight; a stuck one gets the handle shut down at once and released when it returns
 func (h *Handle) SetParam(p Param, v uint64) error
 func CalcChecksums(pkt []byte, addr *Address) error
 func CompileFilter(filter string, layer Layer) error  // WinDivertHelperCompileFilter; works WITHOUT admin

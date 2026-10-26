@@ -11,6 +11,9 @@ stage format
 unformatted=$(gofmt -l cmd internal scripts ui/*.go)
 if [ -n "$unformatted" ]; then echo "Not gofmt'd:"; echo "$unformatted"; exit 1; fi
 
+stage addrs
+go run ./scripts/docaddrs
+
 stage vet
 go vet ./...
 

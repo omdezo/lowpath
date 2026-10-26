@@ -40,7 +40,7 @@ Two facts shape the whole plan:
 ### 0.1 What the user needs first (ordering rules)
 
 The backlog in §5 follows four rules. They exist because earlier drafts got the order wrong.
-1. **Testable without being at the PC.** Testers often drive sessions remotely and can't click UAC prompts. A dev-mode `LowpathSvc` install (one UAC, once) therefore comes in **M0**, not M7. Otherwise no later Muscat test can run unattended.
+1. **Testable without being at the PC.** Testers often drive sessions remotely and can't click UAC prompts. A dev-mode `LowpathSvc` install (one UAC, once) therefore comes in **M0**, not M7. Otherwise no later remote field test can run unattended.
 2. **Start the long-lead paperwork on day 1.** Code-signing identity, a company (for the driver), and cloud accounts each take weeks. They run as a parallel **[USER]** track from M0 (§5 "Parallel track"), not in the milestone where they are first needed.
 3. **Measure before building relays, but ship a visible win early.** M1 gives server lists with live ping for every game that has a public beacon (Valve, Epic, GameLift, PlayFab), plus flow-learned servers for the rest. A player can see "what server am I on and is it my Wi-Fi" for every game before any relay exists.
 4. **Never test anti-cheat on an account the user cares about.** Anti-cheats ban in delayed waves. Every anti-cheat test uses a secondary account and gets a 30-day follow-up check (§2.3 C2).
@@ -76,7 +76,7 @@ Each row gives:
 
 | # | Gap | Why | Today | Target | Accept |
 |---|---|---|---|---|---|
-| N1 | No relay fleet | No relays means no speedup; the loopback relay can't beat direct | Bring-your-own relays plus loopback | Two providers per metro in about 35 metros (Valve POP metros + GCC) | From Muscat, at least 2 healthy relays each in UAE, KSA, India and EU; registry shows 99% heartbeat uptime over 7 days |
+| N1 | No relay fleet | No relays means no speedup; the loopback relay can't beat direct | Bring-your-own relays plus loopback | Two providers per metro in about 35 metros (Valve POP metros + GCC) | From a GCC player location, at least 2 healthy relays each in UAE, KSA, India and EU; registry shows 99% heartbeat uptime over 7 days |
 | N2 | No in-country ingress ("local routes first") | First hop over the ISP's transit is where the local ISP loses ms | None | Ingress relays in Muscat (Oman-IX/MC1), Fujairah, Dubai; prefer relays in the user's country or ASN | `local_first=on` picks an OM/AE ingress when it is within 2 ms of the best |
 | N3 | No relay registry | Can't discover, health-check or drain relays | Static list in `state.json` | `registry` service: register, heartbeat, signed relay list, mesh matrix | A killed relay leaves the signed list within 30 s and clients re-route without a user action |
 | N4 | Static shared key, token in clear | Anyone who sniffs one packet can use the relay as an open UDP proxy | `TokenFromKey(key)` on every packet | Ed25519 session tickets (≤ 15 min) + per-session AEAD key; destination allowlist | Replaying a captured packet after ticket expiry is dropped (relay test); sending to a non-catalog IP is dropped |
@@ -102,7 +102,7 @@ Each row gives:
 | L9 | Wi-Fi scan spikes | Multi-second hiccups on Wi-Fi | Background scans paused and streaming mode on while boosting over Wi-Fi, applied again after a reconnect, reverted on stop (#11); not yet measured against the 20 Hz gateway ping | `wlan_intf_opcode_background_scan_enabled=FALSE` + `media_streaming_mode=TRUE` during sessions, reverted after | `netsh wlan show interfaces` plus 20 Hz gateway ping: no periodic 100 ms+ spikes during a boost |
 | L10 | Our numbers are not checked against the game's | Players trust the in-game meter, not ours. If the two disagree, we lose them | None | Every lab and field test also records the game's own counters: VALORANT video settings → Stats (network RTT, packet loss), CS2 Settings → Game → Telemetry (ping, packet loss, jitter; [Steam](https://help.steampowered.com/faqs/view/5E6F-5B36-5485-F6B9)), Fortnite net debug stats, Apex `cl_showpos`/net graph (UNVERIFIED names). Store them next to Lowpath's figures in the session report | For CS2 and VALORANT, the in-game loss % and our "delivered" loss agree within 0.5 points over a 20-minute match, and the in-game ping is within 5 ms of our end-to-end figure |
 | L11 | Upload and download loss are lumped together | Choke on upload (game → server) and download (server → game) have different fixes | One loss figure | Report loss per direction: upstream from the egress bitmap, downstream from the client's dedup window (the egress already duplicates downstream over every live path, `internal/relay/egress.go`). Redundancy policy runs per direction | netsim with 3% loss on the downlink only: the UI shows "download loss", and downstream lanes step up while upstream stays at 2 |
-| L12 | No latency budget for Lowpath itself | A booster that adds 1 ms of its own processing eats the gain | Not measured | Budget: capture → send ≤ 0.2 ms p99, receive → inject ≤ 0.2 ms p99, CPU < 2% of one core at 128 pps, RAM < 150 MB for the service. Benchmarks run in CI | `go test -bench` over the engine path plus an ETW trace on the Muscat PC stay within the budget; a regression fails CI |
+| L12 | No latency budget for Lowpath itself | A booster that adds 1 ms of its own processing eats the gain | Not measured | Budget: capture → send ≤ 0.2 ms p99, receive → inject ≤ 0.2 ms p99, CPU < 2% of one core at 128 pps, RAM < 150 MB for the service. Benchmarks run in CI | `go test -bench` over the engine path plus an ETW trace on the reference test PC stay within the budget; a regression fails CI |
 
 ### 2.3 TCP and capture
 
@@ -121,7 +121,7 @@ Each row gives:
 | # | Gap | Why | Today | Target | Accept |
 |---|---|---|---|---|---|
 | G1 | No server pools | Can't pick "AE Dubai01" before playing | Learned flows only | `ServerPool` model (§3.5) for the ~60 titles in §4 and §4.1, all regions | Game page lists pools with direct ping before launch for ≥ 80% of them; the rest show learned servers after one match |
-| G2 | No live discovery APIs | Static lists rot | None | Valve `GetSDRConfig`, Epic `ping-*.ds.on.epicgames.com`, GameLift UDP 7770 beacons, PlayFab QoS UDP 3075, RIPEstat prefixes | Hourly refresh job; diff report; CS2 shows `dxb` ≈ 17 ms from Muscat |
+| G2 | No live discovery APIs | Static lists rot | None | Valve `GetSDRConfig`, Epic `ping-*.ds.on.epicgames.com`, GameLift UDP 7770 beacons, PlayFab QoS UDP 3075, RIPEstat prefixes | Hourly refresh job; diff report; CS2 shows `dxb` ≈ 17 ms from a Gulf test location |
 | G3 | No match-server following | User picks Dubai, matchmaker sends them to Riyadh | Primary flow is remembered | "Auto (follow game)": detect the real match server, map it to a pool, re-route to the best egress for *that* pool within 2 s; pre-warm candidates (GearUP AIR / NoPing AI Swap style) | Change Fortnite region mid-session; the route diagram changes egress within 5 s, no stall > 300 ms |
 | G4 | No crowd learning | Unknown games and new servers stay unknown | Local memory | Opt-in telemetry `{game, dst /24, port, ASN, client ASN, rtt/loss}` → promote learned pools at ≥ 20 confirmations | A new /24 seen by 20 test clients appears in the signed catalog as `confidence: high` |
 | G5 | Coverage of 22 games, no long tail | "Ultimate for all games" | 22 entries + custom exe | 100 curated + any exe via flow learning; in-app "request a game" | Any UDP or TCP game added by exe is routed and its server labelled after one match |
@@ -129,7 +129,7 @@ Each row gives:
 | G7 | Mobile games on PC emulators | PUBG Mobile, Free Fire, CoD Mobile and MLBB are huge in the GCC, South Asia, SEA and LATAM, and are played on BlueStacks, LDPlayer, MuMu and Google Play Games for PC | Not detected | Catalog entries for emulator processes (`HD-Player.exe`, `dnplayer.exe`, `MuMuPlayer.exe`, Google Play Games `crosvm.exe`; names UNVERIFIED) with per-game flow classification inside the emulator's traffic | PUBG Mobile in BlueStacks: the match flow is found and routed; emulator store and ad traffic stay direct |
 | G8 | Catalog breaks on game patches | A patch renames the exe or moves ports and the boost silently stops working | Manual `games.json` | Nightly CI job: launch-free checks (Steam ACF build IDs, Epic manifest versions) flag changed titles; crowd telemetry "game detected but no game flow found" alerts within 1 h | A renamed exe in a test build triggers an alert, and a catalog fix ships without a client release |
 | G9 | Non-game apps the player cares about | Discord voice turning robotic mid-match; launcher downloads; streaming upload. ExitLag says it also optimizes voice apps, browsers, launchers and emulators ([KB 273](https://www.exitlag.com/knowledgebase/273)) | Games only | Optional "Voice" profile: Discord voice UDP (RTC servers on 50000–65535, UNVERIFIED) on 1 lane with duplication; launchers stay direct by default | With 2% induced loss, Discord voice stays clear with the Voice profile on (blind A/B with two listeners) |
-| G10 | Game region vs player region | Many players pick a far region on purpose (friends abroad, KR/JP-only games, bigger queues). GearUP sells this ([GearUP](https://www.gearupbooster.com/support/how-to-use-gearup-booster.html)) | Not modelled | Server picker shows every region the game offers, not only the nearest; the route solver uses long-haul backbone legs (§3.4). **No geo-unblocking**: Lowpath never presents a fake country to get around a publisher's region lock (ToS and legal risk, §6) | From Muscat, a "VALORANT AP: Mumbai/Singapore" or "LoL EUW" choice shows est. and measured ping and routes there |
+| G10 | Game region vs player region | Many players pick a far region on purpose (friends abroad, KR/JP-only games, bigger queues). GearUP sells this ([GearUP](https://www.gearupbooster.com/support/how-to-use-gearup-booster.html)) | Not modelled | Server picker shows every region the game offers, not only the nearest; the route solver uses long-haul backbone legs (§3.4). **No geo-unblocking**: Lowpath never presents a fake country to get around a publisher's region lock (ToS and legal risk, §6) | From a GCC player location, a "VALORANT AP: Mumbai/Singapore" or "LoL EUW" choice shows est. and measured ping and routes there |
 
 ### 2.5 Diagnostics and honesty
 
@@ -163,7 +163,7 @@ Each row gives:
 
 | # | Gap | Why | Today | Target | Accept |
 |---|---|---|---|---|---|
-| I1 | Unsigned exe | SmartScreen warning; Smart App Control blocks it outright | Unsigned | Cheapest first: (a) **SignPath Foundation**, free OV-level signing for qualifying open-source projects, which an MIT client may be (eligibility UNVERIFIED, apply in M0); (b) OV cert on a cloud HSM ($150–300/yr). Azure Artifact Signing is not available to Omani organizations or individuals ([MS, updated Aug 2026](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)). Also submit the signed installer to the Microsoft Store (Win32 MSI/EXE), where Store installs show no SmartScreen prompt (same source). EV only for the driver track (M8) | `signtool verify /pa` passes on all binaries; a Smart App Control-enabled Win11 VM runs the installer |
+| I1 | Unsigned exe | SmartScreen warning; Smart App Control blocks it outright | Unsigned | Cheapest first: (a) **SignPath Foundation**, free OV-level signing for qualifying open-source projects, which an MIT client may be (eligibility UNVERIFIED, apply in M0); (b) OV cert on a cloud HSM ($150–300/yr). Azure Artifact Signing is open only to organizations and individuals in a short list of countries, which leaves this project out ([MS, updated Aug 2026](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)). Also submit the signed installer to the Microsoft Store (Win32 MSI/EXE), where Store installs show no SmartScreen prompt (same source). EV only for the driver track (M8) | `signtool verify /pa` passes on all binaries; a Smart App Control-enabled Win11 VM runs the installer |
 | I2 | No installer | Manual `dist\Lowpath.exe` | None | Inno Setup per-machine, service install, Start shortcut with AUMID, clean uninstall that removes the driver/service | Install → uninstall leaves no service, driver, or `C:\Program Files\Lowpath` |
 | I3 | No auto-update | Users stay on broken builds | None | Service fetches Ed25519-signed `stable.json`, `WinVerifyTrust` + pinned publisher, updates only between sessions, staged rollout + rollback | Publish v+1 to beta: test PC updates within 1 h, never mid-boost |
 | I4 | No crash reports | Blind to failures | Log | Sentry Go (EU region) + WER LocalDumps, opt-in | Forced panic appears in Sentry with no PII |
@@ -381,7 +381,7 @@ Legend:
 
 Every title also has NA, SA, Asia and OCE pools; the same discovery method applies in every region. P2P titles get "relay the peer path" mode: both ends benefit only when the peer's ISP path is the bad one, so be honest in the UI.
 
-**Honest expectation for Valve SDR titles (CS2, Dota 2, Deadlock).** Valve already relays these games over its own backbone, with POPs in Dubai (`dxb`) and Fujairah (`dfjr`) ([GetSDRConfig](https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730)). Lowpath can only improve the first mile to the nearest Valve POP, plus loss through duplication. From Muscat the direct path to `dxb` is already 17 ms, so expect a gain of a few ms at most and say that in the UI (inference; confirm in M2).
+**Honest expectation for Valve SDR titles (CS2, Dota 2, Deadlock).** Valve already relays these games over its own backbone, with POPs in Dubai (`dxb`) and Fujairah (`dfjr`) ([GetSDRConfig](https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730)). Lowpath can only improve the first mile to the nearest Valve POP, plus loss through duplication. From a Gulf test location the direct path to `dxb` is already 17 ms, so expect a gain of a few ms at most and say that in the UI (inference; confirm in M2).
 
 ### 4.1 Further titles (catalog batch 2, M5)
 
@@ -440,7 +440,7 @@ Each milestone ends with a field test on a real gaming PC (the reference setup i
 |---|---|---|---|
 | Apply to SignPath Foundation (free OSS signing); fall back to an OV cert quote | 2 to 6 weeks | M7 | A signed test build passes `signtool verify /pa` |
 | OCI Always Free tenancy in `me-dubai-1` or `me-jeddah-1` (home region is fixed at signup) | 1 day, plus capacity retries | M2 | An A1 relay answers `lpcheck` |
-| Company registration (Omani CR) and D-U-N-S, only if the driver track (M8) goes ahead | 4 to 12 weeks | M8 | CR certificate in hand |
+| Company registration (local commercial registration) and D-U-N-S, only if the driver track (M8) goes ahead | 4 to 12 weeks | M8 | CR certificate in hand |
 | Legal memo on tunnelling game traffic in OM, AE, SA (R1) | 2 to 4 weeks | M6 | Memo filed in `docs/legal/` |
 | Secondary game accounts for the anti-cheat lab (VALORANT, Fortnite, Apex, R6, PUBG, CS2+FACEIT, BO7, BF6) | 1 week | M3 | Accounts listed in `docs/AC-LAB.md` |
 
@@ -570,7 +570,7 @@ Each milestone ends with a field test on a real gaming PC (the reference setup i
 | Tray (`Shell_NotifyIconW`), AUMID toasts, HKCU Run autostart | M | `cmd/lowpath/tray_windows.go` |
 | Inno Setup installer (service, shortcut, clean uninstall incl. driver/adapter) | M | `installer/lowpath.iss` |
 | Signed update manifest + `WinVerifyTrust` + staged rollout/rollback | M | `internal/updater` |
-| Code signing (I1): SignPath Foundation if accepted (applied in the parallel track), otherwise an OV cert on a cloud HSM (SSL.com eSigner / DigiCert KeyLocker; Oman eligibility UNVERIFIED). Azure Artifact Signing is not open to Oman entities ([MS](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)). Submit the signed installer to the Microsoft Store as a second channel | S | **[USER]** $0 or $150–300/yr, identity verification |
+| Code signing (I1): SignPath Foundation if accepted (applied in the parallel track), otherwise an OV cert on a cloud HSM (SSL.com eSigner / DigiCert KeyLocker; eligibility per country UNVERIFIED). Azure Artifact Signing is open only in a short list of countries, which leaves this project out ([MS](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)). Submit the signed installer to the Microsoft Store as a second channel | S | **[USER]** $0 or $150–300/yr, identity verification |
 | Sentry Go + WER LocalDumps, opt-in | S | `internal/crash` |
 | Arabic/RTL pass, ICU plurals, bundled font | M | `ui/src` |
 | Overlay window + phone view | M | `cmd/lowpath/overlay_windows.go` |
@@ -586,7 +586,7 @@ Each milestone ends with a field test on a real gaming PC (the reference setup i
 
 | Task | Size | Who |
 |---|---|---|
-| Register a company (e.g. Omani CR), D-U-N-S if possible | — | **[USER]** |
+| Register a company (local commercial registration), D-U-N-S if possible | — | **[USER]** |
 | EV code-signing cert on a token/HSM; Partner Center (Hardware Developer Program) + Entra tenant; identity checks ([MS register](https://learn.microsoft.com/en-us/windows-hardware/drivers/dashboard/hardware-program-register)) | — | **[USER]** ~$300–700/yr |
 | `lowpath.sys` KMDF + WFP callout (ALE connect/bind redirect), HVCI-compliant ([MS](https://learn.microsoft.com/en-ca/windows-hardware/drivers/driversecurity/implement-hvci-compatible-code)), IOCTL open only to the service SID | L | driver engineer |
 | Driver Verifier, HLK HVCI readiness test, IOCTL fuzzing | M | |

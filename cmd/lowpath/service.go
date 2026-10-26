@@ -95,6 +95,10 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		if !expected && errors.Is(err, platform.ErrServiceNotRunning) {
 			return nil, "", nil // nothing listens: the usual case without a service
 		}
+		if errors.Is(err, platform.ErrPeerRefused) {
+			logger.Warn("the Lowpath service doesn't serve this account; running the engine in this window", "api", api.String(), "err", err)
+			return nil, "it only serves accounts signed in at this computer, and this one isn't", nil
+		}
 		logger.Warn("the Lowpath service isn't answering; running the engine in this window", "api", api.String(), "err", err)
 		if errors.Is(err, platform.ErrNotService) {
 			return nil, "the program answering on its pipe is not the installed service, so Lowpath won't talk to it", nil
@@ -116,7 +120,8 @@ func waitForService(ctx context.Context, fe *app.Frontend, wait time.Duration) (
 		c, cancel := context.WithTimeout(ctx, checkTimeout)
 		v, err := fe.Check(c)
 		cancel()
-		if err == nil || ctx.Err() != nil || !time.Now().Before(deadline) {
+		// A refusal is an answer: asking again won't change it.
+		if err == nil || ctx.Err() != nil || errors.Is(err, platform.ErrPeerRefused) || !time.Now().Before(deadline) {
 			return v, err
 		}
 		select {

@@ -59,6 +59,11 @@ func (s *service) serve(ctx context.Context) error {
 		logger.Error("can't serve the API", "api", s.api.String(), "err", err)
 		return err
 	}
+	if rl, ok := ln.(platform.RefusingListener); ok {
+		rl.OnRefused(func(peer platform.PeerCred, err error) {
+			logger.Warn("refused a connection to the API", "peer", peer.String(), "err", err)
+		})
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	srv, err := shell.Build(ctx, shell.Options{Data: s.o.data, Relays: s.o.relays, InService: true}, s.plat, logger, cancel)

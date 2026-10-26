@@ -109,7 +109,7 @@ func TestRIPEstatHedgesASlowReply(t *testing.T) {
 	s.set(map[string]int{"network-info": 1}, nil)
 	start := time.Now()
 	got, err := r.LookupNetwork(context.Background(), docAddr)
-	if err != nil || got.ASN != 28885 || got.ISP == "" || got.City == "" || got.Partial != "" {
+	if err != nil || got.ASN != 64500 || got.ISP == "" || got.City == "" || got.Partial != "" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if el := time.Since(start); el > 3*time.Second {
@@ -127,7 +127,7 @@ func TestRIPEstatSendsAgainAfterBusyReply(t *testing.T) {
 	s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: time.Hour})
 	s.set(nil, map[string]int{"network-info": 1, "as-overview": 1})
 	got, err := r.LookupNetwork(context.Background(), docAddr)
-	if err != nil || got.ASN != 28885 || got.ISP == "" || got.Partial != "" {
+	if err != nil || got.ASN != 64500 || got.ISP == "" || got.Partial != "" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if s.calls("network-info") != 2 || s.calls("as-overview") != 2 || s.calls("maxmind-geo-lite") != 1 {
@@ -240,7 +240,7 @@ func TestRIPEstatSlowFollowUpIsTransientPartial(t *testing.T) {
 	s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: 20 * time.Millisecond, Timeout: 150 * time.Millisecond})
 	s.set(map[string]int{"as-overview": 2}, nil)
 	got, err := r.LookupNetwork(context.Background(), docAddr)
-	if err != nil || got.ASN != 28885 || got.ISP != "" || got.City == "" {
+	if err != nil || got.ASN != 64500 || got.ISP != "" || got.City == "" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if got.Partial != "ISP name unknown (no reply in time)" || !got.transient {
@@ -287,7 +287,7 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 	t.Run("hedged", func(t *testing.T) {
 		s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: 50 * time.Millisecond})
 		s.set(map[string]int{"network-info": 1}, nil)
-		l := NewLocator(LocatorConfig{Finders: []AddrFinder{finder}, Lookup: NewCachedLookup(r, CacheOptions{})})
+		l := newTestLocator(LocatorConfig{Finders: []AddrFinder{finder}, Lookup: NewCachedLookup(r, CacheOptions{})})
 		loc, err := l.Locate(context.Background(), false)
 		if err != nil || loc.State != StateOK || loc.IPv4.ISP == "" || loc.RetryAfterS != 0 {
 			t.Fatalf("got %+v, %v", loc, err)
@@ -297,7 +297,7 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 		s, r := newStallingRIPE(t, RIPEstatOptions{HedgeAfter: 20 * time.Millisecond, Timeout: 150 * time.Millisecond})
 		s.set(map[string]int{"network-info": 2}, nil)
 		clk := newClock()
-		l := NewLocator(LocatorConfig{
+		l := newTestLocator(LocatorConfig{
 			Finders: []AddrFinder{finder},
 			Lookup:  NewCachedLookup(r, CacheOptions{Now: clk.Now}),
 			Now:     clk.Now,
@@ -317,7 +317,7 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 		}
 		clk.Add(time.Duration(loc.RetryAfterS) * time.Second)
 		loc, _ = l.Locate(ctx, false)
-		if loc.State != StateOK || loc.IPv4.ISP == "" || loc.IPv4.ASN != 28885 || loc.RetryAfterS != 0 || loc.Message != "" {
+		if loc.State != StateOK || loc.IPv4.ISP == "" || loc.IPv4.ASN != 64500 || loc.RetryAfterS != 0 || loc.Message != "" {
 			t.Fatalf("after the retry: %+v", loc)
 		}
 	})
@@ -325,7 +325,7 @@ func TestLocateSurvivesSlowFirstLookup(t *testing.T) {
 		// An answer that won't change soon gives no retry hint.
 		s, r := newStallingRIPE(t, RIPEstatOptions{})
 		s.setFail("network-info", 429)
-		l := NewLocator(LocatorConfig{Finders: []AddrFinder{finder}, Lookup: NewCachedLookup(r, CacheOptions{})})
+		l := newTestLocator(LocatorConfig{Finders: []AddrFinder{finder}, Lookup: NewCachedLookup(r, CacheOptions{})})
 		loc, _ := l.Locate(context.Background(), false)
 		if loc.State != StatePartial || loc.RetryAfterS != 0 || !strings.Contains(loc.Message, "HTTP 429") {
 			t.Fatalf("got %+v", loc)
