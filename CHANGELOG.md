@@ -192,6 +192,14 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   calls still running on it, so a late inject from the engine or a worker
   that comes back after a fail-open can no longer reach the driver through
   a released handle that Windows may have reused (#128).
+- The end-to-end test waits for the state each check reads instead of a
+  fixed time: the bufferbloat test and each route trace wait for their
+  own click's start and a newer result (no more reading the previous UDP
+  trace as the ICMP one), the verdict waits until the page shows the
+  title the API gives, and "Session ends when the game exits" waits for
+  the session to end in the API, then in the window. The log now says
+  when the game was first seen during a session, so the check can say
+  which half missed (#177, #201).
 
 ## [0.2.0] - 2026-10-26
 
