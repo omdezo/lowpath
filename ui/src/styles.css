@@ -1679,6 +1679,48 @@ select.input {
   margin-top: 2px;
 }
 
+/* settings: your connection */
+.setting.connection {
+  align-items: flex-start;
+}
+
+.setting.connection > .muted {
+  margin-top: 1px;
+}
+
+.conn-headline {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.conn-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 8px 0 6px;
+}
+
+.conn-facts dt {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.conn-facts dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.setting.connection .note-warn {
+  margin: 2px 0 6px;
+}
+
 /* settings: relays */
 .relay-list {
   display: flex;

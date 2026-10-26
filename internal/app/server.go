@@ -21,6 +21,7 @@ import (
 	"lowpath/internal/catalog"
 	"lowpath/internal/demo"
 	"lowpath/internal/detect"
+	"lowpath/internal/diag"
 	"lowpath/internal/engine"
 	"lowpath/internal/netsim"
 	"lowpath/internal/platform"
@@ -47,6 +48,9 @@ type Config struct {
 	// lists; the game page leaves the card out.
 	Servers ServerLists
 
+	// Locator finds the public IP and ISP for /api/location. Nil: STUN and
+	// RIPEstat over the internet, only when the UI asks.
+	Locator Locator
 	// Platform is the OS layer: capture backend, socket owners, privileges,
 	// game detection, icons and folders. Nil: platform.Native(), the one
 	// built for this OS. Tests pass fakeplatform.
@@ -84,6 +88,7 @@ type Server struct {
 	servers ServerLists   // nil: no server lists
 	sim     *demo.Network // nil unless demo mode
 	plat    *platform.Platform
+	locator Locator
 	log     *slog.Logger
 	ui      fs.FS
 	elevate func() error
@@ -144,9 +149,12 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Quit == nil {
 		cfg.Quit = func() {}
 	}
+	if cfg.Locator == nil {
+		cfg.Locator = diag.NewInternetLocator()
+	}
 	return &Server{
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
-		plat: cfg.Platform, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
+		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
 		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
@@ -272,6 +280,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/art/{id}/{kind}", s.handleArt)
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
+	mux.HandleFunc("GET /api/location", s.handleLocation)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -607,6 +616,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"relays":       s.relays.Views(), // never includes keys
 		"settings":     s.store.Settings(),
 		"analysis":     analysis,
+		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"live":         s.live(),
 	})
 }

@@ -4,6 +4,7 @@ import type {
   Game,
   Live,
   Mapping,
+  NetLocation,
   ProcessInfo,
   RelayInput,
   RelayTest,
@@ -71,6 +72,7 @@ export const api = {
   addCustomGame: (name: string, process: string) => call<Game>("POST", "/games/custom", { name, process }),
   deleteCustomGame: (id: string) => call<{ ok: boolean }>("DELETE", `/games/custom/${enc(id)}`),
   elevate: () => call<{ ok: boolean }>("POST", "/elevate"),
+  location: (refresh = false) => call<NetLocation>("GET", refresh ? "/location?refresh=1" : "/location"),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need

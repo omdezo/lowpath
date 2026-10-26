@@ -258,9 +258,24 @@ async function main() {
     check("Relay test gets answers", t && t.ok, t && `${t.rtt_ms?.toFixed?.(2)} ms, ${t.loss_pct}% loss: ${t.message}`);
     await shot(page, "relays", "Settings → Relays: loopback relay on and tested");
 
-    // 4. Network: capture mode.
+    // 4. Network: your connection (public IP via STUN, ISP via RIPEstat)
+    // and the capture mode.
     await page.getByRole("tab", { name: "Network" }).click();
-    await shot(page, "network", `Settings → Network: capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
+    const conn = page.getByTestId("connection");
+    await page
+      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 20000 })
+      .catch(() => {});
+    const where = (await api(page, "GET", "/location")).body;
+    const v4 = where?.ipv4;
+    const headline = (await conn.locator(".conn-headline").textContent().catch(() => "")) ?? "";
+    const connText = (await conn.textContent().catch(() => "")) ?? "";
+    check(
+      "Your connection shows the public IP and ISP",
+      where?.state === "ok" && v4?.asn > 0 && headline.includes(`AS${v4.asn}`) && connText.includes(v4.ip),
+      v4 ? `${headline}; ${v4.ip} via ${v4.source}` : `${where?.state}: ${where?.message ?? "no answer"}`,
+    );
+    check("STUN and lpcheck see the same public IP", !base.public || !v4 || base.public.startsWith(v4.ip + ":"), `${v4?.ip} vs ${base.public}`);
+    await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
     await closeSettings(page);

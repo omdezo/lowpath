@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"lowpath/internal/stun"
 )
 
 // A request unanswered after this long counts as lost; a later reply is ignored.
@@ -155,7 +157,7 @@ func (c *checker) sendLoop(ctx context.Context, every time.Duration) time.Durati
 	report := time.NewTicker(time.Second)
 	defer report.Stop()
 	start := time.Now()
-	buf := make([]byte, 0, stunHeaderLen)
+	buf := make([]byte, 0, stun.HeaderLen)
 	c.send(buf)
 	for {
 		select {
@@ -174,11 +176,11 @@ func (c *checker) send(buf []byte) {
 	c.seq++
 	seq := c.seq
 	c.mu.Unlock()
-	var id txID
+	var id stun.TxID
 	copy(id[:4], c.session[:])
 	binary.BigEndian.PutUint64(id[4:], seq)
 	now := time.Now()
-	_, err := c.conn.Write(appendBindingRequest(buf[:0], id))
+	_, err := c.conn.Write(stun.AppendBindingRequest(buf[:0], id))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil {
@@ -202,7 +204,7 @@ func (c *checker) readLoop() {
 			continue // e.g. ICMP port unreachable surfaced on the socket
 		}
 		now := time.Now()
-		id, mapped, err := parseBindingResponse(buf[:n])
+		id, mapped, err := stun.ParseBindingResponse(buf[:n])
 		if err != nil || [4]byte(id[:4]) != c.session {
 			continue
 		}

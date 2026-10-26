@@ -281,7 +281,7 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
 - `cmd/lpcheck`: STUN binding requests (RFC 5389) at 20 Hz to
   `stun.l.google.com:19302` (flag `-server`), runs `-for 10s` (0 = forever);
   prints RTT avg/jitter/loss and the XOR-MAPPED-ADDRESS (public IP:port the
-  server saw). Pure stdlib.
+  server saw). Pure stdlib; the message codec is `internal/stun`.
 - `deploy/relay/install.sh` (systemd unit `lowpath-relay`, runs as root for
   ICMP, opens UDP port with ufw/firewalld if present, idempotent) and
   `deploy/deploy-relay.ps1 -Server user@host [-Port 40000] [-Key ...]` (uses
@@ -289,6 +289,39 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `-arm64`; prints the address + key to paste into Lowpath).
 - Tests: wrong token dropped, private destination blocked, probe reply carries
   the (fake) pinger's RTT, open relay still works, the limits above.
+
+## Location and ISP — `internal/stun`, `internal/diag`
+
+- `internal/stun`: the RFC 5389 Binding codec (shared with lpcheck) and
+  `Client.Bind(ctx, "udp4"|"udp6", server)`: one transaction, resent with
+  the same id after 250 ms, the wait doubling up to 1 s, 4 sends (about
+  2.75 s). RFC 5389 suggests 500 ms and 7 sends (39.5 s), too slow for a
+  status line. RTT is reported only when the first send was answered (a
+  resend is byte-identical, RFC 7982). A socket error (ICMP unreachable)
+  ends the round early instead of spinning.
+- `diag.Locator` answers "where am I on the internet". Per family (IPv4 and
+  IPv6, in parallel) the first `AddrFinder` that answers wins:
+  `STUNFinder` (stun.l.google.com:19302 and stun.cloudflare.com:3478 at
+  once, first answer wins, 5 s cap including DNS), then RIPEstat
+  `whats-my-ip` over HTTPS pinned to that family (for networks that block
+  UDP; it ignores `HTTP(S)_PROXY`, which would report the proxy's address). A public address goes to the `NetworkLookup`: RIPEstat
+  `network-info` (prefix, origin ASNs), then `as-overview` (holder, split
+  into handle and ISP name) and `maxmind-geo-lite` (country, city) in
+  parallel; those two may fail alone (`partial`). `CachedLookup` keeps an
+  answer per address for 24 h, a partial one 10 min, a failure 30 s.
+  Private, CGNAT and loopback answers are never sent to the registry.
+- One lookup runs at a time, with a 12 s budget that does not depend on a
+  caller who gives up; a result is reused for 2 min (an offline or partial
+  one for 15 s) unless `refresh=1`.
+  States: `ok`; `partial` (IP known, ISP not: `message` says why);
+  `offline` (no IP: `message` says why). No IPv6 is normal and only sets
+  `ipv6_note`.
+- Lowpath never captures its own process, so this is the user's own line
+  even while a game is routed through a relay.
+- `/api/diagnostics` includes the last location with addresses cut to /24
+  (IPv4) and /48 (IPv6), also inside the error texts; it never starts a
+  lookup. Lookup errors never repeat the request URL (its query holds the
+  address).
 
 ## Server catalog — `internal/catalog`
 
@@ -396,6 +429,7 @@ Game view adds `"custom": bool` and keeps `"processes": string[]`.
 | POST | /api/games/custom | `{name, process}` | `Game` (id `custom-<slug>`) |
 | DELETE | /api/games/custom/{id} | | `{ok: true}` |
 | POST | /api/elevate | | `{ok: true}` then the app restarts elevated |
+| GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
 | GET | /api/games/{id}/servers | | `ServerList` (below); starts a download/ping round when due |
 | POST | /api/games/{id}/servers/ping | | `ServerList`; pings every POP again now |
 
@@ -432,7 +466,10 @@ prints that URL to stderr only, never to the log.
   egress" select), Delete, Test, "Use loopback test relay" toggle with an
   explanation, and a short "Deploy your own relay" help with the
   `deploy-relay.ps1` command.
-- Settings → Network: capture mode (Route — recommended / Proxy).
+- Settings → Network: **Your connection** ("<city>, <country> · <ISP>
+  (AS<n>)", public IPv4 and IPv6, prefix, Refresh; "—" and the reason when
+  unknown), looked up when the pane opens. Then capture mode (Route —
+  recommended / Proxy).
 - No relays → game panel shows an onboarding card (add a relay / enable the
   loopback test relay) instead of a broken Apply.
 - Route mode without admin → banner with **Restart as administrator**

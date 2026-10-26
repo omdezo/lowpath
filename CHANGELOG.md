@@ -12,6 +12,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 - Valve server list: Counter-Strike 2, Dota 2 and Deadlock show their Steam
   Datagram Relay data centers with live ping and loss on the game page,
   refreshed in the background and cached for offline starts (#16).
+- "Your connection" in Settings → Network: public IPv4/IPv6 address (via
+  STUN, as game servers see it), network prefix, ISP, AS and city, with a
+  clear reason whenever something can't be found (#15).
 - Platform layer: capture, socket-owner lookup, privileges, game detection,
   icons and folders sit behind per-OS interfaces; the app builds for Windows,
   Linux and macOS, and explains when a feature isn't available on the
