@@ -51,6 +51,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `-data DIR` | State and log folder (default `%APPDATA%\Lowpath`). |
 | `-relays file.json` | Also use a read-only relay list ([example](../relays.example.json)). |
 | `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
+| `-trace-count N`, `-trace-interval 200ms` | Shorter route traces, for tests (default 200 probes per hop, one per second). |
 
 ### Files on disk
 
@@ -58,6 +59,8 @@ degrade or cut routes — no servers or admin rights needed.
 |---|---|
 | `%APPDATA%\Lowpath\state.json` | Settings, favorites, custom games, relays (with keys), learned servers |
 | `%APPDATA%\Lowpath\lowpath.log` | Log (starts over above 5 MB) |
+| `%APPDATA%\Lowpath\crash.log` | Go crash reports, one header line per start (starts over above 1 MB) |
+| `%APPDATA%\Lowpath\capture-session.json` | Exists only while route mode captures; found at start, it means the last run was killed or crashed mid-boost |
 | `%APPDATA%\Lowpath\art\` | Cached game artwork and extracted icons |
 | `%APPDATA%\Lowpath\catalog\` | Last downloaded Valve server lists (`sdr-<app id>.json`) |
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
@@ -87,12 +90,12 @@ internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
 internal/proto     overlay framing {type, token, flow, seq, ts, addr}
-internal/icmp      ICMP echo (IcmpSendEcho on Windows, raw/ping socket on Linux)
+internal/icmp      ICMP echo and TTL-limited echo (IP Helper on Windows, raw/ping socket elsewhere)
 internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries
-internal/diag      bufferbloat test, passive detector, default route + NIC counters per OS
+internal/diag      bufferbloat test, passive detector, route trace (MTR), default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike impairment
 internal/gamesim   echo game server
@@ -114,11 +117,18 @@ go test ./...
   kill switch, capture mode, relay restarts.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
-  and the socket owner table — all without admin rights.
+  and the socket owner table — all without admin rights. The fail-open
+  watchdog (a stuck or panicking handler, a broken handle, sleep and
+  resume) and the session marker file run on a fake handle; from an
+  **administrator** terminal `go test -run FailOpen -v ./internal/capture`
+  also kills a real capturing process, and lets one deadlock, and measures
+  how fast the traffic goes direct (under 1 s).
 - **Relay:** key check, destination policy, server-leg ping, flow limits,
   forwarding hops.
 - **App:** local API guard and per-launch session, relay and custom-game
-  validation, error kinds, game art lookup, and a full route-mode session
+  validation, error kinds, game art lookup, fail-open (the session ends and
+  says why; a killed run's marker is cleaned up at the next start), and a
+  full route-mode session
   through the loopback relay on `fakeplatform`, so the app tests (and
   `cmd/lowpath`'s) run unchanged on Windows, Linux and macOS.
 - **Platform:** each OS implementation is complete, and what isn't built
@@ -141,13 +151,21 @@ go test ./...
   the HTTP loader against a local speed-test server, target choice, the
   passive detector's rules second by second, `/proc` and sysfs parsing from
   fixtures, and the Windows IP Helper calls without admin rights.
+- **Route trace:** the persistence rule against a simulated route (clean,
+  a router limiting its replies, loss from one hop on, loss at home, only
+  the destination losing, a destination that ignores ping, load balancing,
+  delay that carries on vs a slow router), UDP mode with a lossy and a dead
+  relay, offline and missing privileges, stopping early, the text report,
+  redaction, matching routers' replies to probes from raw packets, a real
+  TTL-limited echo to 127.0.0.1 and ::1, and the API with the loopback relay.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
 Google through a keyed relay and through the engine in capture mode,
 download the live SDR configs of CS2, Dota 2 and Deadlock and ping Dubai
 and Frankfurt, look up this PC's public IP and ISP with real STUN
-servers and RIPEstat, and run a short real bufferbloat test against
-Cloudflare (about 100 MB of data). `go test -run TestInternet -v
+servers and RIPEstat, run a short real bufferbloat test against
+Cloudflare (about 100 MB of data), and trace the route to 1.1.1.1 for 20
+rounds. `go test -run TestInternet -v
 ./internal/diag` prints what they found.
 
 ### End-to-end UI test
@@ -163,7 +181,8 @@ cd e2e; npm install; node run.mjs
 
 From a normal terminal it covers the home screen, relay setup, the
 bufferbloat test (against a paced local load server started by the test),
-adding a custom game, automatic route measurement, Boost in proxy mode with live
+a short route trace over UDP to the loopback relay and over ICMP to
+Cloudflare with its text report, adding a custom game, automatic route measurement, Boost in proxy mode with live
 traffic, auto-stop on game exit, and route mode asking for admin rights. From
 an **administrator** terminal it also tests route mode for real: WinDivert
 captures `lpcheck.exe`, tunnels it through the relay, injects the replies,

@@ -9,6 +9,17 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Route trace (MTR) in Settings → Diagnostics: loss and delay at every
+  router on the way to a relay, game server or any host, 200 probes per
+  hop over ICMP (no admin rights on Windows), or with the relay's own UDP
+  port as the destination. Loss only counts when it persists to the
+  destination, so routers that limit their replies aren't blamed; the
+  trace says where real loss starts and exports a WinMTR-style text
+  report (#13).
+- Fail-open watchdog: a stuck or crashed packet handler, a stopped driver
+  or a killed app puts the game back on the direct connection within a
+  second; the app ends the session and says why, and the next start cleans
+  up after a run that never closed (#7).
 - Linux and macOS: "Add game" lists programs with UDP sockets (`/proc` on
   Linux, libproc on macOS), and the library finds installed and running
   games in Steam libraries and Wine, Proton, Lutris and Heroic installs (#43).

@@ -210,6 +210,65 @@ How it works:
 - Several receive goroutines (2–4) on the handle for throughput.
 - Packet parse/build lives in a platform-neutral file with unit tests.
 
+### Fail-open (C5)
+
+A capture that stops working must never leave the game (or the rest of the
+PC's UDP) stuck in the driver's queue. Three layers make sure it doesn't:
+
+- **The OS.** When the process ends for any reason (`taskkill /F`, a
+  crash, a Go panic) Windows closes its handles; WinDivert's cleanup
+  callback then reinjects the packets still queued and its destroy
+  callback deletes the handle's WFP filters, so matching traffic goes out
+  directly again with nothing left behind. The driver service itself is
+  removed by WinDivert at the next reboot.
+- **The capture watchdog**, inside `capture.Capture`. Each receive worker
+  flips a counter when it starts and finishes a packet (two atomic adds, no
+  clock in the hot path); a watchdog goroutine checks every 100 ms and,
+  when one packet has been in the handler for `Config.StallLimit` (500 ms),
+  stops the capture: shut down receiving, wait at most 200 ms for the
+  workers, close the handle. A panic in the packet path (the engine's
+  `Send`, owner lookup) is recovered and does the same, and so do 100
+  receive errors in a row (driver stopped). Worst case from a stuck engine
+  to direct traffic: about 0.8 s. A tick that arrives late (the PC slept)
+  restarts the clock instead of counting the sleep. A plain `Close` (Stop)
+  waits up to 3 s for workers that are still draining the queue, but stops
+  waiting once one has held the same packet for 200 ms: packets older than
+  WinDivert's 2 s queue time are dropped, not sent on, when the handle
+  closes.
+- **The app.** `Session.Done()` closes when the capture has stopped, and
+  `Session.Err()` says why when it stopped on its own. The app then ends the
+  session (stopping the engine with a 2 s bound, since a stuck engine may
+  never return), and the live view's `failsafe` says what happened.
+
+Leftovers from a run that never got to clean up are handled at the next
+start: the app keeps `<data>\capture-session.json` (`capture.MarkerFile`:
+backend, PID, image name, game, start time) while a route-mode session runs
+and removes it on Stop. If the file is there at start and its PID is not a
+running process of that name, the app calls `Backend.Recover(marker)`,
+removes the file and shows a notice. WinDivert has nothing to undo (see
+above); TUN routes and WFP filters from future backends are undone there. A
+marker whose process is still running is left alone. A Go crash also writes
+its stack to `<data>\crash.log` (`debug.SetCrashOutput`).
+
+```go
+type Session interface {
+    ...
+    Done() <-chan struct{} // closed once capture has stopped, by Close or on its own
+    Err() error            // why it stopped on its own; nil after Close
+}
+type Backend interface {
+    ...
+    Recover(m Marker) error // undo what a session that never closed left behind
+}
+```
+
+`internal/capture/failopen_windows_test.go` checks the acceptance on the
+real driver (administrator only; skipped otherwise): a helper process
+captures the test's UDP to 192.0.2.1 and swallows it, the test kills it
+(`Process.Kill` is `TerminateProcess`, as `taskkill /F`) or lets its
+handler deadlock, and a lower-priority sniffing handle must see the packets
+leave within 1 s.
+
 ## Engine — capture mode
 
 Keep proxy mode and every existing test passing. Additions:
@@ -398,6 +457,9 @@ type Loader interface { Download(ctx, add func(int64)) error; Upload(...) error;
 func NewHTTPLoader(HTTPLoaderConfig) (*HTTPLoader, error) // speed.cloudflare.com by default
 func NewBloatTest(BloatConfig) *BloatTest; (*BloatTest).Run(ctx, progress) (BloatResult, error)
 func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDetector).Observe(PassiveSample) PassiveState
+type TTLPingFunc func(dst netip.Addr, ttl int, timeout time.Duration) (icmp.Reply, error) // icmp.PingTTL
+func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, error)
+func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 ```
 
 - **NetStats.** Windows: `GetBestInterfaceEx` (toward 1.1.1.1, else
@@ -435,6 +497,37 @@ func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDete
 - The app keeps the last result in `state.json` (`bloat`), refuses the test
   during a session (409 `session_active`) and stops a running test when a
   boost starts.
+- **Route trace (MTR)** (on demand, 200 rounds at 1 Hz, about 3½ min):
+  `icmp.PingTTL` sends a 64-byte echo with TTL 1 to 30 (WinMTR's defaults),
+  one goroutine per TTL, staggered over half the interval, 2 s timeout.
+  Windows: `IcmpSendEcho2Ex` / `Icmp6SendEcho2` with
+  `IP_OPTION_INFORMATION.Ttl`, no admin rights; the reply status says who
+  answered (`IP_SUCCESS` = the destination, `IP_TTL_EXPIRED_TRANSIT` /
+  `IP_HOP_LIMIT_EXCEEDED` = a router, unreachable codes). Linux and macOS:
+  a raw ICMP socket (root or `CAP_NET_RAW`), matching "time exceeded" and
+  "unreachable" replies to the probe by the echo ID and sequence quoted
+  inside them; without privileges the trace says so. TTLs past the one the
+  destination answered at stop; silent trailing hops are left out. Per hop:
+  sent, received, raw loss (as WinMTR counts it), best/avg/worst/last/stdev,
+  every address that answered (load balancing), reverse DNS.
+  **Persistence rule:** a hop's *persisting* loss is the lowest loss at it
+  or any later hop up to the destination (`persist_pct`); loss starts at
+  the first hop where it reaches the threshold (1 point, or 2 probes when
+  fewer than 200 were sent); a hop that loses more than persists is
+  `limited` (it rate-limits replies, as Linux routers do at about one per
+  second per destination), and a rise seen at a limited hop is credited to
+  the next hop whose own numbers match. The same rule on average delay
+  (`persist_ms`) finds the hop that adds the most delay; a hop that only
+  answers slowly is skipped. With no answer from the destination nothing
+  is confirmed (`persist_pct: null`). **UDP mode** (relays only): the hops
+  as above, plus a last row of overlay probes to the relay's own UDP port,
+  which becomes the destination for the rule. Windows delivers no ICMP
+  errors for UDP sockets to unprivileged programs, so the routers are found
+  with ICMP.
+- The app keeps the last trace in `state.json` (`trace`), refuses it during
+  the bufferbloat test and the other way round (409 `bloat_running`,
+  `trace_running`), allows it during a boost (about 2 kB/s of probes), and
+  puts it in the diagnostics report with addresses cut to /24 and /48.
 
 ## App, desktop shell, build
 
@@ -512,13 +605,20 @@ polls while `state` is `loading` or `pinging` is true.
 | GET | /api/diag/bloat | | `{running, progress: null \| {phase, elapsed_s, total_s, last_ms, load_mbps, target}, result: null \| BloatResult, error?}` |
 | POST | /api/diag/bloat | | 202 + the same; 409 `bloat_running` or `session_active` |
 | DELETE | /api/diag/bloat | | stops a running test; the same view |
+| GET | /api/diag/trace | | `{running, progress: null \| TraceResult, result: null \| TraceResult, error?, targets: [{id, label, addr, udp, kind}], defaults: {count, interval_s}}` |
+| POST | /api/diag/trace | `{target_id}` or `{host}`, `mode: "icmp"\|"udp"` | 202 + the same; 400 `bad_target`; 409 `trace_running` or `bloat_running` |
+| DELETE | /api/diag/trace | | stops a running trace and keeps what it measured; the same view |
+| GET | /api/diag/trace/report | | the last trace as a text table (`lowpath-route-trace.txt`); 404 `no_trace` |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,
 during a session, `"line": PassiveState` (`{active, direction, since,
 watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
 line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
-`wire_bytes_up` / `wire_bytes_down`.
+`wire_bytes_up` / `wire_bytes_down`. `"failsafe": null | {at, kind:
+"stopped"|"recovered", game_id, game, message, detail}` is the last boost
+that ended without the user asking (see Capture → Fail-open), until the
+next Boost or `DELETE /api/failsafe` (Dismiss), which returns the live view.
 Session adds `"capture_mode"`.
 
 New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
@@ -560,6 +660,11 @@ prints that URL to stderr only, never to the log.
 - Library: **Add game** → modal listing running processes with UDP sockets
   (from `/api/processes`), name field, add; custom games get a delete action.
 - Demo-only controls (Network lab) only when `demo` is true.
+- `live.failsafe` (no session running) → a banner above the page: "Boost
+  stopped to keep your game connected" or "Your last boost was cut short",
+  the service's message and detail, and a Dismiss button that hides it
+  at once and calls `DELETE /api/failsafe`, so it stays dismissed after a
+  reload and in other windows.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,
   direct ping and loss (six rows, "Show all"), "—" and the reason when a POP
