@@ -92,7 +92,13 @@ func TestForwarderIgnoresJunk(t *testing.T) {
 	if h, _, err := proto.Parse(buf[:n]); err != nil || h.Type != proto.TProbe {
 		t.Fatalf("next hop got %q, want only the overlay packet", buf[:n])
 	}
-	if s := f.Stats(); s.Malformed != 1 || s.Peers != 1 || s.PacketsUp != 1 {
+	// The forwarder counts a packet just after sending it on, so the next
+	// hop can see it a moment before the counter moves.
+	s := f.Stats()
+	for end := time.Now().Add(time.Second); s.PacketsUp == 0 && time.Now().Before(end); s = f.Stats() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.Malformed != 1 || s.Peers != 1 || s.PacketsUp != 1 {
 		t.Fatalf("stats %+v", s)
 	}
 }

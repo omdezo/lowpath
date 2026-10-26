@@ -109,6 +109,10 @@ func (s *Server) apply(req applyReq) error {
 
 	s.life.Lock()
 	defer s.life.Unlock()
+	// The bufferbloat test fills the line on purpose; a game must not
+	// start under it. Stopped under s.life, which handleStartBloat also
+	// holds, so no test can start between this and the session going live.
+	s.bloat.stop("A boost started, so the test was stopped.")
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

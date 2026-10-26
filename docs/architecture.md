@@ -366,6 +366,60 @@ func NewValveServers(ValveOptions) *ValveServers              // List(appID), Pi
   round gets its own round when that one ends. A 200 reply that isn't a
   config (Wi-Fi login page, proxy) is reported as such.
 
+## Diagnostics — `internal/diag`
+
+Measures the user's own connection. Nothing needs admin rights, and every
+number can be unknown (`null` in JSON, "—" in the UI) instead of guessed.
+
+```go
+type NetStats interface {               // per OS, behind diag.NewNetStats()
+    DefaultRoute() (Route, error)       // Route{Index, Name, Gateway netip.Addr, Kind "wifi"|"ethernet"|"other"|""}
+    Counters(index int) (Counters, error) // cumulative Rx/TxBytes + link speeds
+}
+func Rate(prev, cur Counters) (Throughput, bool) // copes with 32-bit wraps
+type Prober interface { Name() string; Probe(ctx) (time.Duration, error) } // ICMPProber, TCPProber, FuncProber
+type Loader interface { Download(ctx, add func(int64)) error; Upload(...) error; Endpoint() string }
+func NewHTTPLoader(HTTPLoaderConfig) (*HTTPLoader, error) // speed.cloudflare.com by default
+func NewBloatTest(BloatConfig) *BloatTest; (*BloatTest).Run(ctx, progress) (BloatResult, error)
+func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDetector).Observe(PassiveSample) PassiveState
+```
+
+- **NetStats.** Windows: `GetBestInterfaceEx` (toward 1.1.1.1, else
+  2606:4700:4700::1111; nothing is sent) picks the interface,
+  `GetIpForwardTable2` its default gateway (IPv4 preferred, lowest metric),
+  `GetIfEntry2Ex` the 64-bit `InOctets`/`OutOctets`. Linux: `/proc/net/route`
+  (then `/proc/net/ipv6_route`) and `/sys/class/net/<if>/statistics`, read
+  through an `fs.FS` so the parser is tested on every OS. macOS: routing
+  sysctl `NET_RT_DUMP` and `NET_RT_IFLIST2` (`if_data64`). Other OSes:
+  `ErrUnsupported`.
+- **Bufferbloat test** (on demand, 20 s): 5 s idle, 5 s download, 5 s upload,
+  5 s recovery; 10 Hz probes to an internet target and to the gateway, 1 s
+  timeout (later = lost). The internet target is picked first (3 probes
+  each, ≤ 2 s): the fastest answering of the user's relays (overlay probe;
+  loopback and LAN relays skipped), else ICMP to 1.1.1.1, else a TCP
+  handshake with the load server (its first IPv4 and first IPv6 address,
+  so IPv6-only networks still get a target). Load: 6 parallel HTTP/1.1
+  downloads (`GET /__down?bytes=25e6`) and 4 uploads (`POST /__up`,
+  10 MB), one TCP connection each, capped at 750 MB down / 250 MB up per
+  phase; a server that refuses every transfer (429, 403) counts as not
+  loaded, even when upload bytes left before the refusal. The first 1 s of
+  a loaded phase is not graded (TCP ramp-up). Increase = loaded p50 −
+  idle p50 per direction; grade from the worse direction: A+ < 5 ms, A < 30,
+  B < 60, C < 200, D < 400, else F. Half the pings lost under load counts as
+  ≥ the timeout. A direction that couldn't be loaded, or no target, gives no
+  grade (or a grade from the other direction) and a `note` saying why. Line
+  rate per direction = max(adapter counters, the test's own bytes).
+- **Passive detector** (1 Hz during a session): fires when the relay leg's
+  RTT (`after.rtt_ms − after.server_ms`) is ≥ 20 ms above its baseline
+  (minimum over 2 min of seconds when the line wasn't full) while non-game
+  traffic (adapter bytes − the engine's `wire_bytes_*`) is ≥ 70% of the line
+  rate (the last test; the peak seen only when there was none, since the
+  adapter counters also carry LAN traffic) and ≥ 2 Mbit/s, for 3 of 5
+  seconds. Clears after 5 clean seconds.
+- The app keeps the last result in `state.json` (`bloat`), refuses the test
+  during a session (409 `session_active`) and stops a running test when a
+  boost starts.
+
 ## App, desktop shell, build
 
 - `cmd/lowpath` replaces `cmd/lowpathd`. Flags: `-addr 127.0.0.1:7878`,
@@ -439,9 +493,16 @@ message, revision, fetched_at, stale, pinging, pinged_at, no_relay, pops: POPVie
 relays, ping_ms|null, loss_pct|null, sent, received, note, pinged_at}`. Rows
 come measured first (by ping), then not yet measured, then no reply. The UI
 polls while `state` is `loading` or `pinging` is true.
+| GET | /api/diag/bloat | | `{running, progress: null \| {phase, elapsed_s, total_s, last_ms, load_mbps, target}, result: null \| BloatResult, error?}` |
+| POST | /api/diag/bloat | | 202 + the same; 409 `bloat_running` or `session_active` |
+| DELETE | /api/diag/bloat | | stops a running test; the same view |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
-"injected", "errors", "game_pids": number[], "last_error": string}`.
+"injected", "errors", "game_pids": number[], "last_error": string}` and,
+during a session, `"line": PassiveState` (`{active, direction, since,
+watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
+line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
+`wire_bytes_up` / `wire_bytes_down`.
 Session adds `"capture_mode"`.
 
 New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),

@@ -12,6 +12,7 @@ import { chromium } from "playwright-core";
 import { spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP = path.join(ROOT, "bin", "lowpath.exe");
 const LPCHECK = path.join(ROOT, "dist", "lpcheck.exe");
 const OUT = path.join(ROOT, "e2e", "out");
-const PORT = 7891;
+// LOWPATH_E2E_PORT lets two worktrees run the test at the same time.
+const PORT = Number(process.env.LOWPATH_E2E_PORT) || 7891;
 const STUN = { host: "stun.l.google.com", port: 19302 };
 const GAME_ID = "custom-lpcheck";
 
@@ -76,9 +78,46 @@ function lpcheck(label, args) {
   });
 }
 
-function startApp(data, importFile) {
+// speedServer stands in for Cloudflare's speed-test endpoints, so the
+// bufferbloat test runs offline and without using the user's data plan:
+// GET /__down?bytes=N sends N bytes, POST /__up swallows the body.
+// Downloads are paced (16 KiB per timer tick per stream, a few hundred
+// Mbit/s) so loopback can't exhaust the test's data cap in the ramp-up.
+function speedServer() {
+  const chunk = Buffer.alloc(16 << 10, 7);
+  const srv = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://x");
+    if (req.method === "GET" && url.pathname === "/__down") {
+      let left = Math.min(Number(url.searchParams.get("bytes")) || 0, 50e6);
+      res.writeHead(200, { "Content-Length": left });
+      const pump = () => {
+        if (left <= 0) return res.end();
+        const n = Math.min(left, chunk.length);
+        left -= n;
+        const ok = res.write(n === chunk.length ? chunk : chunk.subarray(0, n));
+        if (ok) setTimeout(pump, 1);
+        else res.once("drain", () => setTimeout(pump, 1));
+      };
+      res.on("close", () => (left = 0));
+      return pump();
+    }
+    if (req.method === "POST" && url.pathname === "/__up") {
+      // Read slowly too: TCP backpressure paces the upload.
+      req.on("data", () => {
+        req.pause();
+        setTimeout(() => req.resume(), 8);
+      });
+      req.on("end", () => res.end("ok"));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  return new Promise((resolve) => srv.listen(0, "127.0.0.1", () => resolve(srv)));
+}
+
+function startApp(data, importFile, bloatServer) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
-  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile], { windowsHide: true });
+  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer], { windowsHide: true });
   app.stdout.pipe(log);
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -200,7 +239,8 @@ async function main() {
   const base = await lpcheck("direct (no Lowpath)", ["-for", "3s"]);
   check("Baseline: lpcheck reaches Google STUN directly", base.received > 0, `${base.received}/${base.sent} replies, ${base.avg} ms, public ${base.public}`);
 
-  const { app, link } = await startApp(data, importFile);
+  const speed = await speedServer();
+  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1100, height: 720 } })).newPage();
   let helper;
@@ -278,6 +318,31 @@ async function main() {
     await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
+
+    // 4b. Diagnostics: the bufferbloat test, against the local load server.
+    await page.getByRole("tab", { name: "Diagnostics" }).click();
+    await page.getByRole("button", { name: "Run test" }).waitFor();
+    await shot(page, "diagnostics", "Settings → Diagnostics: bufferbloat test, not run yet");
+    await page.getByRole("button", { name: "Run test" }).click();
+    await page.locator(".bloat-live", { hasText: "Downloading" }).waitFor({ timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    await shot(page, "bloat-running", "Bufferbloat test running: download phase, live ping and load");
+    let bloat;
+    for (let i = 0; i < 80; i++) {
+      bloat = (await api(page, "GET", "/diag/bloat")).body;
+      if (!bloat?.running) break;
+      await page.waitForTimeout(500);
+    }
+    const br = bloat?.result;
+    check(
+      "Bufferbloat test finishes with a result",
+      bloat && !bloat.running && br && br.phases?.length === 4,
+      br ? `grade ${br.grade || "none"}, idle ${br.idle_ms?.toFixed?.(1)} ms, +${br.down_increase_ms?.toFixed?.(1)} / +${br.up_increase_ms?.toFixed?.(1)} ms, ${Math.round(br.data_mb)} MB; to ${br.target}${br.note ? `; ${br.note}` : ""}` : JSON.stringify(bloat),
+    );
+    check("Bufferbloat test loaded the line both ways", br && br.phases?.[1]?.load_mbps > 0 && br.phases?.[2]?.load_mbps > 0, br && `${br.phases?.[1]?.load_mbps?.toFixed?.(0)} / ${br.phases?.[2]?.load_mbps?.toFixed?.(0)} Mbit/s`);
+    check("A grade comes with a measured idle ping", br && (!br.grade || br.idle_ms > 0), br && `grade ${br.grade || "none"}`);
+    await page.getByRole("button", { name: "Run again" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await shot(page, "bloat-result", `Bufferbloat result: grade ${br?.grade || "none (see note)"}`);
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.
@@ -396,6 +461,7 @@ async function main() {
     helper?.kill();
     await browser.close();
     app.kill();
+    speed.close();
     writeReport(admin);
   }
   const failed = results.filter((r) => !r.ok).length;

@@ -28,6 +28,10 @@ export function initials(name: string): string {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+// Measured values that may be unknown: "—" instead of a number.
+export const fmtMs = (v: number | null | undefined) => (v == null ? "—" : v < 10 ? v.toFixed(1) : Math.round(v).toString());
+export const fmtMbps = (v: number | null | undefined) => (v == null ? "—" : v < 10 ? v.toFixed(1) : Math.round(v).toString());
+
 export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function since(iso: string, now = Date.now()): string {

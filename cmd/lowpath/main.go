@@ -38,12 +38,14 @@ import (
 	"lowpath/internal/app"
 	"lowpath/internal/catalog"
 	"lowpath/internal/demo"
+	"lowpath/internal/diag"
 	"lowpath/internal/platform"
 	"lowpath/ui"
 )
 
 type options struct {
 	addr, data, relays     string
+	bloatServer            string
 	demo, headless, open   bool
 	noElevate, dataFromArg bool
 	waitPID                int
@@ -59,6 +61,7 @@ func main() {
 	flag.BoolVar(&o.headless, "headless", false, "no window; stop with Ctrl+C")
 	flag.BoolVar(&o.open, "open", false, "open the UI in the default browser instead of a window")
 	flag.BoolVar(&o.noElevate, "no-elevate", false, "don't ask for administrator rights at start (route mode needs them)")
+	flag.StringVar(&o.bloatServer, "bloat-server", "", "load server for the bufferbloat test (default "+diag.DefaultLoadURL+"); it must answer GET /__down?bytes=N and POST /__up")
 	flag.IntVar(&o.waitPID, "wait-pid", 0, "wait for this process to exit before starting (used when restarting elevated)")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
@@ -218,6 +221,15 @@ func buildServer(ctx context.Context, o options, plat *platform.Platform, logger
 		Log:    logger.With("component", "catalog"),
 	})
 	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
+	if o.bloatServer != "" {
+		l, err := diag.NewHTTPLoader(diag.HTTPLoaderConfig{BaseURL: o.bloatServer, UserAgent: "Lowpath/" + app.Version + " (bufferbloat test)"})
+		if err != nil {
+			servers.Close()
+			relays.Close()
+			return nil, err
+		}
+		cfg.BloatLoader = l
+	}
 	if plat.Privileges.CanElevate() {
 		cfg.Elevate = func() error { return plat.Privileges.Relaunch(childArgs(o)) }
 	}

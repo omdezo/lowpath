@@ -1,5 +1,6 @@
 import type {
   Analysis,
+  BloatStatus,
   Bootstrap,
   Game,
   Live,
@@ -73,6 +74,9 @@ export const api = {
   deleteCustomGame: (id: string) => call<{ ok: boolean }>("DELETE", `/games/custom/${enc(id)}`),
   elevate: () => call<{ ok: boolean }>("POST", "/elevate"),
   location: (refresh = false) => call<NetLocation>("GET", refresh ? "/location?refresh=1" : "/location"),
+  bloat: () => call<BloatStatus>("GET", "/diag/bloat"),
+  startBloat: () => call<BloatStatus>("POST", "/diag/bloat"),
+  stopBloat: () => call<BloatStatus>("DELETE", "/diag/bloat"),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need
@@ -92,6 +96,8 @@ export function describeError(e: unknown, fallback: string): { title?: string; m
       };
     case "capture_failed":
       return { title: "Couldn't capture game traffic", msg: e.message || "The capture driver failed to start." };
+    case "session_active":
+      return { title: "Stop the boost first", msg: e.message || "The bufferbloat test fills your connection, which would lag the game." };
     default:
       return { msg: e.message || fallback };
   }

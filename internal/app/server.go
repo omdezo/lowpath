@@ -23,6 +23,7 @@ import (
 	"lowpath/internal/detect"
 	"lowpath/internal/diag"
 	"lowpath/internal/engine"
+	"lowpath/internal/icmp"
 	"lowpath/internal/netsim"
 	"lowpath/internal/platform"
 )
@@ -70,6 +71,15 @@ type Config struct {
 	// cookie (see LaunchPath). Empty: a random one, which is what the app
 	// wants; tests set their own.
 	Session string
+
+	// NetStats reads the default route and adapter counters for the
+	// bufferbloat test and the passive detector. Nil: this OS's reader.
+	NetStats diag.NetStats
+	// BloatLoader fills the line during the bufferbloat test. Nil: an
+	// HTTP loader against diag.DefaultLoadURL.
+	BloatLoader diag.Loader
+	// Ping sends one ICMP echo. Nil: icmp.Ping.
+	Ping diag.PingFunc
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -95,6 +105,13 @@ type Server struct {
 	quit    func()
 	auth    *auth
 	art     *artStore
+	bloat   *bloatRunner
+	line    *lineWatch
+
+	// lifetime ends when the server closes; background work (the
+	// bufferbloat test) runs under it.
+	lifetime context.Context
+	endLife  context.CancelFunc
 
 	// life serializes starting and stopping sessions, which take long enough
 	// (driver load, engine start) that s.mu must not be held across them.
@@ -149,18 +166,41 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Quit == nil {
 		cfg.Quit = func() {}
 	}
+	if cfg.NetStats == nil {
+		cfg.NetStats = diag.NewNetStats()
+	}
+	if cfg.Ping == nil {
+		cfg.Ping = icmp.Ping
+	}
+	if cfg.BloatLoader == nil {
+		l, err := diag.NewHTTPLoader(diag.HTTPLoaderConfig{UserAgent: "Lowpath/" + Version + " (bufferbloat test)"})
+		if err != nil {
+			return nil, err
+		}
+		cfg.BloatLoader = l
+	}
 	if cfg.Locator == nil {
 		cfg.Locator = diag.NewInternetLocator()
 	}
-	return &Server{
+	life, endLife := context.WithCancel(context.Background())
+	s := &Server{
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
 		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
 		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
 		installed: map[string]bool{}, running: map[string]bool{},
-		done: make(chan struct{}),
-	}, nil
+		done:     make(chan struct{}),
+		lifetime: life, endLife: endLife,
+		line: newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+	}
+	s.bloat = &bloatRunner{
+		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
+		log:    cfg.Log.With("component", "bufferbloat"),
+		relays: func() []engine.PathSpec { return cfg.Relays.Paths("") },
+		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
+	}
+	return s, nil
 }
 
 // Run starts background detection; call once. The session is stopped when
@@ -181,6 +221,7 @@ func (s *Server) Run(ctx context.Context) {
 		s.installed = inst
 		s.mu.Unlock()
 	}()
+	go s.line.run(s.lifetime, s.lineInput)
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
@@ -208,11 +249,26 @@ func (s *Server) Close() {
 	s.closed = true
 	close(s.done)
 	s.mu.Unlock()
+	s.bloat.stop("Lowpath is shutting down.")
+	s.endLife()
 	s.stopSession()
 	s.relays.Close()
 	if s.servers != nil {
 		s.servers.Close()
 	}
+}
+
+// lineInput feeds the passive detector: the session's engine snapshot.
+func (s *Server) lineInput() lineInput {
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	in := lineInput{bloatTest: s.bloat.isRunning()}
+	if sess != nil {
+		snap := sess.eng.Snapshot()
+		in.snap, in.started = &snap, sess.Started
+	}
+	return in
 }
 
 // allGames is the catalog followed by the user's custom games.
@@ -281,6 +337,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /api/location", s.handleLocation)
+	mux.HandleFunc("GET /api/diag/bloat", s.handleBloat)
+	mux.HandleFunc("POST /api/diag/bloat", s.handleStartBloat)
+	mux.HandleFunc("DELETE /api/diag/bloat", s.handleStopBloat)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -532,6 +591,9 @@ type liveView struct {
 	Snapshot *engine.Snapshot `json:"snapshot"`
 	Capture  *captureView     `json:"capture"` // route mode only
 	Running  []string         `json:"running"`
+	// Line is the passive bufferbloat detector during a session (nil
+	// without one).
+	Line *diag.PassiveState `json:"line"`
 }
 
 func (s *Server) live() liveView {
@@ -548,6 +610,7 @@ func (s *Server) live() liveView {
 		if sess.capt != nil {
 			v.Capture = &captureView{Mode: CaptureRoute, Stats: sess.capt.Stats()}
 		}
+		v.Line = s.line.view()
 	}
 	return v
 }
@@ -617,6 +680,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"settings":     s.store.Settings(),
 		"analysis":     analysis,
 		"location":     s.lastLocation(), // addresses cut to /24 and /48
+		"bufferbloat":  s.store.Bloat(),
 		"live":         s.live(),
 	})
 }
