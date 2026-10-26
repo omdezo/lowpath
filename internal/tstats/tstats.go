@@ -30,11 +30,11 @@ const MaxLanes = 8
 // use to a game, so it counts as lost on its lane (and as Late).
 const Settle = 250 * time.Millisecond
 
-// Hold is how long a lane that stopped delivering still counts as carrying
-// the flow. Within Hold the numbers it misses are losses; after it they are
-// numbers it was never sent: the client stopped using it, which the relay
-// can't tell from an outage. A lane that starts delivering again after
-// Hold starts a new span.
+// Hold is how long settling waits for a lane that stopped delivering. If
+// it delivers again within Hold, the numbers it missed are losses; if not,
+// they are numbers it was never sent: the client stopped using it, which
+// the relay can't tell from an outage. A lane that comes back after Hold
+// starts a new span.
 const Hold = time.Second
 
 // ringSize is how many sequence numbers can be open at once. At 128
@@ -62,7 +62,7 @@ type Lane struct {
 	Index uint8  `json:"index"` // the lane's slot, 0..MaxLanes-1
 	ID    uint32 `json:"id"`    // changes when the slot is given to another lane, so windows don't mix them
 	// Expected counts the settled numbers this lane was carrying: from its
-	// first copy to its newest one, plus up to Hold of misses after that.
+	// first copy to its newest one (per span, see Hold).
 	Expected uint32 `json:"expected"`
 	Lost     uint32 `json:"lost"` // of Expected, not delivered within Settle
 	Late     uint32 `json:"late"` // copies that came after their number settled (counted in Lost)
