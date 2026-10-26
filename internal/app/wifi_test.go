@@ -171,6 +171,26 @@ func TestWiFiAPIHungService(t *testing.T) {
 	waitFor(t, "reading after the service answered again", func() bool { return getWiFi(t, api).State == wifiOK })
 }
 
+// The card waits for a reading as long as the watch's limit says, not the
+// app's own 3 s. Timing the card can't show that on a busy machine, where
+// a 200 ms wait can take seconds, so the limit here is longer than the
+// app's and the service answers only after the app's would have run out.
+func TestWiFiAPIKeepsItsLimit(t *testing.T) {
+	fp := newFake(t)
+	fp.WiFi.SetLink(exampleLink(-60), nil)
+	release := make(chan struct{})
+	fp.WiFi.Hang(release)
+	srv, api := newWiFiServer(t, fp, nil)
+	srv.wifi.callTimeout = stateWait
+	go func() {
+		time.Sleep(wifiCallTimeout + 500*time.Millisecond)
+		close(release)
+	}()
+	if v := getWiFi(t, api); v.State != wifiOK {
+		t.Errorf("the card gave up before its %v limit: %+v", stateWait, v)
+	}
+}
+
 func TestWiFiSurvey(t *testing.T) {
 	fp := newFake(t)
 	fp.WiFi.SetLink(exampleLink(-58), nil)
