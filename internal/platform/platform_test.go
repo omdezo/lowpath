@@ -174,3 +174,17 @@ func TestElevationHelps(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeServiceParts(t *testing.T) {
+	p := Native()
+	want := DefaultSocketPath
+	if runtime.GOOS == "windows" {
+		want = `\\.\pipe\lowpath`
+	}
+	if p.ServiceAPI.String() != want {
+		t.Errorf("service API %q, want %q", p.ServiceAPI.String(), want)
+	}
+	if d, err := p.Paths.ServiceDataDir(); err != nil || !strings.EqualFold(filepath.Base(d), appDir) && d != "/var/lib/lowpath" {
+		t.Errorf("ServiceDataDir = %q, %v", d, err)
+	}
+}

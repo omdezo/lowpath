@@ -20,10 +20,12 @@ Outputs:
 | File | What it is |
 |---|---|
 | `dist\Lowpath.exe` | The desktop app (GUI subsystem, UI and driver embedded) |
+| `dist\lowpathsvc.exe` | The background service, LowpathSvc (see below) |
 | `dist\lpcheck.exe` | STUN check that shows which public IP the internet sees |
 | `dist\relay-linux-amd64`, `-arm64` | The relay server |
 | `dist\deploy\` | Relay deploy scripts |
 | `bin\lowpath.exe` | Console build of the app, for debugging |
+| `bin\lowpathsvc.exe` | The service, for the end-to-end test |
 
 ## Running while developing
 
@@ -53,6 +55,41 @@ degrade or cut routes — no servers or admin rights needed.
 | `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
 | `-trace-count N`, `-trace-interval 200ms` | Shorter route traces, for tests (default 200 probes per hop, one per second). |
 | `-compat-inventory file.json` | Read the other network software (processes, services, installed programs, adapters, internet route) from a JSON file instead of the system, for tests; see `compat.Inventory`. |
+| `-no-service` | Run the engine in this process even when the background service is installed. |
+| `-service-pipe NAME` | Use a service run by hand on this pipe (Windows) or socket (elsewhere) instead of the installed one; fails if it doesn't answer. |
+
+### Background service (no administrator prompt)
+
+Testers often drive the PC remotely and can't click a UAC prompt. Install
+the service once, from the PC, and Lowpath never asks again, after a
+reboot too:
+
+```powershell
+dist\lowpathsvc.exe install     # one administrator prompt; copies itself to Program Files
+dist\lowpathsvc.exe status      # installed? running? does its pipe answer? (no rights needed)
+dist\lowpathsvc.exe uninstall   # one prompt; keeps %ProgramData%\Lowpath
+```
+
+The service (`LowpathSvc`, LocalSystem, automatic start) runs the engine and
+capture and serves the API on `\\.\pipe\lowpath`. `Lowpath.exe` finds it at
+start, starts it if it is stopped (no rights needed), and then only shows the
+UI: Settings → Network says "Background service: In use". The first install
+copies your settings, relays and custom games; after that the service keeps
+its own in `%ProgramData%\Lowpath`, so change relays in the app, not in your
+`%APPDATA%` file. Reinstall after rebuilding to update the service; the
+window logs a warning when their versions differ.
+
+To work on the service without installing it, run it in a terminal and point
+a window at it (no administrator rights; route mode then says it needs them):
+
+```powershell
+bin\lowpathsvc.exe run -data .svc -pipe \\.\pipe\lowpath-dev
+bin\lowpath.exe -headless -no-elevate -addr 127.0.0.1:7880 -data .ui -service-pipe \\.\pipe\lowpath-dev
+```
+
+On Linux, `sudo ./lowpathsvc run` serves on `/run/lowpath/api.sock` and
+`./lowpath -headless` uses it when it answers; there is no `install` there
+yet.
 
 ### Files on disk
 
@@ -66,6 +103,8 @@ degrade or cut routes — no servers or admin rights needed.
 | `%APPDATA%\Lowpath\catalog\` | Last downloaded Valve server lists (`sdr-<app id>.json`) |
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
 | `%LOCALAPPDATA%\Lowpath\WebView2*` | App window data |
+| `C:\Program Files\Lowpath\lowpathsvc.exe` | The installed service program |
+| `%ProgramData%\Lowpath\` | The service's `state.json`, `lowpath.log`, `crash.log`, `capture-session.json`, `art\`, `catalog\` (SYSTEM and Administrators only) |
 
 ### Local API security
 
@@ -73,17 +112,22 @@ The UI/API port is reachable by every program on the PC, so the API answers
 only the app's own window: each launch creates a new secret that the window
 receives through a one-time launch link and keeps in an HttpOnly cookie.
 Requests must also target a loopback host, and mutating calls carry a custom
-header. This is local security, not a login.
+header. This is local security, not a login. With the background service the
+window keeps that guard and the session secret; the service's pipe needs
+none, because its access list only admits users signed in at this PC, and
+the window checks that the process serving it is the installed service.
 
 ## Project layout
 
 ```
 cmd/lowpath        desktop app: API + embedded UI + window + elevation
+cmd/lowpathsvc     background service LowpathSvc: install, status, run (API on a named pipe)
 cmd/relay          relay server (egress or forwarding hop)
 cmd/lpcheck        STUN check for verifying routes
 internal/app       game list, local store, relays, sessions, game art, HTTP API
 internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
-internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
+internal/shell     wiring shared by cmd/lowpath and cmd/lowpathsvc: build the server, log, crash log
+internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths, service, pipe
 internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
 internal/compat    conflict detector: other boosters, WinpkFilter/WinDivert drivers, full-tunnel VPNs
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
@@ -197,6 +241,25 @@ go test ./...
   optimal with and without the relay's server leg), the order in which
   they win, the text report (no full addresses, 78 columns), and the API
   on `fakeplatform` with stored tests, a learned server and an analysis.
+- **Background service:** without admin rights, the real named pipe (many
+  connections at once, the access list read back from the pipe: Interactive
+  Users can't create instances, nobody remote or anonymous is listed), the
+  server-process check refusing another process, a second server refused;
+  the Unix socket (stale file taken over, a running one and a plain file
+  left alone); the service manager read for a service that isn't installed
+  and for the event log, install and uninstall refused without rights, the
+  service's and data folder's access lists, a user-made data folder moved
+  aside, the settings copy never overwriting; the stop handler (Running,
+  Interrogate, Stop ends the run, a failing run exits non-zero for the
+  restart). In the app on `fakeplatform`: the window's API through the
+  service (Boost in route mode starts capture in the service, the session
+  cookie never reaches it, refused requests never reach it), the service
+  killed (503, the live stream ends) and back, an impostor refused, and
+  every start-up case of the window (not installed, stopped and started
+  with no prompt, not answering, `-demo`, `-no-service`, `-service-pipe`).
+  `lowpathsvc` install relaunching itself elevated with this user's folder,
+  the install config and settings copy, uninstall, status, and serving and
+  stopping on the API.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
 Google through a keyed relay and through the engine in capture mode,
@@ -228,7 +291,11 @@ software doesn't matter) with the banner, "Why?" and the Settings list,
 and route mode asking for admin rights. From
 an **administrator** terminal it also tests route mode for real: WinDivert
 captures `lpcheck.exe`, tunnels it through the relay, injects the replies,
-and checks that networking is normal after Stop.
+and checks that networking is normal after Stop. Last, it runs
+`bin\lowpathsvc.exe run` on a pipe of its own with a second window in front
+of it: Settings says the service is in use, Boost goes through the service,
+the service is killed (the window says it lost it) and started again (the
+window reconnects by itself).
 
 ## Verifying route mode by hand
 

@@ -105,6 +105,7 @@ func (c *cli) dispatch(cmd string, args []string) error {
 // runOptions are the flags of run (and of the service's command line).
 type runOptions struct {
 	data, relays, pipe string
+	compatInventory    string
 }
 
 func (c *cli) runFlags(name string, args []string) (runOptions, error) {
@@ -115,6 +116,7 @@ func (c *cli) runFlags(name string, args []string) (runOptions, error) {
 	fs.StringVar(&o.data, "data", def, "folder for the service's settings, relays and log")
 	fs.StringVar(&o.relays, "relays", "", "optional read-only relay list (JSON)")
 	fs.StringVar(&o.pipe, "pipe", "", "serve on this pipe (Windows) or socket path instead of "+c.plat.ServiceAPI.String()+" (development and tests)")
+	fs.StringVar(&o.compatInventory, "compat-inventory", "", "read the other network software from this JSON file instead of the system (tests)")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}

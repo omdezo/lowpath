@@ -127,6 +127,27 @@ func (f *Frontend) Check(ctx context.Context) (string, error) {
 	return v.Version, nil
 }
 
+// StopSession asks the service to stop the running boost, as closing the
+// window does when the engine runs in it: a boost nobody can see or stop
+// any more shouldn't carry on in the background.
+func (f *Frontend) StopSession(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://"+serviceHost+"/api/stop", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Lowpath", "1")
+	res, err := f.transport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("the service answered %s", res.Status)
+	}
+	return nil
+}
+
 // Close drops the idle connections to the service.
 func (f *Frontend) Close() { f.transport.CloseIdleConnections() }
 

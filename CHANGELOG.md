@@ -13,6 +13,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   asks for administrator rights once, and from then on the Lowpath window
   runs unelevated and drives the service over the named pipe
   `\\.\pipe\lowpath`, so Boost works after a reboot with no UAC prompt (#6).
+  The window starts a stopped service by itself, says "Lost connection to
+  the Lowpath service" while it restarts after a crash, and refuses a pipe
+  served by any other process; Settings → Network shows whether the service
+  is in use. `lowpathsvc status` and `uninstall` too; `-no-service` keeps
+  the engine in the window.
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements

@@ -392,6 +392,8 @@ export interface Platform {
   /** The app can restart itself with the rights route mode needs. */
   can_elevate: boolean;
   capture: { backend: string; available: boolean; reason: string };
+  /** The background service (LowpathSvc): "in_use" when this window goes through it. */
+  service: { state: "in_use" | "running" | "stopped" | "not_installed" | "unsupported" | "unknown"; message?: string };
 }
 
 export interface RelayView {

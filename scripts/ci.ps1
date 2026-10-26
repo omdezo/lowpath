@@ -11,7 +11,7 @@
                 darwin/arm64, darwin/amd64 and windows/arm64; the whole module
                 (tests included) vets for linux and darwin
       ui        npm ci (when needed) + typecheck + production build
-      build     dist\Lowpath.exe and dist\lpcheck.exe
+      build     dist\Lowpath.exe, dist\lowpathsvc.exe and dist\lpcheck.exe
       e2e       end-to-end UI test (only with -E2E)
 
     Writes a summary table and a log per stage to .ci\.
@@ -184,7 +184,7 @@ try {
             $out = Join-Path $root "dist\cross\$($t.GOOS)-$($t.GOARCH)\"
             New-Item -ItemType Directory -Force $out | Out-Null
             Invoke-WithEnv @{ GOOS = $t.GOOS; GOARCH = $t.GOARCH; CGO_ENABLED = '0' } {
-                go build -trimpath -o $out ./cmd/lowpath ./cmd/relay ./cmd/lpcheck
+                go build -trimpath -o $out ./cmd/lowpath ./cmd/lowpathsvc ./cmd/relay ./cmd/lpcheck
                 if ($LASTEXITCODE -ne 0) { throw "build failed for $($t.GOOS)/$($t.GOARCH)" }
             }
         }
@@ -212,6 +212,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'app build failed' }
         go build -trimpath -o bin\lowpath.exe ./cmd/lowpath
         if ($LASTEXITCODE -ne 0) { throw 'console build failed' }
+        go build -trimpath -ldflags '-s -w' -o dist\lowpathsvc.exe ./cmd/lowpathsvc
+        if ($LASTEXITCODE -ne 0) { throw 'service build failed' }
+        go build -trimpath -o bin\lowpathsvc.exe ./cmd/lowpathsvc
+        if ($LASTEXITCODE -ne 0) { throw 'service console build failed' }
         go build -trimpath -o dist\lpcheck.exe ./cmd/lpcheck
     }
 

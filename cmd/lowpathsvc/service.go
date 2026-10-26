@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lowpath/internal/app"
+	"lowpath/internal/compat"
 	"lowpath/internal/platform"
 	"lowpath/internal/shell"
 )
@@ -24,6 +25,13 @@ func newService(plat *platform.Platform, o runOptions) *service {
 	api := plat.ServiceAPI
 	if o.pipe != "" && o.pipe != api.String() {
 		api = platform.ServiceAPIAt(o.pipe)
+	}
+	if o.compatInventory != "" {
+		// The end-to-end test plays its own boosters and drivers; the PC's
+		// real software doesn't change its results.
+		p := *plat
+		p.Inventory = compat.NewFileSystem(o.compatInventory)
+		plat = &p
 	}
 	return &service{plat: plat, api: api, o: o}
 }

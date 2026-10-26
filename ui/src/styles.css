@@ -2037,3 +2037,14 @@ select.input {
   font-size: 12px;
   color: var(--faint);
 }
+
+/* a command in running text: "lowpathsvc install" */
+.inline-code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+}

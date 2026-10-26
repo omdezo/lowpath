@@ -7,6 +7,7 @@ import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
 import { OtherSoftware } from "./Conflicts";
 import { RelaysPane } from "./RelaysPane";
+import { ServiceRow } from "./ServiceRow";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
 import { Verdict } from "./Verdict";
@@ -138,6 +139,7 @@ export function SettingsModal(props: Props) {
                   </div>
                 )}
               </div>
+              <ServiceRow platform={platform} demo={demo} />
               <Row t="Packet duplication" d="How many routes carry every packet. More copies = smoother, but uses more upload bandwidth. Auto picks 2–4 from measured loss.">
                 <div className="segmented">
                   {([0, 1, 2, 4] as const).map((v) => (

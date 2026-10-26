@@ -138,7 +138,16 @@ func run(o options, plat *platform.Platform) error {
 	if fe != nil {
 		defer shell.KeepCrashes(o.data, logger)()
 		defer fe.Close()
-		return serve(ctx, cancel, o, plat, logger, ln, fe.Handler(), fe.LaunchPath(), func() {})
+		// Closing the window stops the boost, as it does without the
+		// service; the service itself keeps running for the next launch.
+		stop := func() {
+			c, done := context.WithTimeout(context.Background(), 3*time.Second)
+			defer done()
+			if err := fe.StopSession(c); err != nil {
+				logger.Warn("can't ask the service to stop the boost", "err", err)
+			}
+		}
+		return serve(ctx, cancel, o, plat, logger, ln, fe.Handler(), fe.LaunchPath(), stop)
 	}
 
 	priv := plat.Privileges

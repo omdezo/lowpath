@@ -5,6 +5,7 @@
 .DESCRIPTION
     Output in dist\:
       Lowpath.exe              the desktop app (GUI subsystem, UI embedded)
+      lowpathsvc.exe           the background service (lowpathsvc install, once)
       lpcheck.exe              STUN check that shows which public IP the internet sees
       relay-linux-amd64/arm64  the relay server, for deploy\deploy-relay.ps1
       deploy\                  the deploy scripts
@@ -101,6 +102,8 @@ try {
     New-Item -ItemType Directory -Force (Join-Path $root 'bin') | Out-Null
     Invoke-WithEnv @{ GOOS = 'windows'; GOARCH = 'amd64' } {
         Invoke-Native 'dist\Lowpath.exe' { go build -trimpath -ldflags '-H windowsgui -s -w' -o (Join-Path $dist 'Lowpath.exe') ./cmd/lowpath }
+        Invoke-Native 'dist\lowpathsvc.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lowpathsvc.exe') ./cmd/lowpathsvc }
+        Invoke-Native 'bin\lowpathsvc.exe (for the end-to-end test)' { go build -o (Join-Path $root 'bin\lowpathsvc.exe') ./cmd/lowpathsvc }
         Invoke-Native 'dist\lpcheck.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lpcheck.exe') ./cmd/lpcheck }
         Invoke-Native 'bin\lowpath.exe (console, for debugging)' { go build -o (Join-Path $root 'bin\lowpath.exe') ./cmd/lowpath }
     }
