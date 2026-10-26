@@ -48,10 +48,10 @@ func newSocketInstance(addr, runtimeDir, tmp string, uid int) *SocketInstance {
 	dir := filepath.Join(tmp, "lowpath-"+strconv.Itoa(uid))
 	if filepath.IsAbs(runtimeDir) {
 		// Never the background service's socket folder (root with
-		// XDG_RUNTIME_DIR=/run): Serve makes its folder 0700, which would
-		// shut every other user's window out of the service.
+		// XDG_RUNTIME_DIR=/run, or /var/run): Serve makes its folder 0700,
+		// which would shut every other user's window out of the service.
 		d := filepath.Join(runtimeDir, "lowpath")
-		if d != filepath.Dir(DefaultSocketPath) && len(filepath.Join(d, name)) <= maxSocketPath {
+		if !isServiceFolder(d) && len(filepath.Join(d, name)) <= maxSocketPath {
 			dir = d
 		}
 	}
@@ -59,6 +59,26 @@ func newSocketInstance(addr, runtimeDir, tmp string, uid int) *SocketInstance {
 		dir = filepath.Join("/tmp", "lowpath-"+strconv.Itoa(uid))
 	}
 	return &SocketInstance{path: filepath.Join(dir, name), timeout: 2 * time.Second}
+}
+
+// isServiceFolder reports whether dir is the background service's socket
+// folder (the one DefaultSocketPath is in), by name or through a symbolic
+// link to its parent: /var/run is one to /run on Linux, and to
+// /private/var/run on macOS.
+func isServiceFolder(dir string) bool {
+	svc := filepath.Dir(DefaultSocketPath)
+	if dir == svc {
+		return true
+	}
+	if filepath.Base(dir) != filepath.Base(svc) {
+		return false
+	}
+	a, err := os.Stat(filepath.Dir(dir))
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(filepath.Dir(svc))
+	return err == nil && os.SameFile(a, b)
 }
 
 // Path is the socket's path.

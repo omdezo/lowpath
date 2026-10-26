@@ -67,10 +67,9 @@ func TestSocketInstance(t *testing.T) {
 	}
 }
 
-// A socket file left by a killed copy is replaced.
 // The single-instance socket and the background service's API socket
 // (DefaultSocketPath) never share a folder, even for root with
-// XDG_RUNTIME_DIR=/run.
+// XDG_RUNTIME_DIR=/run, or a link to it (/var/run).
 func TestSocketInstanceNotInServiceFolder(t *testing.T) {
 	svcDir := filepath.Dir(DefaultSocketPath)
 	s := newSocketInstance("127.0.0.1:7878", filepath.Dir(svcDir), os.TempDir(), 0)
@@ -80,8 +79,24 @@ func TestSocketInstanceNotInServiceFolder(t *testing.T) {
 	if s.Path() == DefaultSocketPath {
 		t.Error("single-instance socket is the service's socket")
 	}
+
+	if _, err := os.Stat(filepath.Dir(svcDir)); err != nil {
+		t.Skipf("no %s here: %v", filepath.Dir(svcDir), err)
+	}
+	link := filepath.Join(t.TempDir(), "run")
+	if err := os.Symlink(filepath.Dir(svcDir), link); err != nil {
+		t.Skipf("no symbolic link: %v", err)
+	}
+	s = newSocketInstance("127.0.0.1:7878", link, os.TempDir(), 0)
+	if filepath.Dir(s.Path()) == filepath.Join(link, "lowpath") {
+		t.Errorf("single-instance socket %s is in the service's folder through a link", s.Path())
+	}
+	if !isServiceFolder(filepath.Join(link, "lowpath")) || isServiceFolder(filepath.Join(t.TempDir(), "lowpath")) {
+		t.Error("isServiceFolder doesn't tell the service's folder from another")
+	}
 }
 
+// A socket file left by a killed copy is replaced.
 func TestSocketInstanceStale(t *testing.T) {
 	dir := t.TempDir()
 	s := newSocketInstance("127.0.0.1:7878", dir, os.TempDir(), os.Getuid())
