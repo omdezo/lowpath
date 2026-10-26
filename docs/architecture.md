@@ -96,6 +96,10 @@ type FlowWatcher interface {
     // every process's UDP/TCP sends and receives (addresses, ports, size;
     // never payload) until Close; detect.ErrNeedAdmin / errors.ErrUnsupported
     Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
+    // stops a watch an earlier run left behind (once, at start-up, before
+    // the first Watch); (false, nil) when there is none or nothing outlives
+    // its process
+    Reset() (bool, error)
 }
 type Paths interface {
     DataDir() (string, error)   // settings, relays, learned servers
@@ -686,9 +690,17 @@ catalog entry or not:
   dport u16, sport u16` (addresses u32 or 16 bytes, all network byte order).
   No packet driver, so it also works next to anti-cheats that refuse
   WinDivert, and it can't break networking. The session opens while a known
-  game runs and closes 30 s after the last one exits; a session left by a
-  crashed Lowpath is stopped and replaced. Unelevated it fails with
-  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`), retried every 5 min. A
+  game runs and closes 30 s after the last one exits. A real-time session
+  outlives its process, so one left by a crashed Lowpath keeps the provider
+  enabled and its buffers filling: `FlowWatcher.Reset` stops it by name
+  (`ControlTraceW`, `EVENT_TRACE_CONTROL_STOP`) once at start-up, in the
+  background, and no watch opens until it has returned. No session, one
+  already stopping and missing rights are not errors (an elevated start
+  cleans up), and the session of this process's open watch is never
+  stopped. A leftover met later by `StartTraceW` (`ERROR_ALREADY_EXISTS`)
+  is stopped and replaced too. Unelevated, opening the session fails with
+  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`) and is retried every 5 min
+  (the reset is not retried). A
   session stopped from outside closes `FlowWatch.Done()`; the card then
   shows `watch.state: "error"` and the watch is retried after 30 s. The
   callback only looks the PID up in a map of game PIDs (refreshed every 2 s

@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
+	"time"
 
 	"lowpath/internal/capture"
 	"lowpath/internal/compat"
+	"lowpath/internal/detect"
 	"lowpath/internal/diag"
 	"lowpath/internal/owner"
 	"lowpath/internal/platform"
@@ -21,6 +23,7 @@ var (
 	_ platform.IconProvider    = (*Icons)(nil)
 	_ platform.Paths           = (*Paths)(nil)
 	_ platform.SystemInventory = (*Inventory)(nil)
+	_ platform.FlowWatcher     = (*Flows)(nil)
 )
 
 func TestFakeRoundTrip(t *testing.T) {
@@ -97,5 +100,56 @@ func TestFakeInventory(t *testing.T) {
 	}
 	if i, err := inv.DefaultRoute(); i != 3 || err != nil {
 		t.Errorf("DefaultRoute = %d, %v", i, err)
+	}
+}
+
+// Reset behaves like the ETW watcher's: it stops a left-behind watch once,
+// never the open one, and passes errors through.
+func TestFakeFlowsReset(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		leftover    bool
+		watching    bool
+		err         error
+		stopped     bool
+		leftoverNow bool
+	}{
+		{name: "nothing left behind"},
+		{name: "left behind", leftover: true, stopped: true},
+		{name: "own watch open", leftover: true, watching: true, leftoverNow: true},
+		{name: "no rights", leftover: true, err: detect.ErrNeedAdmin, leftoverNow: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := New(t.TempDir()).Flows
+			f.SetLeftover(c.leftover)
+			f.SetResetErr(c.err)
+			if c.watching {
+				if _, err := f.Watch(func(detect.FlowEvent) {}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stopped, err := f.Reset()
+			if stopped != c.stopped || !errors.Is(err, c.err) || f.Leftover() != c.leftoverNow || f.Resets() != 1 {
+				t.Fatalf("Reset = %v, %v; leftover %v, %d resets", stopped, err, f.Leftover(), f.Resets())
+			}
+			if c.watching && !f.Watching() {
+				t.Fatal("Reset closed the open watch")
+			}
+		})
+	}
+
+	f := New(t.TempDir()).Flows
+	release := f.HoldReset()
+	done := make(chan struct{})
+	go func() { f.Reset(); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("a held Reset returned")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	<-done
+	if f.Resets() != 1 {
+		t.Fatalf("%d resets", f.Resets())
 	}
 }

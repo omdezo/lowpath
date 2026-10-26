@@ -133,6 +133,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- A "Lowpath Flows" ETW session left behind by a Lowpath that crashed while
+  a game ran is stopped when Lowpath starts again, instead of keeping
+  Microsoft-Windows-Kernel-Network enabled and its buffers filling until
+  the next game. It happens in the background and never delays start-up;
+  without administrator rights it is skipped (#130).
 - Current server card: a lookup spoiled by a slow or busy RIPEstat (no
   network, or no ISP name or city) is asked again after 3 s instead of
   being kept for 1 min, or for 1 h when only a part was missing; a registry

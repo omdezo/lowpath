@@ -3,6 +3,7 @@ package app
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"lowpath/internal/platform/fakeplatform"
 )
@@ -41,5 +42,18 @@ func newRealServer(t *testing.T, fp *fakeplatform.Fake, opts ...func(*Config)) (
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { srv.Close(); ts.Close() })
+	// Tests tick right away; the first watch waits for start-up's reset.
+	waitReset(t, srv)
 	return ts, srv
+}
+
+// waitReset waits for start-up's flow reset to return; one that never does
+// fails the test instead of hanging the package.
+func waitReset(t *testing.T, srv *Server) {
+	t.Helper()
+	select {
+	case <-srv.current.resetDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("start-up's flow reset never returned")
+	}
 }

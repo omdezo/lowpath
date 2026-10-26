@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -390,5 +393,152 @@ func TestCurrentServerWatchEndedByTheOS(t *testing.T) {
 	tick(watchRetryError)
 	if r := watch(); r.Watch.State != "on" || fp.Flows.Starts() != 2 || !fp.Flows.Watching() {
 		t.Fatalf("retry: %+v, %d starts", r.Watch, fp.Flows.Starts())
+	}
+}
+
+// lockedLog collects log lines written from any goroutine.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.buf.String() }
+
+// A crashed Lowpath leaves its flow watch running (an ETW session outlives
+// its process). Start-up stops it once, before the first watch, whatever
+// Reset says, and the watch works the same afterwards.
+func TestCurrentServerResetsLeftoverWatchAtStartUp(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		leftover bool
+		err      error
+		log      string // what the log must say ("" = nothing about it)
+	}{
+		{name: "left behind", leftover: true, log: "level=INFO msg=\"stopped the flow watch an earlier run left behind\""},
+		{name: "nothing left behind"},
+		{name: "no rights", leftover: true, err: detect.ErrNeedAdmin, log: "level=DEBUG"},
+		{name: "other error", err: errors.New("ETW: stop the leftover session: example failure"), log: "level=WARN msg=\"stop a left-behind flow watch\""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fp := newFake(t)
+			fp.Flows.SetLeftover(c.leftover)
+			fp.Flows.SetResetErr(c.err)
+			var log lockedLog
+			_, srv := newRealServer(t, fp, func(cfg *Config) {
+				cfg.Locator, cfg.ServerLookup = &fakeLocator{}, &fakeLookup{}
+				cfg.Ping = func(netip.Addr, time.Duration) (time.Duration, error) { return 0, icmp.ErrTimeout }
+				cfg.Log = slog.New(slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			})
+			if fp.Flows.Resets() != 1 {
+				t.Fatalf("%d resets at start-up, want 1", fp.Flows.Resets())
+			}
+			if fp.Flows.Leftover() != (c.leftover && c.err != nil) {
+				t.Fatalf("leftover still there: %v", fp.Flows.Leftover())
+			}
+			got := ""
+			for _, line := range strings.Split(log.String(), "\n") {
+				if strings.Contains(line, "flow watch") && strings.Contains(line, "component=current-server") && !strings.Contains(line, "watching game flows") {
+					got += line
+				}
+			}
+			if (c.log == "") != (got == "") || !strings.Contains(got, c.log) {
+				t.Fatalf("log %q, want %q", got, c.log)
+			}
+
+			// Games come and go: the watch opens and closes as before, and
+			// nothing resets again.
+			clock := time.Now()
+			srv.current.now = func() time.Time { return clock }
+			tick := func(d time.Duration) {
+				clock = clock.Add(d)
+				srv.scanRunning()
+				srv.current.tick(srv.runningGames())
+			}
+			for round := 1; round <= 2; round++ {
+				fp.Games.SetRunning("cs2.exe")
+				tick(time.Second)
+				if !fp.Flows.Watching() || fp.Flows.Starts() != round {
+					t.Fatalf("round %d: watching %v, %d starts", round, fp.Flows.Watching(), fp.Flows.Starts())
+				}
+				fp.Games.SetRunning()
+				tick(time.Second)
+				tick(watchLinger)
+				if fp.Flows.Watching() {
+					t.Fatalf("round %d: the watch outlived the game", round)
+				}
+			}
+			if fp.Flows.Resets() != 1 {
+				t.Fatalf("%d resets, want 1", fp.Flows.Resets())
+			}
+		})
+	}
+}
+
+// Reset may wait on the OS. Start-up doesn't wait for it, and no watch
+// opens until it has returned, so it can't meet one of ours.
+func TestCurrentServerResetDoesNotHoldUpStartUp(t *testing.T) {
+	fp := newFake(t)
+	fp.Flows.SetLeftover(true)
+	release := fp.Flows.HoldReset()
+	t.Cleanup(release)
+	games, err := LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Store: openTestStore(t), Games: games, Platform: fp.Platform(), Log: discard, Session: testSession,
+		Locator: &fakeLocator{}, ServerLookup: &fakeLookup{},
+		Ping: func(netip.Addr, time.Duration) (time.Duration, error) { return 0, icmp.ErrTimeout },
+	}
+	// Built on its own goroutine: a NewServer that waited for the reset
+	// would otherwise hang the test instead of failing it.
+	type built struct {
+		srv *Server
+		err error
+	}
+	ch := make(chan built, 1)
+	go func() {
+		srv, err := NewServer(cfg)
+		ch <- built{srv, err}
+	}()
+	var srv *Server
+	select {
+	case b := <-ch:
+		if b.err != nil {
+			t.Fatal(b.err)
+		}
+		srv = b.srv
+	case <-time.After(5 * time.Second):
+		t.Fatal("NewServer waited for the reset")
+	}
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	var r currentResp
+	if code := call(t, ts, "GET", "/api/games/cs2/current-server", "", &r); code != 200 {
+		t.Fatalf("API while resetting: %d", code)
+	}
+
+	fp.Games.SetRunning("cs2.exe")
+	srv.scanRunning()
+	srv.current.tick(srv.runningGames())
+	if fp.Flows.Watching() || fp.Flows.Starts() != 0 {
+		t.Fatal("a watch opened before the reset returned")
+	}
+
+	release()
+	waitReset(t, srv)
+	if fp.Flows.Leftover() {
+		t.Fatal("the leftover is still there")
+	}
+	srv.current.tick(srv.runningGames())
+	if !fp.Flows.Watching() || fp.Flows.Starts() != 1 || fp.Flows.Resets() != 1 {
+		t.Fatalf("after the reset: watching %v, %d starts, %d resets", fp.Flows.Watching(), fp.Flows.Starts(), fp.Flows.Resets())
 	}
 }

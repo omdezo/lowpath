@@ -251,7 +251,10 @@ go test ./...
 - **Current server:** the Kernel-Network event parser for every flow event
   id, the ETW struct layouts against the SDK sizes, the unelevated
   `ERROR_ACCESS_DENIED` path (as administrator the same test watches its own
-  UDP packet to 192.0.2.1), the flow learner's server choice, the city check
+  UDP packet to 192.0.2.1, and stops a left-behind session once without
+  touching an open watch's), start-up's reset of a left-behind watch (once,
+  before the first watch, never holding up start-up, whatever it returns),
+  the flow learner's server choice, the city check
   against the speed of light in fibre, the live pinger (loss, jitter,
   unanswered and unsendable pings), and the card's whole flow on
   `fakeplatform`: game starts, flow events, lookup, ping, saving, game exit.
