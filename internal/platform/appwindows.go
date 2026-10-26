@@ -229,7 +229,11 @@ func (w *AppWindows) OpenBrowser(url string) error {
 // ShowError prints the error and shows it in the first dialog program
 // found; a desktop start has no terminal to read it in.
 func (w *AppWindows) ShowError(title, msg string) {
-	fmt.Fprintf(os.Stderr, "%s: %s\n", title, msg)
+	out := w.stderr
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "%s: %s\n", title, msg)
 	for _, c := range w.dialog(title, msg) {
 		path, err := w.x.LookPath(c.path)
 		if err != nil {
