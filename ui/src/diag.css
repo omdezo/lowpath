@@ -584,3 +584,313 @@
   padding: 0 8px;
   font-size: 12.5px;
 }
+
+/* Diagnostics: the route, part by part (Home / ISP / Lowpath / Server) */
+.segs {
+  container-type: inline-size;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.segs-end {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  flex: none;
+  width: 46px;
+  padding-top: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+
+.segs-list {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.seg {
+  --seg: var(--border-strong);
+  min-width: 0;
+  padding: 0 10px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.seg.s-good {
+  --seg: var(--good);
+}
+
+.seg.s-warn {
+  --seg: var(--warn);
+}
+
+.seg.s-bad {
+  --seg: var(--bad);
+}
+
+.seg.s-off {
+  border-style: dashed;
+  background: transparent;
+}
+
+.seg.blamed {
+  border-color: color-mix(in srgb, var(--bad) 60%, transparent);
+  background: color-mix(in srgb, var(--bad) 7%, var(--panel));
+}
+
+.seg-bar {
+  height: 4px;
+  margin: 0 -10px 8px;
+  background: var(--seg);
+}
+
+.seg.s-unknown .seg-bar,
+.seg.s-off .seg-bar {
+  background: repeating-linear-gradient(90deg, var(--border-strong) 0 6px, transparent 6px 10px);
+}
+
+.seg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.seg-head svg {
+  flex: none;
+  color: var(--seg);
+}
+
+.seg.s-unknown .seg-head svg,
+.seg.s-off .seg-head svg {
+  color: var(--faint);
+}
+
+.seg-head .name {
+  font-weight: 650;
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg-head .state {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--seg);
+}
+
+.seg.s-unknown .seg-head .state,
+.seg.s-off .seg-head .state {
+  color: var(--faint);
+}
+
+.seg-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.seg-nums small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.seg-sum {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.seg-src {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Four parts need about 170 px each; the Settings pane is narrower. */
+@container (max-width: 720px) {
+  .segs-end {
+    display: none;
+  }
+
+  .segs-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Diagnostics: live router pings */
+.gw-live {
+  flex: none;
+  margin-left: 0;
+  gap: 5px;
+  color: var(--faint);
+}
+
+.gw-live.on {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+}
+
+.gw-live .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: gw-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes gw-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gw-live .dot {
+    animation: none;
+  }
+}
+
+.gw-msg,
+.gw-note {
+  margin-top: 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.gw {
+  container-type: inline-size;
+}
+
+.gw-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.gw-stats .stat {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.gw-stats .stat .k {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.gw-stats .stat .v {
+  margin-top: 2px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.gw-stats .stat .v small {
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.gw-stats .stat .s {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+
+.gw-stats.t-bad .stat:nth-child(-n + 3) {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
+}
+
+@container (max-width: 520px) {
+  .gw-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.gw-chart {
+  margin: 12px 0 0;
+}
+
+.gw-chart svg {
+  display: block;
+  width: 100%;
+  height: 72px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.gw-chart .grid {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.gw-chart .bar {
+  fill: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.gw-chart .bar.spike {
+  fill: var(--warn);
+}
+
+.gw-chart .mid {
+  fill: var(--text);
+  opacity: 0.8;
+}
+
+.gw-chart .lost {
+  fill: var(--bad);
+}
+
+.gw-chart figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.gw-chart figcaption span:nth-child(2) {
+  text-align: center;
+  min-width: 0;
+}
+
+.gw-chart .lost-key {
+  color: var(--bad);
+  font-weight: 600;
+}

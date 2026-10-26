@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Download, Stethoscope } from "lucide-react";
 import { api } from "../api";
-import type { CheckStatus, Confidence, Diagnosis, VerdictCheck, VerdictId } from "../types";
+import type { CheckStatus, Confidence, Diagnosis, RouteSegment, VerdictCheck, VerdictId } from "../types";
 import "../diag.css";
 
 // The verdict: one plain answer to "why am I lagging?" built from the tests
@@ -40,7 +40,9 @@ function checkLabel(c: VerdictCheck): string {
 
 const CONFIDENCE: Record<Confidence, string> = { high: "High confidence", medium: "Medium confidence", low: "Low confidence" };
 
-export function Verdict() {
+// renderSegments draws the route part by part under the verdict (the
+// Diagnostics tab passes its segment bar).
+export function Verdict({ renderSegments }: { renderSegments?: (s: RouteSegment[]) => ReactNode } = {}) {
   const [d, setD] = useState<Diagnosis | null>(null);
   const [failed, setFailed] = useState(false);
   // The measurements under each check are long; they open on request.
@@ -119,6 +121,8 @@ export function Verdict() {
               </ul>
             )}
           </div>
+
+          {renderSegments && d.segments && d.segments.length > 0 && renderSegments(d.segments)}
 
           <ul className="verdict-checks" aria-label="Checks">
             {(d.checks ?? []).map((c) => (

@@ -382,8 +382,45 @@ async function main() {
     await page.getByRole("tab", { name: "Diagnostics" }).click();
     await page.getByRole("button", { name: "Run test" }).waitFor();
     await shot(page, "diagnostics", "Settings → Diagnostics: the verdict with nothing measured yet");
+
+    // The router pinger runs while the tab is open (20 Hz), and its card
+    // shows numbers, or "—" and why (a router that ignores ping, no rights).
+    let gw;
+    for (let i = 0; i < 40; i++) {
+      gw = (await api(page, "GET", "/diag/gateway")).body;
+      if (gw && gw.state !== "measuring" && gw.state !== "idle" && (gw.state !== "on" || gw.stats?.sent >= 60)) break;
+      await page.waitForTimeout(250);
+    }
+    const gs = gw?.stats;
+    check(
+      "Router pinger runs while Diagnostics is open",
+      gw?.running && (gw.state === "on" ? gs?.sent >= 60 && gs.p50_ms != null && gw.rate_hz >= 2 && gw.series?.length > 0 : !!gw?.message),
+      gw
+        ? gw.state === "on"
+          ? `${gw.rate_hz} Hz on ${gw.link || "unknown link"}: ${gs.sent} sent, ${gs.lost} lost, median ${gs.p50_ms?.toFixed?.(1)} ms, p95 ${gs.p95_ms?.toFixed?.(1)} ms, ${gs.spikes} spikes`
+          : `${gw.state}: ${gw.message}`
+        : "no answer",
+    );
+    const gwCard = page.locator('section[aria-label="Router pings"]');
+    const gwShown = gw?.state === "on" ? await gwCard.locator(".gw-stats .stat").count() : await gwCard.locator(".gw-msg").count();
+    check("Router pings card shows the numbers or the reason", gwShown > 0, `${gwShown} ${gw?.state === "on" ? "stats" : "message"}`);
+    // The verdict refreshes every 4 s; then Home carries the router pings.
+    if (gw?.state === "on") await page.locator('.seg[data-segment="home"]:not([data-status="unknown"])').waitFor({ timeout: 6000 }).catch(() => {});
+    const segs = await page.locator(".segs .seg").evaluateAll((els) => els.map((e) => `${e.dataset.segment}:${e.dataset.status}`));
+    check(
+      "Route bar: Home, ISP, Lowpath relay and Game server; Home from the router pings",
+      segs.length === 4 && segs[0].startsWith("home:") && segs[3].startsWith("server:") && (gw?.state !== "on" || !segs[0].endsWith(":unknown")),
+      segs.join(" "),
+    );
+    await scrollToStart(page, ".segs");
+    await shot(page, "route-segments", "Diagnostics: the route part by part, Home from the live router pings");
+    await scrollToStart(page, 'section[aria-label="Router pings"]');
+    await shot(page, "router-pings", `Router pings: ${gw?.state === "on" ? `${gw.rate_hz} a second, the last minute charted` : gw?.state ?? "—"}`);
+    await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await page.getByRole("button", { name: "Run test" }).click();
     await page.locator(".bloat-live", { hasText: "Downloading" }).waitFor({ timeout: 15000 }).catch(() => {});
+    const gwBloat = (await api(page, "GET", "/diag/gateway")).body;
+    check("Router pinger pauses while the bufferbloat test loads the line", gwBloat?.state === "paused" && !gwBloat.running, gwBloat?.state);
     await page.waitForTimeout(1500);
     await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-running", "Bufferbloat test running: download phase, live ping and load");

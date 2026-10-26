@@ -29,7 +29,7 @@ func newVerdicts(ns diag.NetStats) *verdicts {
 // evidence gathers what the server knows now. The trace is redacted, so
 // every diagnosis built from it can be shared.
 func (s *Server) evidence(now time.Time) diag.Evidence {
-	ev := diag.Evidence{At: now, Bloat: s.store.Bloat()}
+	ev := diag.Evidence{At: now, Bloat: s.store.Bloat(), Gateway: s.gateway.Sample()}
 	switch r, err := s.verdict.net.DefaultRoute(); {
 	case err == nil:
 		ev.Link = &r

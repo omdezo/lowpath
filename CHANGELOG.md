@@ -9,6 +9,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Router pinger and segmented Home / ISP / Lowpath / Game server bar in
+  Settings → Diagnostics: the default gateway is pinged 20 times a second
+  while the tab is open and during a boost, with loss, median, p99, spikes
+  and a 60-second chart, and the verdict uses it; a router that stops
+  answering counts as loss, not as one that ignores ping (#10).
 - Desktop shell on Linux and macOS: the UI opens in an app window
   (WebKitGTK or a Chromium app window on Linux, WKWebView on macOS, the
   default browser otherwise), and closing it quits and stops the boost. A

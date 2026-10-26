@@ -709,6 +709,7 @@ func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, err
 func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 func NewVerdictEngine(VerdictConfig) *VerdictEngine; (*VerdictEngine).Diagnose(Evidence) Diagnosis
 func (DiagnosisReport) Text() string
+func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View() GatewayView, Sample() *GatewaySample
 ```
 
 - **NetStats.** Windows: `GetBestInterfaceEx` (toward 1.1.1.1, else
@@ -719,6 +720,38 @@ func (DiagnosisReport) Text() string
   through an `fs.FS` so the parser is tested on every OS. macOS: routing
   sysctl `NET_RT_DUMP` and `NET_RT_IFLIST2` (`if_data64`). Other OSes:
   `ErrUnsupported`.
+- **Gateway pinger** (`gateway.go`, roadmap §3.6): ICMP echo to the
+  default route's gateway every 50 ms (20 Hz), 1 s timeout, each echo in
+  its own goroutine (at most 40 in flight; `IcmpSendEcho` blocks a thread),
+  so a silent router never slows the loop. An IPv6-only router (usually
+  link-local) is pinged with `icmp.PingTTL` (hop limit 64) and the
+  interface index as its zone. It runs while `Touch` was called in the last
+  15 s (the Diagnostics tab polls) or `Hold` says a boost runs, and stops
+  while `Pause` names a reason (the bufferbloat test, which pings the router
+  itself while it fills the line). The route is read again every 2 s: a new
+  interface or gateway (Wi-Fi to Ethernet) starts the series over and says
+  so, and so does a tick more than 2 s late (the PC slept: pings in flight
+  then time out without the router ever seeing them). The gap is the larger
+  of the monotonic and the wall-clock difference, since Go's monotonic
+  clock stops during suspend on Linux and macOS. Numbers cover the
+  last 60 s of pings old enough to have their answer (sent more than 1 s
+  ago): loss, median, p95, p99 (only from 100 replies), min, max, jitter
+  (mean change between consecutive replies), spikes (replies ≥ 100 ms,
+  roadmap L9) and the longest run of lost pings; plus one entry per second
+  for the chart. Not loss: a router that answers no ping at all
+  (`no_reply`; one that answered earlier in the series and then lost every
+  ping is real loss, `on` with a message, and the sample is `stopped`), pings that can't be sent (`no_permission`: on Linux root,
+  `CAP_NET_RAW` or `net.ipv4.ping_group_range`; `cant_send`), no router
+  address (`no_gateway`, a VPN or point-to-point link), no route
+  (`offline`). A rate-limiting router is told apart from Wi-Fi loss by the
+  shape of the loss: over ≥ 10 whole seconds, ≥ 10% lost, loss in ≥ 90% of
+  the seconds and the same number of replies (±1) every second, none
+  without any. The pinger then drops to 2 Hz and starts over; still limited
+  there, its loss is flagged `limited` and the verdict doesn't count it.
+  The latest series (≥ 20 pings) is the verdict's `Evidence.Gateway`, with
+  the link it ran on, and it stays after the pinger stops: router pings
+  from another adapter or link kind are ignored, so Wi-Fi then Ethernet
+  compares the two.
 - **Bufferbloat test** (on demand, 20 s): 5 s idle, 5 s download, 5 s upload,
   5 s recovery; 10 Hz probes to an internet target and to the gateway, 1 s
   timeout (later = lost). The internet target is picked first (3 probes
@@ -814,7 +847,24 @@ func (DiagnosisReport) Text() string
   older than 24 h is ignored; a bufferbloat test or route trace from another
   adapter or link kind is ignored (traces record the connection they ran
   on). With no default route at all (`ErrNoRoute`) the verdict is
-  `offline` (high), ahead of every rule. The app builds the evidence from what it stored
+  `offline` (high), ahead of every rule. Router pings come from the
+  gateway pinger when it has a series on this connection, else from the
+  bufferbloat test's idle phase.
+  **Segments** (`segments.go`): every diagnosis carries the route part by
+  part, `home`, `isp`, `lowpath`, `server`, each `good` / `warn` / `bad` /
+  `unknown` / `off` (no relay in use) with its RTT and loss (null when not
+  measured), what measured it and a summary, and `blamed` on the verdict's
+  segment. Home: router pings (median, loss; loss null when the router
+  limits replies), `bad` when the home or line check found its problem,
+  `warn` for spikes without loss. ISP: a route trace on this connection
+  (time from this PC to the destination; the loss the ISP check cites when
+  loss starts past home, else what persists from the first hop past home,
+  null when loss starts at home),
+  else the bufferbloat test's idle pings to its internet target; status
+  from the ISP check. Lowpath: the relay leg of the boost or route
+  analysis. Game server: the relay's own leg to the server, else the direct
+  ping; status from the server check. Offline, Home is `bad` and blamed
+  with no numbers (router pings from before say nothing about now). The app builds the evidence from what it stored
   (the trace already redacted) and measures nothing itself, so
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.
@@ -900,7 +950,8 @@ polls while `state` is `loading` or `pinging` is true.
 | POST | /api/diag/trace | `{target_id}` or `{host}`, `mode: "icmp"\|"udp"` | 202 + the same; 400 `bad_target`; 409 `trace_running` or `bloat_running` |
 | DELETE | /api/diag/trace | | stops a running trace and keeps what it measured; the same view |
 | GET | /api/diag/trace/report | | the last trace as a text table (`lowpath-route-trace.txt`); 404 `no_trace` |
-| GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}]}`; measures nothing, answers at once |
+| GET | /api/diag/gateway | | `GatewayView{state: "idle"\|"measuring"\|"on"\|"paused"\|"no_gateway"\|"offline"\|"no_reply"\|"no_permission"\|"cant_send"\|"unsupported", message, note, running, rate_hz, gateway, interface, link, since, stats: null \| {window_s, sent, lost, loss_pct, p50_ms, p95_ms, p99_ms, min_ms, max_ms, jitter_ms, spikes, max_loss_run, limited}, series: [{t, sent, lost, p50_ms, max_ms}]}`; asking keeps the pinger running for 15 s |
+| GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}], segments: [{id: "home"\|"isp"\|"lowpath"\|"server", name, status: "good"\|"warn"\|"bad"\|"unknown"\|"off", rtt_ms, loss_pct, source, summary, blamed}]}`; measures nothing, answers at once |
 | GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, routers' host names left out |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
@@ -940,6 +991,15 @@ prints that URL to stderr only, never to the log.
   egress" select), Delete, Test, "Use loopback test relay" toggle with an
   explanation, and a short "Deploy your own relay" help with the
   `deploy-relay.ps1` command.
+- Settings → **Diagnostics** (`Diagnostics.tsx`): the verdict, with the
+  route as four segments under it (Home, ISP, Lowpath relay, Game server:
+  status, RTT and loss or "—", the summary and what measured it; the blamed
+  one outlined), then **Router pings** (polls `/api/diag/gateway` every
+  1 s, which keeps the pinger going): median, 99% (95% before 100 replies),
+  loss with the longest run, spikes, jitter, and a one-minute chart (one bar
+  per second up to the slowest reply on a square-root scale to 100 ms, the
+  median as a tick, a red cap on seconds with loss); "—" and the reason
+  when there are no numbers; then the bufferbloat test and the route trace.
 - Settings → Network: **Your connection** ("<city>, <country> · <ISP>
   (AS<n>)", public IPv4 and IPv6, prefix, Refresh; "—" and the reason when
   unknown), looked up when the pane opens. Then capture mode (Route —
