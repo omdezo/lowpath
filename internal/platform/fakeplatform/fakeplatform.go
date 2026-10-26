@@ -262,6 +262,8 @@ type Games struct {
 	exes    map[string]string
 	libs    []string
 	roots   []string
+	wine    []string
+	install []string
 }
 
 // SetRunning replaces the running processes (image names, any case).
@@ -290,6 +292,14 @@ func (g *Games) SetSteam(libraries, roots []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.libs, g.roots = slices.Clone(libraries), slices.Clone(roots)
+}
+
+// SetWine sets the Wine prefixes' drive_c folders and the launcher install
+// folders.
+func (g *Games) SetWine(driveC, installs []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.wine, g.install = slices.Clone(driveC), slices.Clone(installs)
 }
 
 func (g *Games) Running() map[string]bool {
@@ -325,6 +335,18 @@ func (g *Games) SteamRoots() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.roots)
+}
+
+func (g *Games) WinePrefixes() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.wine)
+}
+
+func (g *Games) LauncherInstalls() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.install)
 }
 
 // Icons hands out icons the test registered per program path.
