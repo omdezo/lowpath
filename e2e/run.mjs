@@ -643,8 +643,12 @@ async function main() {
       const rt = tr?.result;
       if (tr?.running) return { why: "still running after 30 s" };
       if (tr?.error) return { why: `failed: ${tr.error}` };
-      if (!rt || rt.started_at === before || !(isoMs(rt.started_at) >= isoMs(post.body?.progress?.started_at))) {
-        return { why: `an older trace: ${rt?.mode} to ${rt?.target} from ${rt?.started_at}, this one started ${post.body?.progress?.started_at}` };
+      // progress is null when the new trace ended before the POST answered
+      // (one whose first probe can't be sent ends at once): then only the
+      // started_at above tells the traces apart.
+      const since = post.body?.progress?.started_at;
+      if (!rt || rt.started_at === before || isoMs(rt.started_at) < isoMs(since)) {
+        return { why: `an older trace: ${rt?.mode} to ${rt?.target} from ${rt?.started_at}, this one started ${since ?? "before the POST answered"}` };
       }
       return { rt };
     };
