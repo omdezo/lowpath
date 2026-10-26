@@ -68,7 +68,7 @@ export function TrafficCard({ gameName, processes, servers, capture, now }: Prop
               k="Route fixes"
               v={capture.route_repairs ?? 0}
               bad
-              title="Times another program (a network manager, VPN or firewall) removed Lowpath's routing rule and Lowpath put it back; the game's packets took your normal connection for up to a second each time"
+              title="Times another program (a network manager, VPN or firewall) removed Lowpath's routing (its rule or firewall table) and Lowpath put it back; the game's packets took your normal connection for up to a second each time"
             />
           )}
         </div>
