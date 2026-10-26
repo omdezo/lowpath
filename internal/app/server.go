@@ -145,6 +145,8 @@ type Server struct {
 	inService bool
 	// serviceNote: see Config.ServiceNote.
 	serviceNote string
+	// analyzeWait: see the constant; tests shorten it.
+	analyzeWait time.Duration
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -173,6 +175,10 @@ type analysisResult struct {
 	DirectKnown bool                    `json:"direct_known"`
 	Server      string                  `json:"server,omitempty"` // what the baseline pinged (route mode's last server)
 	Paths       map[string]engine.Stats `json:"paths"`
+	// Loaded: the bufferbloat test filled the line during the
+	// measurement, so its pings are higher than the routes' own; it
+	// doesn't seed a boost's route ranking.
+	Loaded bool `json:"loaded,omitempty"`
 }
 
 type mappingResult struct {
@@ -180,6 +186,28 @@ type mappingResult struct {
 	Relays int       `json:"relays"`
 	Best   string    `json:"best"`
 	BestMS float64   `json:"best_ms"`
+	Loaded bool      `json:"loaded,omitempty"` // as analysisResult.Loaded
+}
+
+// analyzeWait is how long Analyze and the route mapping wait for a running
+// bufferbloat test (about 22 s: target pick and four 5 s phases) before
+// measuring anyway and saying the line was loaded.
+const analyzeWait = 30 * time.Second
+
+// measureUnloaded runs measure once no bufferbloat test fills the line: a
+// test fills it on purpose, and routes measured under it look as slow as a
+// full line makes them. It waits for a running test (up to s.analyzeWait)
+// and reports whether the test loaded the line while measure ran anyway (it
+// still ran on, or one started meanwhile). ok is false when ctx ended
+// first.
+func (s *Server) measureUnloaded(ctx context.Context, measure func()) (loaded, ok bool) {
+	s.bloat.wait(ctx, s.analyzeWait)
+	if ctx.Err() != nil {
+		return false, false
+	}
+	m := s.bloat.mark()
+	measure()
+	return s.bloat.loadedSince(m), true
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -247,10 +275,11 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:        newLineWatch(cfg.NetStats, diag.NewConnWatch(cfg.Platform.Conns, cfg.Platform.Owners.ProcessNames), lineRate(cfg.Store.Bloat())),
+		line:        newLineWatch(cfg.NetStats, diag.NewConnWatch(cfg.Platform.Conns, cfg.Platform.Owners.ProcessNames, nil), lineRate(cfg.Store.Bloat())),
 		verdict:     newVerdicts(cfg.NetStats),
 		wifi:        newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
 		marker:      cfg.Marker,
+		analyzeWait: analyzeWait,
 		inService:   cfg.InService,
 		serviceNote: cfg.ServiceNote,
 	}
@@ -602,13 +631,20 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		s.status = "analyzing"
 	}
 	s.mu.Unlock()
-	res, err := engine.Analyze(r.Context(), paths, opts, 2500*time.Millisecond)
+	var res engine.Analysis
+	var err error
+	loaded, ok := s.measureUnloaded(r.Context(), func() {
+		res, err = engine.Analyze(r.Context(), paths, opts, 2500*time.Millisecond)
+	})
+	if !ok {
+		err = r.Context().Err()
+	}
 	s.mu.Lock()
 	if s.status == "analyzing" {
 		s.status = "idle"
 	}
 	if err == nil {
-		a := analysisResult{At: time.Now(), Direct: res.Direct, DirectKnown: res.DirectKnown, Paths: res.Paths}
+		a := analysisResult{At: time.Now(), Direct: res.Direct, DirectKnown: res.DirectKnown, Paths: res.Paths, Loaded: loaded}
 		if opts.Server.IsValid() {
 			a.Server = opts.Server.String()
 		}
@@ -645,12 +681,19 @@ func (s *Server) handleMapping(w http.ResponseWriter, r *http.Request) {
 	if s.net.Demo() {
 		opts = s.baseline(s.games[0].ID)
 	}
-	res, err := engine.Analyze(r.Context(), specs, opts, 1200*time.Millisecond)
+	var res engine.Analysis
+	var err error
+	loaded, ok := s.measureUnloaded(r.Context(), func() {
+		res, err = engine.Analyze(r.Context(), specs, opts, 1200*time.Millisecond)
+	})
+	if !ok {
+		err = r.Context().Err()
+	}
 	if err != nil {
 		writeErr(w, 500, "mapping_failed", err)
 		return
 	}
-	m := &mappingResult{At: time.Now(), Relays: len(specs)}
+	m := &mappingResult{At: time.Now(), Relays: len(specs), Loaded: loaded}
 	for _, p := range specs {
 		st := res.Paths[p.ID]
 		if st.Up && (m.Best == "" || st.RTT < m.BestMS) {

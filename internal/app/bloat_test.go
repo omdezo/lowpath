@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -395,5 +396,180 @@ func TestLineWatchUnreadableCounters(t *testing.T) {
 	}
 	if st := w.view(); st == nil || st.Watching || st.Active || !strings.Contains(st.Reason, "counters") {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+// Analyze started during the bufferbloat test waits for it: routes measured
+// on a line the test fills would look slow, and the next boost would rank
+// its routes by them.
+func TestAnalyzeWaitsForTheBloatTest(t *testing.T) {
+	line := newFakeHomeLine()
+	ts, srv := newDemoBloatServer(t, line)
+	srv.bloat.tune = fastBloat
+	csrf := map[string]string{"X-Lowpath": "1"}
+	if code, body := do(t, ts, "POST", "/api/diag/bloat", "", csrf); code != 202 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	code, body := do(t, ts, "POST", "/api/games/cs2/analyze", "", csrf)
+	if code != 200 || strings.Contains(body, `"loaded"`) {
+		t.Fatalf("analyze: %d %s", code, body)
+	}
+	if srv.bloat.isRunning() || srv.store.Bloat() == nil {
+		t.Fatal("analyze answered before the test finished")
+	}
+	srv.mu.Lock()
+	seed := srv.seedLocked("cs2")
+	srv.mu.Unlock()
+	if len(seed) == 0 {
+		t.Error("an analysis after the test must seed the next boost")
+	}
+	// The startup route mapping waits the same way.
+	if code, body := do(t, ts, "POST", "/api/diag/bloat", "", csrf); code != 202 {
+		t.Fatalf("start again: %d %s", code, body)
+	}
+	if code, body := do(t, ts, "POST", "/api/mapping", "", csrf); code != 200 || strings.Contains(body, `"loaded"`) || srv.bloat.isRunning() {
+		t.Fatalf("mapping: %d %s", code, body)
+	}
+}
+
+// A test still filling the line after the wait: Analyze measures anyway,
+// says so, and its numbers don't seed a boost.
+func TestAnalyzeDuringALoadedPhaseIsFlagged(t *testing.T) {
+	line := newFakeHomeLine()
+	ts, srv := newDemoBloatServer(t, line)
+	srv.analyzeWait = 50 * time.Millisecond
+	srv.bloat.tune = func(c *diag.BloatConfig) { c.Phase = 2 * time.Second } // the analysis takes 2.5 s
+	csrf := map[string]string{"X-Lowpath": "1"}
+	if code, body := do(t, ts, "POST", "/api/diag/bloat", "", csrf); code != 202 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for !line.loaded.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the test never loaded the line")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	code, body := do(t, ts, "POST", "/api/games/cs2/analyze", "", csrf)
+	if code != 200 || !strings.Contains(body, `"loaded":true`) {
+		t.Fatalf("analyze under load: %d %s", code, body)
+	}
+	srv.mu.Lock()
+	seed := srv.seedLocked("cs2")
+	srv.mu.Unlock()
+	if seed != nil {
+		t.Errorf("a loaded analysis seeded the boost: %v", seed)
+	}
+	srv.bloat.stop("test over")
+}
+
+func TestLoadMarks(t *testing.T) {
+	b := &bloatRunner{}
+	idle := b.mark()
+	if b.loadedSince(idle) {
+		t.Fatal("no test: loaded")
+	}
+	// A loaded phase that began and ended during the measurement.
+	b.loads, b.loading = 1, false
+	if !b.loadedSince(idle) {
+		t.Error("a whole loaded phase in between: not loaded")
+	}
+	// Loading when it started, or when it ended.
+	b.loading = true
+	during := b.mark()
+	if !b.loadedSince(during) || !b.loadedSince(loadMark{loads: 1}) {
+		t.Error("loading at either end: not loaded")
+	}
+	b.loading = false
+	if b.loadedSince(loadMark{loads: 1}) {
+		t.Error("idle at both ends with no phase between: loaded")
+	}
+	// wait returns at once without a test, and gives up on ctx.
+	if !b.wait(context.Background(), time.Hour) {
+		t.Error("wait without a test")
+	}
+	b.running, b.finished = true, make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if b.wait(ctx, time.Hour) {
+		t.Error("wait with a cancelled request: reported no test")
+	}
+	if b.wait(context.Background(), time.Millisecond) {
+		t.Error("wait past max: reported no test")
+	}
+	close(b.finished)
+	if !b.wait(context.Background(), time.Hour) {
+		t.Error("wait for a finished test")
+	}
+}
+
+// fakeTCP is the per-connection table a line watch test plays.
+type fakeTCP struct {
+	conns  []diag.TCPConn
+	owners map[uint64]uint32
+}
+
+func (f *fakeTCP) TCPConns() ([]diag.TCPConn, error) { return slices.Clone(f.conns), nil }
+func (f *fakeTCP) Owners(c []diag.TCPConn) map[uint64]uint32 {
+	out := map[uint64]uint32{}
+	for _, x := range c {
+		if pid, ok := f.owners[x.ID]; ok {
+			out[x.ID] = pid
+		}
+	}
+	return out
+}
+
+// With per-connection counters the watch takes LAN traffic out before the
+// detector sees it and names the program behind a download.
+func TestLineWatchLeavesLANOutAndNamesTheDownloader(t *testing.T) {
+	nic := &fakeCounters{at: time.Unix(1000, 0)}
+	tcp := &fakeTCP{owners: map[uint64]uint32{1: 300}}
+	lan := diag.LinkAddrs{Iface: []netip.Prefix{netip.MustParsePrefix("192.0.2.10/24")}, Local: []netip.Addr{netip.MustParseAddr("192.0.2.10")}}
+	split := diag.NewConnWatch(tcp, func() (map[uint32]string, error) { return map[uint32]string{300: "steam"}, nil },
+		func(int) (diag.LinkAddrs, error) { return lan, nil })
+	w := newLineWatch(nic, split, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8})
+	started := time.Unix(999, 0)
+	snap := &engine.Snapshot{}
+	var steam, nas uint64
+	step := func(rtt float64, internetMbps, lanMbps float64) *diag.PassiveState {
+		nic.at = nic.at.Add(time.Second)
+		steam += uint64(internetMbps * 1e6 / 8)
+		nas += uint64(lanMbps * 1e6 / 8)
+		nic.rx += uint64(internetMbps*1e6/8) + uint64(lanMbps*1e6/8)
+		nic.tx += 10_000
+		tcp.conns = []diag.TCPConn{
+			{ID: 1, Local: netip.MustParseAddrPort("192.0.2.10:50001"), Remote: netip.MustParseAddrPort("203.0.113.5:443"), Received: steam},
+			{ID: 2, Local: netip.MustParseAddrPort("192.0.2.10:50002"), Remote: netip.MustParseAddrPort("192.0.2.20:445"), Received: nas},
+		}
+		snap.After = engine.Stats{RTT: rtt, Up: true, Samples: 50}
+		w.tick(nic.at, lineInput{snap: snap, started: started})
+		return w.view()
+	}
+	for range 10 {
+		step(30, 0.5, 0)
+	}
+	var st *diag.PassiveState
+	for range 8 { // a gigabit NAS copy while the game's ping rises for another reason
+		st = step(90, 0.5, 900)
+	}
+	if st.Active || st.LANDownMbps == nil || *st.LANDownMbps < 899 || *st.OtherDownMbps > 1 {
+		t.Fatalf("LAN copy flagged or not left out: %+v", st)
+	}
+	for range 10 {
+		step(30, 0.5, 0)
+	}
+	for range 8 { // Steam downloads at 90 Mbit/s
+		if st = step(95, 90, 0); st.Active {
+			break
+		}
+	}
+	if !st.Active || st.Top == nil || st.Top.Name != "steam" || st.Top.DownMbps < 89 {
+		t.Fatalf("download not flagged with its program: %+v (top %+v)", st, st.Top)
+	}
+	// The session ends: the split starts over with the next one.
+	w.tick(nic.at.Add(time.Second), lineInput{})
+	if w.view() != nil {
+		t.Fatal("state after the session")
 	}
 }

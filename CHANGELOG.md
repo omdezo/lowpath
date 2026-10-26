@@ -9,6 +9,15 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Passive line-load detector: without a bufferbloat test, the line rate is
+  now the most traffic seen in the last 10 minutes instead of since start,
+  so a fast LAN copy no longer hides later downloads until a restart, and a
+  boost suggests running the test once. On Linux, traffic to LAN peers is
+  left out of "other traffic" and the banner names the program filling the
+  line (per-connection counters from sock_diag, no root needed). Analyze
+  and the startup route mapping wait for a running bufferbloat test, and a
+  measurement the test still loaded says so and doesn't seed the boost
+  (#116).
 - Router pinger and segmented Home / ISP / Lowpath / Game server bar in
   Settings → Diagnostics: the default gateway is pinged 20 times a second
   while the tab is open and during a boost, with loss, median, p99, spikes

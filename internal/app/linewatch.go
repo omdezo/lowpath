@@ -46,7 +46,7 @@ type lineWatch struct {
 // newLineWatch watches ns; split may be nil (no per-connection counters).
 func newLineWatch(ns diag.NetStats, split *diag.ConnWatch, line diag.LineRate) *lineWatch {
 	if split == nil {
-		split = diag.NewConnWatch(nil, nil)
+		split = diag.NewConnWatch(nil, nil, nil)
 	}
 	return &lineWatch{net: ns, det: diag.NewPassiveDetector(diag.PassiveConfig{}, line), split: split, meter: diag.NewMeter()}
 }

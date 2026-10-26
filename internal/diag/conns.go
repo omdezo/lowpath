@@ -19,7 +19,8 @@ type TCPConn struct {
 	Local, Remote netip.AddrPort
 	// Sent is the payload the peer acknowledged, Received the payload
 	// received in order (RFC 4898 HCThruOctetsAcked and
-	// HCThruOctetsReceived): headers and retransmissions aren't counted.
+	// HCThruOctetsReceived): headers and retransmissions aren't counted,
+	// the SYN and FIN count one each.
 	Sent, Received uint64
 	// Ref is what Owners needs to find the process holding the connection
 	// (Linux: the socket inode; 0 when no process holds it any more).
@@ -199,9 +200,13 @@ type ConnWatch struct {
 }
 
 // NewConnWatch reads conns; names maps PIDs to program names
-// (owner.Resolver.ProcessNames). A nil conns gives no samples.
-func NewConnWatch(conns ConnStats, names func() (map[uint32]string, error)) *ConnWatch {
-	return &ConnWatch{conns: conns, names: names, addrs: InterfaceAddrs, off: conns == nil}
+// (owner.Resolver.ProcessNames) and addrs reads an interface's addresses
+// (nil: InterfaceAddrs). A nil conns gives no samples.
+func NewConnWatch(conns ConnStats, names func() (map[uint32]string, error), addrs func(index int) (LinkAddrs, error)) *ConnWatch {
+	if addrs == nil {
+		addrs = InterfaceAddrs
+	}
+	return &ConnWatch{conns: conns, names: names, addrs: addrs, off: conns == nil}
 }
 
 // Reset forgets the last reading (a session ended; the next starts over).

@@ -45,7 +45,7 @@ func TestNativeIsComplete(t *testing.T) {
 		if err != nil && !errors.Is(err, errors.ErrUnsupported) {
 			t.Errorf("TCP connections on linux: %v", err)
 		}
-		_ = conns
+		t.Logf("TCP connections on linux: %d (%v)", len(conns), err)
 	default:
 		if !errors.Is(err, errors.ErrUnsupported) || conns != nil {
 			t.Errorf("TCP connections on %s: %d, %v; want errors.ErrUnsupported", runtime.GOOS, len(conns), err)

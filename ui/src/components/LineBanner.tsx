@@ -15,6 +15,8 @@ export function LineBanner({ line }: { line: LineState }) {
   const up = line.direction === "upload";
   const other = up ? line.other_up_mbps : line.other_down_mbps;
   const cap = up ? line.line_up_mbps : line.line_down_mbps;
+  const top = line.top;
+  const topMbps = top ? (up ? top.up_mbps : line.direction === "both" ? top.down_mbps + top.up_mbps : top.down_mbps) : null;
   return (
     <div className="banner banner-warn" role="alert">
       <Activity size={16} style={{ flex: "none" }} />
@@ -29,7 +31,15 @@ export function LineBanner({ line }: { line: LineState }) {
             of <span className="num">{fmtMbps(cap)}</span>
           </>
         )}{" "}
-        Mbit/s. Pause game updates, downloads, cloud backups or streams on this PC or others on your network.
+        Mbit/s.{" "}
+        {top ? (
+          <>
+            Most of it is <b>{top.name}</b> on this PC (<span className="num">{fmtMbps(topMbps)}</span> Mbit/s): pause it, or downloads, cloud backups or streams on
+            other devices on your network.
+          </>
+        ) : (
+          "Pause game updates, downloads, cloud backups or streams on this PC or others on your network."
+        )}
       </span>
     </div>
   );
