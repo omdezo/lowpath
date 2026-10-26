@@ -13,6 +13,8 @@ import (
 
 	"lowpath/internal/capture"
 	"lowpath/internal/gamesim"
+	"lowpath/internal/owner"
+	"lowpath/internal/platform/fakeplatform"
 )
 
 type bootstrap struct {
@@ -24,7 +26,8 @@ type bootstrap struct {
 }
 
 func TestBootstrapReportsPlatformAndRelays(t *testing.T) {
-	fc := &fakeCapturer{avail: capture.ErrNeedAdmin}
+	fc := newFake(t)
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
 	ts, _ := newRealServer(t, fc)
 	var b bootstrap
 	if code := call(t, ts, "GET", "/api/bootstrap", "", &b); code != 200 {
@@ -70,7 +73,7 @@ func TestBootstrapReportsPlatformAndRelays(t *testing.T) {
 }
 
 func TestSettingsValidateCaptureMode(t *testing.T) {
-	ts, _ := newRealServer(t, &fakeCapturer{})
+	ts, _ := newRealServer(t, newFake(t))
 	if code := call(t, ts, "PUT", "/api/settings", `{"capture_mode":"tunnel"}`, nil); code != 400 {
 		t.Errorf("unknown capture mode: got %d, want 400", code)
 	}
@@ -81,7 +84,7 @@ func TestSettingsValidateCaptureMode(t *testing.T) {
 }
 
 func TestRelayCRUDValidation(t *testing.T) {
-	ts, srv := newRealServer(t, &fakeCapturer{})
+	ts, srv := newRealServer(t, newFake(t))
 	bad := map[string]string{
 		"empty address":   `{"addr":""}`,
 		"bad port":        `{"addr":"203.0.113.10:70000"}`,
@@ -152,7 +155,7 @@ func TestRelayCRUDValidation(t *testing.T) {
 
 func TestImportedRelaysAreReadOnly(t *testing.T) {
 	imp := &RelayImport{Relays: []ImportedRelay{{ID: "ams", Label: "Amsterdam", Addr: netip.MustParseAddrPort("192.0.2.1:40000"), Key: "k"}}}
-	ts, srv := newRealServer(t, &fakeCapturer{}, func(c *Config) {
+	ts, srv := newRealServer(t, newFake(t), func(c *Config) {
 		r, err := NewRelayNetwork(c.Store, imp, discard)
 		if err != nil {
 			t.Fatal(err)
@@ -174,7 +177,7 @@ func TestImportedRelaysAreReadOnly(t *testing.T) {
 }
 
 func TestTestRelay(t *testing.T) {
-	ts, _ := newRealServer(t, &fakeCapturer{})
+	ts, _ := newRealServer(t, newFake(t))
 	call(t, ts, "PUT", "/api/settings", `{"loopback_relay":true}`, nil)
 	var res relayTest
 	if code := call(t, ts, "POST", "/api/relays/test", `{"id":"loopback"}`, &res); code != 200 || !res.OK || res.Loss > 50 {
@@ -191,7 +194,7 @@ func TestTestRelay(t *testing.T) {
 }
 
 func TestCustomGames(t *testing.T) {
-	ts, _ := newRealServer(t, &fakeCapturer{})
+	ts, _ := newRealServer(t, newFake(t))
 	for name, body := range map[string]string{
 		"no name":    `{"name":" ","process":"x.exe"}`,
 		"no process": `{"name":"X","process":""}`,
@@ -238,7 +241,8 @@ func TestCustomGames(t *testing.T) {
 }
 
 func TestApplyErrors(t *testing.T) {
-	fc := &fakeCapturer{avail: capture.ErrNeedAdmin}
+	fc := newFake(t)
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
 	ts, _ := newRealServer(t, fc)
 	call(t, ts, "PUT", "/api/settings", `{"capture_mode":"route"}`, nil)
 
@@ -260,11 +264,14 @@ func TestApplyErrors(t *testing.T) {
 	call(t, ts, "PUT", "/api/settings", `{"loopback_relay":true}`, nil)
 	expect("route mode without admin", 409, "needs_admin")
 
-	fc.avail = capture.ErrNoDriver
+	fc.Capture.SetAvailable(capture.ErrNoDriver)
 	expect("driver unavailable", 500, "capture_failed")
-	fc.avail, fc.startErr = nil, errors.New("WinDivertOpen: the service cannot be started")
+	fc.Capture.SetAvailable(fmt.Errorf("capture: not on this OS yet: %w", errors.ErrUnsupported))
+	expect("no capture backend on this OS", 501, "unsupported")
+	fc.Capture.SetAvailable(nil)
+	fc.Capture.SetStartErr(errors.New("WinDivertOpen: the service cannot be started"))
 	expect("capture start fails", 500, "capture_failed")
-	fc.startErr = fmt.Errorf("open: %w", capture.ErrNeedAdmin)
+	fc.Capture.SetStartErr(fmt.Errorf("open: %w", capture.ErrNeedAdmin))
 	expect("capture start needs admin", 409, "needs_admin")
 
 	call(t, ts, "PUT", "/api/settings", `{"capture_mode":"proxy"}`, nil)
@@ -280,7 +287,8 @@ func TestRouteModeSession(t *testing.T) {
 	}
 	go game.Serve(ctx)
 
-	fc := &fakeCapturer{admin: true}
+	fc := newFake(t)
+	fc.Privileges.SetElevated(true)
 	ts, srv := newRealServer(t, fc)
 	call(t, ts, "PUT", "/api/settings", `{"capture_mode":"route","loopback_relay":true}`, nil)
 	var g gameView
@@ -293,36 +301,36 @@ func TestRouteModeSession(t *testing.T) {
 	if lv.Status != "optimizing" || lv.Session == nil || lv.Session.CaptureMode != "route" || lv.Session.Listen != "" {
 		t.Fatalf("live after apply: %+v", lv)
 	}
-	c := fc.last(t)
+	c := lastCapture(t, fc)
 	loop := srv.relays.Endpoints()
-	if len(c.cfg.Processes) != 1 || c.cfg.Processes[0] != "lpcheck.exe" || len(c.cfg.Exclude) != 1 || c.cfg.Exclude[0] != loop[0] {
-		t.Errorf("capture config processes %v exclude %v, want lpcheck.exe and the relay %v", c.cfg.Processes, c.cfg.Exclude, loop)
+	if len(c.Config().Processes) != 1 || c.Config().Processes[0] != "lpcheck.exe" || len(c.Config().Exclude) != 1 || c.Config().Exclude[0] != loop[0] {
+		t.Errorf("capture config processes %v exclude %v, want lpcheck.exe and the relay %v", c.Config().Processes, c.Config().Exclude, loop)
 	}
 
 	// The game sends; the packet is tunneled through the loopback relay to the
 	// echo server and the reply comes back to be injected into the game.
 	local := netip.MustParseAddrPort("127.0.0.1:50999")
 	deadline := time.Now().Add(3 * time.Second)
-	var got injected
+	var got fakeplatform.Injected
 	for i := 0; ; i++ {
-		if !c.send(local, game.Addr(), fmt.Sprintf("tick %d", i)) {
+		if !c.Send(local, game.Addr(), fmt.Sprintf("tick %d", i)) {
 			t.Fatal("engine refused a game packet with the relay up")
 		}
 		select {
-		case got = <-c.injected:
+		case got = <-c.Injected():
 		case <-time.After(20 * time.Millisecond):
 		}
-		if got.payload != "" || time.Now().After(deadline) {
+		if got.Payload != "" || time.Now().After(deadline) {
 			break
 		}
 	}
-	if got.local != local || got.remote != game.Addr() || !strings.HasPrefix(got.payload, "tick ") {
+	if got.Local != local || got.Remote != game.Addr() || !strings.HasPrefix(got.Payload, "tick ") {
 		t.Fatalf("injected %+v, want an echo from %v to %v", got, game.Addr(), local)
 	}
 
 	// Keep the game talking until the engine names its primary server.
 	for time.Now().Before(deadline.Add(3 * time.Second)) {
-		c.send(local, game.Addr(), "tick")
+		c.Send(local, game.Addr(), "tick")
 		lv = srv.live()
 		if lv.Snapshot != nil && len(lv.Snapshot.Servers) == 1 && lv.Snapshot.Servers[0].Primary {
 			break
@@ -339,7 +347,7 @@ func TestRouteModeSession(t *testing.T) {
 	if code := call(t, ts, "POST", "/api/stop", "", &lv); code != 200 || lv.Session != nil || lv.Capture != nil {
 		t.Fatalf("stop: %d %+v", code, lv)
 	}
-	if !c.closed.Load() {
+	if !c.Closed() {
 		t.Error("capture still open after stop")
 	}
 	if s := srv.store.Servers(g.ID); len(s) != 1 || s[0] != game.Addr() {
@@ -358,12 +366,16 @@ func TestRouteModeSession(t *testing.T) {
 
 func TestProcessesSortedBySockets(t *testing.T) {
 	self := uint32(os.Getpid())
-	fc := &fakeCapturer{procs: []capture.Process{
-		{PID: 10, Name: "b.exe", UDPPorts: []uint16{1}},
-		{PID: 11, Name: "C.exe", UDPPorts: []uint16{1, 2}},
-		{PID: self, Name: "lowpath.exe", UDPPorts: []uint16{1, 2, 3}},
-		{PID: 12, Name: "a.exe", UDPPorts: []uint16{5, 6}},
-	}}
+	sock := func(port uint16, pid uint32) owner.Socket {
+		return owner.Socket{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), port), PID: pid}
+	}
+	fc := newFake(t)
+	fc.Owners.Set([]owner.Socket{
+		sock(1, 10),
+		sock(1, 11), sock(2, 11),
+		sock(1, self), sock(2, self), sock(3, self),
+		sock(5, 12), sock(6, 12),
+	}, map[uint32]string{10: "b.exe", 11: "C.exe", self: "lowpath.exe", 12: "a.exe"})
 	ts, _ := newRealServer(t, fc)
 	var res struct{ Processes []capture.Process }
 	if code := call(t, ts, "GET", "/api/processes", "", &res); code != 200 {
@@ -376,17 +388,86 @@ func TestProcessesSortedBySockets(t *testing.T) {
 	if got := strings.Join(names, ","); got != "a.exe,C.exe,b.exe" {
 		t.Errorf("order %s, want a.exe,C.exe,b.exe (most sockets first, then name; self left out)", got)
 	}
+
+	// Where the OS has no owner lookup yet, the API says so (501) instead of
+	// listing nothing.
+	fc.Owners.SetErr(fmt.Errorf("owner: %w", errors.ErrUnsupported))
+	if code, body := do(t, ts, "GET", "/api/processes", "", nil); code != 501 || !strings.Contains(body, `"unsupported"`) {
+		t.Errorf("unsupported owner lookup: %d %s", code, body)
+	}
+	fc.Owners.SetErr(errors.New("GetExtendedUdpTable: boom"))
+	if code, _ := do(t, ts, "GET", "/api/processes", "", nil); code != 500 {
+		t.Errorf("failing owner lookup: %d, want 500", code)
+	}
+}
+
+// The bootstrap's platform block comes from the platform layer, so the UI
+// needs no OS checks of its own.
+func TestBootstrapPlatformFromLayer(t *testing.T) {
+	fc := newFake(t)
+	fc.OS = "linux"
+	fc.Capture.SetAvailable(fmt.Errorf("capture: not on linux yet: %w", errors.ErrUnsupported))
+	ts, _ := newRealServer(t, fc)
+	var b bootstrap
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	p := b.Platform
+	if p.OS != "linux" || p.CanElevate || p.Capture.Available || p.Capture.Backend != "fake" ||
+		p.Capture.Reason != "packet capture isn't available on this system yet" {
+		t.Errorf("platform %+v", p)
+	}
+
+	// With an Elevate hook and no admin rights, the UI may offer the restart;
+	// once elevated it may not.
+	fc = newFake(t)
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
+	ts, _ = newRealServer(t, fc, func(c *Config) { c.Elevate = func() error { return nil } })
+	b = bootstrap{}
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	if !b.Platform.CanElevate || b.Platform.Admin {
+		t.Errorf("unelevated with a prompt: %+v", b.Platform)
+	}
+	// A restart can't fix a driver that doesn't run on this PC (WinDivert
+	// on ARM64): no button that would only show a pointless prompt.
+	fc.Capture.SetAvailable(capture.ErrNoDriver)
+	b = bootstrap{}
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	if b.Platform.CanElevate {
+		t.Errorf("restart offered for a missing driver: %+v", b.Platform)
+	}
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
+	fc.Privileges.SetElevated(true)
+	b = bootstrap{}
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	if b.Platform.CanElevate || !b.Platform.Admin {
+		t.Errorf("elevated: %+v", b.Platform)
+	}
+}
+
+// Library detection goes through the platform's game detector: a game the
+// detector reports running shows as running.
+func TestRunningGamesFromDetector(t *testing.T) {
+	fc := newFake(t)
+	fc.Games.SetRunning("CS2.EXE")
+	ts, srv := newRealServer(t, fc)
+	srv.scanRunning()
+	var b bootstrap
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	for _, g := range b.Games {
+		if g.Running != (g.ID == "cs2") {
+			t.Errorf("%s running = %v", g.ID, g.Running)
+		}
+	}
 }
 
 func TestElevate(t *testing.T) {
-	ts, _ := newRealServer(t, &fakeCapturer{})
+	ts, _ := newRealServer(t, newFake(t))
 	if code := call(t, ts, "POST", "/api/elevate", "", nil); code != 501 {
 		t.Errorf("no Elevate hook: got %d, want 501", code)
 	}
 
 	quit := make(chan struct{})
 	var elevErr error
-	ts, _ = newRealServer(t, &fakeCapturer{}, func(c *Config) {
+	ts, _ = newRealServer(t, newFake(t), func(c *Config) {
 		c.Elevate = func() error { return elevErr }
 		c.Quit = func() { close(quit) }
 	})

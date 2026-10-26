@@ -48,9 +48,9 @@ type bitmapInfoHeader struct {
 
 var errNoIcon = errors.New("detect: the program has no icon")
 
-// ExeIcon returns the main icon of a program, rendered at size×size. Windows
+// exeIcon returns the main icon of a program, rendered at size×size. Windows
 // picks the closest size the icon has and scales it.
-func ExeIcon(path string, size int) (image.Image, error) {
+func exeIcon(path string, size int) (image.Image, error) {
 	p, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
@@ -128,9 +128,9 @@ func dibits(dc uintptr, bm windows.Handle, size int) ([]byte, error) {
 	return buf, nil
 }
 
-// RunningExe returns the full path of a running process with one of the given
+// runningExe returns the full path of a running process with one of the given
 // image names, or "" when none runs or Windows won't tell (protected games).
-func RunningExe(names []string) string {
+func runningExe(names []string) string {
 	want := map[string]bool{}
 	for _, n := range names {
 		want[strings.ToLower(n)] = true

@@ -7,14 +7,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"lowpath/internal/owner"
 )
 
-// socket is one local UDP endpoint and the process that owns it. IPv6
-// entries matter too: a dual-stack socket bound to [::] sends IPv4 packets.
-type socket struct {
-	local netip.AddrPort
-	pid   uint32
-}
+// socket is one local UDP endpoint and the process that owns it.
+type socket = owner.Socket
 
 // owners decides whether a packet's local UDP endpoint belongs to a game.
 //
@@ -24,11 +22,10 @@ type socket struct {
 // case for the very first packet a game sends), so a miss rebuilds the table
 // before the packet is let out.
 type owners struct {
-	self    uint32          // our own PID: never captured
-	names   map[string]bool // lower-case image names to capture
-	pids    map[uint32]bool // exact PIDs to capture
-	sockets func() ([]socket, error)
-	procs   func() (map[uint32]string, error) // PID -> image name
+	self  uint32          // our own PID: never captured
+	names map[string]bool // lower-case image names to capture
+	pids  map[uint32]bool // exact PIDs to capture
+	os    owner.Resolver
 
 	mu    sync.Mutex        // serializes rebuilds
 	known map[uint32]string // last process list; guarded by mu
@@ -51,14 +48,12 @@ type ownerTable struct {
 	unowned map[netip.AddrPort]bool
 }
 
-func newOwners(processes []string, pids []uint32, self uint32,
-	sockets func() ([]socket, error), procs func() (map[uint32]string, error)) (*owners, error) {
+func newOwners(processes []string, pids []uint32, self uint32, os owner.Resolver) (*owners, error) {
 	o := &owners{
-		self:    self,
-		names:   map[string]bool{},
-		pids:    map[uint32]bool{},
-		sockets: sockets,
-		procs:   procs,
+		self:  self,
+		names: map[string]bool{},
+		pids:  map[uint32]bool{},
+		os:    os,
 	}
 	for _, p := range processes {
 		if p = normalizeName(p); p != "" {
@@ -131,7 +126,7 @@ func (o *owners) gamePIDs() []uint32 {
 // milliseconds to read (the socket table ~0.1 ms), so it is read before
 // taking the lock packet lookups may wait on.
 func (o *owners) refresh() error {
-	names, err := o.procs()
+	names, err := o.os.ProcessNames()
 	if err != nil {
 		return err
 	}
@@ -159,13 +154,13 @@ func (o *owners) refreshSince(seen time.Time) (*ownerTable, error) {
 // list is re-read only if a socket has a PID it doesn't know yet.
 func (o *owners) rebuild() error {
 	at := time.Now()
-	socks, err := o.sockets()
+	socks, err := o.os.UDPSockets()
 	if err != nil {
 		return err
 	}
 	for _, s := range socks {
-		if _, ok := o.known[s.pid]; !ok {
-			names, err := o.procs()
+		if _, ok := o.known[s.PID]; !ok {
+			names, err := o.os.ProcessNames()
 			if err != nil {
 				return err
 			}
@@ -183,14 +178,14 @@ func (o *owners) rebuild() error {
 		unowned: map[netip.AddrPort]bool{},
 	}
 	for _, s := range socks {
-		a, port := s.local.Addr(), s.local.Port()
+		a, port := s.Local.Addr(), s.Local.Port()
 		switch {
 		case a.Is4() && a.IsUnspecified():
-			t.wild[port] = s.pid
+			t.wild[port] = s.PID
 		case a.Is4() || a.Is4In6():
-			t.exact[netip.AddrPortFrom(a.Unmap(), port)] = s.pid
+			t.exact[netip.AddrPortFrom(a.Unmap(), port)] = s.PID
 		case a.IsUnspecified():
-			t.wild6[port] = s.pid
+			t.wild6[port] = s.PID
 		}
 	}
 	for pid, name := range o.known {

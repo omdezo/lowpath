@@ -62,6 +62,17 @@ jobs:
       - name: Test relay packages
         run: go test ./internal/relay/... ./internal/proto/... ./internal/dedup/... ./cmd/lpcheck/...
 
+      - name: Test the app on the fake platform
+        run: go test ./internal/app/... ./internal/platform/... ./internal/owner/... ./internal/detect/... ./cmd/lowpath/...
+
+      - name: Build the app for Linux and macOS
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null ./cmd/lowpath
+          done
+
       - name: Build relays
         env:
           CGO_ENABLED: "0"

@@ -83,7 +83,7 @@ func fastBloat(c *diag.BloatConfig) {
 
 func TestBloatAPIRunsAndSavesTheResult(t *testing.T) {
 	line := newFakeHomeLine()
-	ts, srv := newRealServer(t, &fakeCapturer{}, func(c *Config) {
+	ts, srv := newRealServer(t, newFake(t), func(c *Config) {
 		c.NetStats, c.BloatLoader, c.Ping = line, line, line.ping
 	})
 	srv.bloat.tune = fastBloat
@@ -145,7 +145,7 @@ func TestBloatAPIRunsAndSavesTheResult(t *testing.T) {
 
 func TestBloatAPIStop(t *testing.T) {
 	line := newFakeHomeLine()
-	ts, srv := newRealServer(t, &fakeCapturer{}, func(c *Config) {
+	ts, srv := newRealServer(t, newFake(t), func(c *Config) {
 		c.NetStats, c.BloatLoader, c.Ping = line, line, line.ping
 	})
 	srv.bloat.tune = func(c *diag.BloatConfig) { c.Phase = 5 * time.Second }
@@ -193,7 +193,7 @@ func newDemoBloatServer(t *testing.T, line *fakeHomeLine) (*httptest.Server, *Se
 		t.Fatal(err)
 	}
 	srv, err := NewServer(Config{
-		Store: openTestStore(t), Games: games, Network: DemoNetwork{N: sim}, Sim: sim, Capture: &fakeCapturer{}, Log: discard, Session: testSession,
+		Store: openTestStore(t), Games: games, Network: DemoNetwork{N: sim}, Sim: sim, Platform: newFake(t).Platform(), Log: discard, Session: testSession,
 		NetStats: line, BloatLoader: line, Ping: line.ping,
 	})
 	if err != nil {
