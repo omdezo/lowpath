@@ -145,12 +145,15 @@ UDP port and prints the **address** and **key** to paste into
 
 | Component | Windows | Linux | macOS |
 |---|:---:|:---:|:---:|
-| Desktop client | ✅ | 🛠️ planned | 🛠️ planned |
+| Desktop client | ✅ | 🧪 headless, route mode over TUN | 🛠️ planned |
 | Relay server | builds | ✅ | builds |
 | `lpcheck` route checker | ✅ | ✅ | ✅ |
 
-Cross-platform clients are on the [roadmap](docs/roadmap.md): TUN-based
-capture on Linux and macOS, with the same engine and UI.
+On Linux, `lowpath -headless` runs the same engine and UI in a browser, and
+route mode captures through a TUN device (root, or `CAP_NET_ADMIN` and
+`CAP_NET_RAW`; see [docs/development.md](docs/development.md#on-linux)). The
+Linux window and packages and the macOS client are on the
+[roadmap](docs/roadmap.md).
 
 ## Supported games
 

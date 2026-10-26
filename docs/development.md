@@ -85,7 +85,8 @@ internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP pi
 internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
 internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
-internal/capture   capture backend contract; per-process UDP capture with WinDivert
+internal/capture   capture backend contract; per-process UDP capture with WinDivert (Windows) or a TUN device (Linux)
+internal/netlink   netlink messages without cgo: rtnl (links, addresses, routes, rules), nft (nftables)
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
@@ -123,6 +124,15 @@ go test ./...
   **administrator** terminal `go test -run FailOpen -v ./internal/capture`
   also kills a real capturing process, and lets one deadlock, and measures
   how fast the traffic goes direct (under 1 s).
+- **Linux capture (TUN):** the nftables rule set, the netlink messages
+  (`internal/netlink`), the rights check and the direct-ports fast path on
+  every OS. As **root** on Linux, `go test -run TestTUNRouting -v
+  ./internal/capture` runs the real backend in two network namespaces of
+  its own (nothing on the machine changes, WSL2 works): capture and
+  injected replies, other programs going direct, Stop, a stuck handler,
+  `kill -9` as root and with only `CAP_NET_ADMIN` and `CAP_NET_RAW`,
+  Recover, no rights, and, with `LOWPATH_LPCHECK` set to a Linux `lpcheck`
+  build, lpcheck reporting the relay's address while it is boosted.
 - **Relay:** key check, destination policy, server-leg ping, flow limits,
   forwarding hops.
 - **App:** local API guard and per-launch session, relay and custom-game
@@ -207,3 +217,20 @@ and prints RTT, jitter, loss and that public IP.
    becomes the **relay's IP**; through the loopback test relay the capture
    counters (captured / injected) rise and every reply still arrives.
 4. Stop (or just let lpcheck exit), run it again: back to your own IP.
+
+### On Linux
+
+Route mode needs root, or two capabilities on the binary:
+
+```sh
+go build -o lowpath ./cmd/lowpath && go build -o lpcheck ./cmd/lpcheck
+sudo setcap cap_net_admin,cap_net_raw+ep ./lowpath
+./lowpath -headless              # prints the launch link; or: sudo ./lowpath -headless
+```
+
+Add `lpcheck` as a game (Add game lists it while it runs) and Boost it, then
+run `./lpcheck -for 30s`: through a real relay it shows the relay's IP. While
+it runs, `ip rule` shows `5100: from all fwmark 0x4c50 lookup 19536` and
+`ip link` a `lowpath0` device. After Stop neither is left. After `kill -9`
+of Lowpath the device is gone at once, so the rule routes nothing; it is
+removed at the next start.

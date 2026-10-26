@@ -101,7 +101,7 @@ type Paths interface {
 
 | Part | Windows | Linux, macOS (today) |
 |---|---|---|
-| Capture | `capture.WinDivert` (64-bit only; `ErrNoDriver` on arm64) | `capture.Unavailable`: route mode says "packet capture isn't available on this system yet" (TUN backends: #41, #42) |
+| Capture | `capture.WinDivert` (64-bit only; `ErrNoDriver` on arm64) | Linux `capture.TUN`: TUN device + nftables mark + `ip rule` (root or `CAP_NET_ADMIN` and `CAP_NET_RAW`; see below). macOS `capture.Unavailable`: route mode says "packet capture isn't available on this system yet" (utun backend: #42) |
 | Owners | `owner.Windows`: `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` + Toolhelp32 | Linux `owner.Procfs`: `/proc/net/udp{,6}` inodes matched to `/proc/<pid>/fd` `socket:[inode]` links. macOS `owner.Darwin`: `kern.proc.all`, then `proc_pidinfo(PROC_PIDLISTFDS)` + `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` through the `proc_info` syscall (no cgo). Own user's processes only, no root. Other OSes: `owner.Unsupported` |
 | Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | `platform.Root`: euid 0; no prompt yet (#44) |
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
@@ -275,6 +275,79 @@ captures the test's UDP to 192.0.2.1 and swallows it, the test kills it
 (`Process.Kill` is `TerminateProcess`, as `taskkill /F`) or lets its
 handler deadlock, and a lower-priority sniffing handle must see the packets
 leave within 1 s.
+
+### Linux: TUN backend — `capture.TUN`, `internal/netlink`
+
+No kernel module: the kernel's TUN device, one nftables table and one
+policy-routing rule, all set up over netlink (`internal/netlink`, with
+`rtnl` for links, addresses, routes and rules and `nft` for nftables;
+pure Go, no `nft` or `ip` programs needed). The packet loop is the same
+`capture.Capture` as on Windows, over a TUN device instead of a WinDivert
+handle, so owner checks, `OnPacket`, `Inject`, the watchdog and the stats
+behave the same.
+
+```
+game socket ──sendto──▶ output hook: table ip lowpath, chain out (type route, priority mangle)
+                         meta mark != 0              → return   (a VPN's own packets, our resends)
+                         not UDP / a fragment        → return
+                         daddr in LAN, loopback, CGNAT, link-local, multicast+ → return
+                         udp dport 53, a relay endpoint → return
+                         udp sport @direct           → return   (ports of other programs)
+                         from a user socket          → meta mark set 0x4c50
+                       ip rule 5100: fwmark 0x4c50 lookup 19536 → default dev lowpathN
+lowpathN ──read──▶ Capture.handle: owner check (/proc) ─▶ game: OnPacket (engine)
+                                                       └▶ other: raw socket, mark 0x4c51 → normal route
+relay reply ──Inject──▶ write IPv4+UDP into lowpathN ──▶ kernel delivers it to the game socket
+```
+
+- **Per process, by socket owner.** The chain can't tell processes apart by
+  itself: nftables' `socket cgroupv2` match sees the cgroup a socket was
+  *created* in (moving a running game changes nothing, so Boost after
+  launch would miss it), and the `socket` expression isn't built into every
+  kernel (WSL2's lacks it). So the chain marks every candidate packet except
+  those from ports in the `direct` set, and user space decides with the
+  same owner table as on Windows (a miss refreshes it, so a new socket's
+  first packet is decided correctly). Each refresh (1 s) puts the ports of
+  sockets owned only by other programs into `direct`, after which their
+  packets never leave the kernel; a port the game shares is left out.
+- **Replies.** Written into the TUN, they arrive from the server on that
+  device. Reverse-path filtering would drop them: the device gets
+  `rp_filter=2` (the kernel takes the larger of `all` and the device's
+  value, so loose whatever `all` says) and the address `169.254.76.80/32`
+  (filtering, even loose, drops packets on a device without an IPv4
+  address). The MTU is 65535, since packets were sized for the route they
+  had before the mark moved them. IPv6 is off on the device.
+- **Other programs keep their route.** Already-marked packets (WireGuard's
+  `fwmark`, Tailscale's) and kernel sockets (no owner, so the `skuid` load
+  ends the rule) are never marked; the rule's priority 5100 is ahead of VPN
+  catch-alls (wg-quick sits near 32765, Tailscale at 5210+).
+- **Rights.** Root, or `CAP_NET_ADMIN` and `CAP_NET_RAW` (`sudo setcap
+  cap_net_admin,cap_net_raw+ep lowpath`); `Available` reads `CapEff` from
+  `/proc/self/status`, and a refusal while setting up is a
+  `capture.RightsError` that names them (the UI shows its wording).
+- **Fail-open.** Set-up order is device, address and route, nftables, raw
+  socket, rule last; Stop removes the rule first, reads what is queued for
+  50 ms, then deletes the table and closes the device. When the process
+  dies in any way, the kernel deletes the TUN and its route; the rule then
+  finds an empty table and the kernel moves on to the next rule, so marked
+  packets take the normal route. The table is created with
+  `NFT_TABLE_F_OWNER` (Linux 5.12+) and goes with the netlink socket;
+  older kernels keep it, inert. `Recover` (and every Start) removes the
+  rule and the table; without the rights it reports success only when no
+  `lowpath` device is left. The watchdog works as on Windows.
+
+`internal/capture/tun_linux_test.go` checks all of it as root, without
+touching the machine's network: the test re-runs itself in a new network
+namespace joined by a veth pair to a second one with a UDP echo, STUN and
+relay server (documentation addresses only). It checks that the game's
+packets are captured and the injected replies reach its socket, that other
+programs' packets go direct (through user space first, then the kernel's
+fast path), Stop, a stuck handler (direct again in about 0.7 s), `kill -9`
+of the capturing process as root and as an ordinary user with only the two
+capabilities (direct again within 60 ms), `Recover`, a user without rights,
+and the acceptance test: the real `lpcheck` (found by name through `/proc`)
+routed by the engine through the relay reports the relay's address, while a
+copy under another name reports the client's.
 
 ## Engine — capture mode
 
@@ -751,10 +824,16 @@ prints that URL to stderr only, never to the log.
 - Admin (needs one UAC click): Lowpath.exe → loopback relay → custom game
   `lpcheck.exe` → Apply → `lpcheck.exe` shows replies with capture counters
   rising in the UI.
+- Linux, as root (WSL2 works): `go test -run TestTUNRouting -v ./internal/capture`
+  runs the TUN backend in network namespaces of its own; with
+  `LOWPATH_LPCHECK=<linux lpcheck>` it also runs the lpcheck acceptance test.
 
 ## Known limitations
 
-UDP over IPv4 only (TCP/IPv6 go direct). Some anti-cheats (Vanguard, FACEIT)
+UDP over IPv4 only (TCP/IPv6 go direct), on Windows and Linux. On Linux,
+another program's socket that reuses a port the game just closed can go
+through Lowpath for up to a second, and the reverse (a new game socket on a
+port another program just closed) goes direct for as long. Some anti-cheats (Vanguard, FACEIT)
 may refuse to run alongside the WinDivert driver. Unsigned exe → SmartScreen
 warning. Real benefit needs relays on well-peered servers near the game's
 datacenter; the loopback relay only proves the pipeline.

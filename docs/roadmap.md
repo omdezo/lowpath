@@ -51,7 +51,7 @@ The backlog in §5 follows four rules. They exist because earlier drafts got the
 
 | Area | Today | Where |
 |---|---|---|
-| Capture | WinDivert 2.2.2, outbound IPv4 UDP only, per process via `GetExtendedUdpTable` + Toolhelp, inject inbound on the same interface | `internal/capture`, `internal/divert` |
+| Capture | Windows: WinDivert 2.2.2, outbound IPv4 UDP only, per process via `GetExtendedUdpTable` + Toolhelp, inject inbound on the same interface. Linux: TUN device, nftables mark (socket owner from `/proc`, kernel fast path for other programs' ports), `ip rule` fwmark table, replies written into the TUN (#41) | `internal/capture`, `internal/divert`, `internal/netlink` |
 | Overlay | v2 framing `{magic,type,token,flow,seq,ts,addr}`; token = SHA-256(key)[:8], sent in clear; no encryption, MAC, fragmentation or TCP stream type | `internal/proto/proto.go` |
 | Multipath | 2 to 4 copies chosen by loss/jitter (`copies()`), score `RTT + 3·J + 8·loss` | `internal/engine/engine.go`, `tracker.go` |
 | Dedup | 1024-seq sliding window with `RestartGap` | `internal/dedup` |
