@@ -9,6 +9,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Router pinger and segmented Home / ISP / Lowpath / Game server bar in
+  Settings → Diagnostics: the default gateway is pinged 20 times a second
+  while the tab is open and during a boost, with loss, median, p99, spikes
+  and a 60-second chart, and the verdict uses it; a router that stops
+  answering counts as loss, not as one that ignores ping (#10).
 - Dev-mode background service `LowpathSvc` (Windows): `lowpathsvc install`
   asks for administrator rights once, and from then on the Lowpath window
   runs unelevated and drives the service over the named pipe

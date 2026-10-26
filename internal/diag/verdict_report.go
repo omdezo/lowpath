@@ -67,6 +67,20 @@ func (r DiagnosisReport) Text() string {
 			wrap(&b, "      - ", f)
 		}
 	}
+	if len(d.Segments) > 0 {
+		b.WriteString("\nROUTE, PART BY PART\n")
+		for _, sg := range d.Segments {
+			nums := "—"
+			if sg.RTTMS != nil || sg.LossPct != nil {
+				nums = fmt.Sprintf("%s ms, %s%% loss", msText(sg.RTTMS), pctText(sg.LossPct))
+			}
+			mark := ""
+			if sg.Blamed {
+				mark = " (the verdict)"
+			}
+			wrap(&b, fmt.Sprintf("  [%s] ", sg.Status), fmt.Sprintf("%s: %s%s. %s", sg.Name, nums, mark, sg.Summary))
+		}
+	}
 	if len(d.Next) > 0 {
 		b.WriteString("\nFOR A SURER ANSWER\n")
 		for _, n := range d.Next {
@@ -142,7 +156,17 @@ func (r DiagnosisReport) measurements(b *strings.Builder) {
 	at := r.Diagnosis.At
 	line := func(s string) { wrap(b, "  ", s) }
 	if g := ev.Gateway; g != nil {
-		line(fmt.Sprintf("Router pings: %d sent, %d lost, median %s ms, p%d %s ms (%s ago).", g.Sent, g.Lost, msText(g.P50MS), g.TailPct, msText(g.TailMS), ago(at.Sub(g.At))))
+		s := fmt.Sprintf("Router pings (%s, %s ago", g.Source, ago(at.Sub(g.At)))
+		if g.Link != "" || g.Interface != "" {
+			s += ", " + linkWords(g.Link, g.Interface)
+		}
+		s += fmt.Sprintf("): %d sent, %d lost, median %s ms, p%d %s ms, %d of %d ms or more.", g.Sent, g.Lost, msText(g.P50MS), g.TailPct, msText(g.TailMS), g.Spikes, spikeMS)
+		if g.Limited {
+			s += " The router limits its ping replies, so the loss isn't counted."
+		}
+		line(s)
+	} else {
+		line("Router pings: none yet (they run while Diagnostics is open and during a boost).")
 	}
 	if bl := ev.Bloat; bl != nil {
 		grade := bl.Grade
