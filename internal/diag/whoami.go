@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -97,19 +98,53 @@ type Location struct {
 
 // Redacted is the location with the host part of each address cleared
 // (IPv4 to /24, IPv6 to /48), for reports a user may hand to someone else.
+// Addresses inside the explanations (socket errors name the local address,
+// which on IPv6 or a directly connected PC is the public one) are cut too.
 func (l Location) Redacted() Location {
-	red := func(e *Endpoint, bits int) *Endpoint {
+	red := func(e *Endpoint) *Endpoint {
 		if e == nil {
 			return nil
 		}
 		c := *e
-		if p, err := c.IP.Prefix(bits); err == nil {
-			c.IP = p.Addr()
-		}
+		c.IP = redactAddr(c.IP)
+		c.LookupError, c.Partial = redactText(c.LookupError), redactText(c.Partial)
 		return &c
 	}
-	l.IPv4, l.IPv6 = red(l.IPv4, 24), red(l.IPv6, 48)
+	l.IPv4, l.IPv6 = red(l.IPv4), red(l.IPv6)
+	l.Message, l.IPv6Note = redactText(l.Message), redactText(l.IPv6Note)
 	return l
+}
+
+// redactAddr keeps the network part of a: /24 for IPv4, /48 for IPv6.
+func redactAddr(a netip.Addr) netip.Addr {
+	bits := 48
+	if a.Unmap().Is4() {
+		a, bits = a.Unmap(), 24
+	}
+	if p, err := a.WithZone("").Prefix(bits); err == nil {
+		return p.Addr()
+	}
+	return a
+}
+
+// addrLike matches runs that may be an IP address, with or without a port.
+var addrLike = regexp.MustCompile(`[0-9A-Fa-f.:]*[.:][0-9A-Fa-f.:]*`)
+
+// redactText cuts every IP address in s as redactAddr does.
+func redactText(s string) string {
+	return addrLike.ReplaceAllStringFunc(s, func(m string) string {
+		// Trailing punctuation (":" after an address in an error, "." ending
+		// a sentence) is not part of the address.
+		for _, c := range []string{m, strings.TrimRight(m, ".:")} {
+			if ap, err := netip.ParseAddrPort(c); err == nil {
+				return netip.AddrPortFrom(redactAddr(ap.Addr()), ap.Port()).String() + m[len(c):]
+			}
+			if a, err := netip.ParseAddr(c); err == nil {
+				return redactAddr(a).String() + m[len(c):]
+			}
+		}
+		return m
+	})
 }
 
 // LocatorConfig wires a Locator. Finders are tried in order per family:
@@ -120,6 +155,10 @@ type LocatorConfig struct {
 	// MaxAge is how long a result is reused before Locate looks again
 	// (default 2 min). Refresh ignores it.
 	MaxAge time.Duration
+	// FailMaxAge is how long an offline or partial result is reused
+	// (default 15 s, never more than MaxAge), so coming back online shows
+	// up the next time the pane opens instead of minutes later.
+	FailMaxAge time.Duration
 	// Timeout bounds one whole lookup (default 12 s): addresses, then the
 	// network of each.
 	Timeout time.Duration
@@ -130,11 +169,12 @@ type LocatorConfig struct {
 // share one lookup at a time, and a fresh result is reused, so the UI can
 // ask as often as it likes.
 type Locator struct {
-	finders []AddrFinder
-	lookup  NetworkLookup
-	maxAge  time.Duration
-	timeout time.Duration
-	now     func() time.Time
+	finders    []AddrFinder
+	lookup     NetworkLookup
+	maxAge     time.Duration
+	failMaxAge time.Duration
+	timeout    time.Duration
+	now        func() time.Time
 
 	mu       sync.Mutex
 	last     *Location
@@ -142,10 +182,14 @@ type Locator struct {
 }
 
 func NewLocator(cfg LocatorConfig) *Locator {
-	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, timeout: cfg.Timeout, now: cfg.Now}
+	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, failMaxAge: cfg.FailMaxAge, timeout: cfg.Timeout, now: cfg.Now}
 	if l.maxAge <= 0 {
 		l.maxAge = 2 * time.Minute
 	}
+	if l.failMaxAge <= 0 {
+		l.failMaxAge = 15 * time.Second
+	}
+	l.failMaxAge = min(l.failMaxAge, l.maxAge)
 	if l.timeout <= 0 {
 		l.timeout = 12 * time.Second
 	}
@@ -171,7 +215,7 @@ func (l *Locator) Last() (Location, bool) {
 // Locate then returns ctx's error.
 func (l *Locator) Locate(ctx context.Context, refresh bool) (Location, error) {
 	l.mu.Lock()
-	if !refresh && l.last != nil && l.now().Sub(l.last.At) < l.maxAge {
+	if !refresh && l.last != nil && l.now().Sub(l.last.At) < l.reuseFor(l.last) {
 		loc := *l.last
 		l.mu.Unlock()
 		return loc, nil
@@ -190,6 +234,14 @@ func (l *Locator) Locate(ctx context.Context, refresh bool) (Location, error) {
 	}
 	loc, _ := l.Last()
 	return loc, nil
+}
+
+// reuseFor is how long loc may be handed out again without a new lookup.
+func (l *Locator) reuseFor(loc *Location) time.Duration {
+	if loc.State == StateOK {
+		return l.maxAge
+	}
+	return l.failMaxAge
 }
 
 func (l *Locator) run(done chan struct{}) {
@@ -291,8 +343,11 @@ func describe(err error) string {
 		return "unknown error"
 	}
 	var dnsErr *net.DNSError
+	var netErr net.Error
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, stun.ErrTimeout):
+		return "no reply in time"
+	case errors.As(err, &netErr) && netErr.Timeout() && !errors.As(err, &dnsErr):
 		return "no reply in time"
 	case errors.As(err, &dnsErr):
 		return "couldn't resolve " + dnsErr.Name + " (DNS)"
@@ -304,11 +359,36 @@ func describe(err error) string {
 	return msg
 }
 
-// cgnat is RFC 6598 shared address space, which netip doesn't flag.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+// notGlobal are special-purpose blocks that netip doesn't flag and that are
+// not reachable on the internet (IANA special-purpose registries), such as
+// RFC 6598 shared space (CGNAT), benchmarking space that some VPN and proxy
+// tools hand out as fake IPs, and documentation ranges.
+var notGlobal = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("3fff::/20"),
+}
 
 func isPublic(a netip.Addr) bool {
-	return a.IsGlobalUnicast() && !a.IsPrivate() && !cgnat.Contains(a)
+	a = a.Unmap()
+	if !a.IsGlobalUnicast() || a.IsPrivate() {
+		return false
+	}
+	for _, p := range notGlobal {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // STUNFinder asks public STUN servers for the address they see. All

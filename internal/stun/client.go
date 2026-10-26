@@ -104,6 +104,11 @@ func (c *Client) Bind(ctx context.Context, network, server string) (Binding, err
 			return Binding{}, err
 		}
 		conn.SetReadDeadline(now.Add(wait))
+		// The deadline just set may have replaced the one the cancel hook
+		// set a moment ago; don't wait out a whole round for nothing.
+		if ctx.Err() != nil {
+			return Binding{}, ctx.Err()
+		}
 		b, err := c.await(conn, buf, id)
 		if err == nil {
 			if attempt == 0 {

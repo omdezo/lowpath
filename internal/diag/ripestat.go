@@ -63,8 +63,16 @@ func NewRIPEstat(o RIPEstatOptions) *RIPEstat {
 	r := &RIPEstat{base: strings.TrimRight(o.BaseURL, "/"), sourceApp: o.SourceApp, clients: map[Family]*http.Client{}}
 	for f, network := range map[Family]string{IPv4: "tcp4", IPv6: "tcp6", anyFamily: "tcp"} {
 		dial := o.Dial
+		// whats-my-ip (the family clients) must go direct: through an
+		// HTTP(S)_PROXY it would report the proxy's address, which is not
+		// the one a game's UDP traffic uses, and the family pin would only
+		// pick how the proxy is reached. Registry lookups may use a proxy.
+		proxy := http.ProxyFromEnvironment
+		if f != anyFamily {
+			proxy = nil
+		}
 		t := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+			Proxy: proxy,
 			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 				return dial(ctx, network, addr)
 			},
@@ -104,6 +112,12 @@ func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource stri
 	req.Header.Set("Accept", "application/json")
 	resp, err := r.clients[f].Do(req)
 	if err != nil {
+		// A *url.Error repeats the URL, whose query holds the address being
+		// looked up; that text reaches the UI and the diagnostics report.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
 		return zero, fmt.Errorf("RIPEstat %s: %w", name, err)
 	}
 	defer resp.Body.Close()
@@ -124,12 +138,21 @@ func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource stri
 		json.Unmarshal(out.Messages, &msgs) // best effort: the status alone is enough
 		for _, m := range msgs {
 			if len(m) == 2 && m[0] == "error" {
-				msg = m[1]
+				msg = clip(m[1], 200)
 			}
 		}
 		return zero, fmt.Errorf("RIPEstat %s: %s", name, msg)
 	}
 	return out.Data, nil
+}
+
+// clip shortens s to at most n runes, for remote text shown in the UI.
+func clip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // PublicAddr asks whats-my-ip which address the request came from.
@@ -184,7 +207,7 @@ func (r *RIPEstat) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo
 			asErr = err
 			return
 		}
-		info.Holder = strings.TrimSpace(ov.Holder)
+		info.Holder = clip(ov.Holder, 200)
 		info.ASName, info.ISP = splitHolder(info.Holder)
 	})
 	var country, city string

@@ -230,21 +230,24 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `STUNFinder` (stun.l.google.com:19302 and stun.cloudflare.com:3478 at
   once, first answer wins, 5 s cap including DNS), then RIPEstat
   `whats-my-ip` over HTTPS pinned to that family (for networks that block
-  UDP). A public address goes to the `NetworkLookup`: RIPEstat
+  UDP; it ignores `HTTP(S)_PROXY`, which would report the proxy's address). A public address goes to the `NetworkLookup`: RIPEstat
   `network-info` (prefix, origin ASNs), then `as-overview` (holder, split
   into handle and ISP name) and `maxmind-geo-lite` (country, city) in
   parallel; those two may fail alone (`partial`). `CachedLookup` keeps an
   answer per address for 24 h, a partial one 10 min, a failure 30 s.
   Private, CGNAT and loopback answers are never sent to the registry.
 - One lookup runs at a time, with a 12 s budget that does not depend on a
-  caller who gives up; a result is reused for 2 min unless `refresh=1`.
+  caller who gives up; a result is reused for 2 min (an offline or partial
+  one for 15 s) unless `refresh=1`.
   States: `ok`; `partial` (IP known, ISP not: `message` says why);
   `offline` (no IP: `message` says why). No IPv6 is normal and only sets
   `ipv6_note`.
 - Lowpath never captures its own process, so this is the user's own line
   even while a game is routed through a relay.
 - `/api/diagnostics` includes the last location with addresses cut to /24
-  (IPv4) and /48 (IPv6); it never starts a lookup.
+  (IPv4) and /48 (IPv6), also inside the error texts; it never starts a
+  lookup. Lookup errors never repeat the request URL (its query holds the
+  address).
 
 ## App, desktop shell, build
 
