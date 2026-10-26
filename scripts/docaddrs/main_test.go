@@ -48,8 +48,9 @@ func TestPublic(t *testing.T) {
 }
 
 func TestAddrs(t *testing.T) {
-	got := addrs(`dial 1.1.1.1:443 then [2606:4700:4700::1111]:19302, prefix 198.51.100.0/24, ends 8.8.8.8. Not 12:30:45, v1.2.3 or aa:bb:cc:dd:ee:ff`)
-	want := []string{"1.1.1.1", "2606:4700:4700::1111", "198.51.100.0", "8.8.8.8"}
+	got := addrs(`dial 1.1.1.1:443 then [2606:4700:4700::1111]:19302, prefix 198.51.100.0/24, ends 8.8.8.8. Not 12:30:45, v1.2.3 or aa:bb:cc:dd:ee:ff` +
+		` stun:8.8.4.4:3478 IP:9.9.9.9 "line\n1.0.0.1" Not std::vector, Self::new or v1.2.3.4`)
+	want := []string{"1.1.1.1", "2606:4700:4700::1111", "198.51.100.0", "8.8.8.8", "8.8.4.4", "9.9.9.9", "1.0.0.1"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

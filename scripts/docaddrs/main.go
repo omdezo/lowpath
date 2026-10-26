@@ -128,7 +128,18 @@ var addrLike = regexp.MustCompile(`[0-9A-Fa-f.:]*[.:][0-9A-Fa-f.:]*`)
 // addrs returns the IP addresses written in line.
 func addrs(line string) []netip.Addr {
 	var out []netip.Addr
-	for _, m := range addrLike.FindAllString(line, -1) {
+	for _, loc := range addrLike.FindAllStringIndex(line, -1) {
+		start, m := loc[0], line[loc[0]:loc[1]]
+		// A label in front ("stun:", "IP:") leaves a lone ':' that no
+		// address starts with.
+		if strings.HasPrefix(m, ":") && !strings.HasPrefix(m, "::") {
+			start, m = start+1, m[1:]
+		}
+		// A run that starts inside a word is part of a name or a version
+		// ("std::vector", "v1.2.3.4"), not an address.
+		if inWord(line, start) {
+			continue
+		}
 		// Trailing punctuation (a sentence's ".", a label's ":") is not
 		// part of the address.
 		for _, c := range []string{m, strings.TrimRight(m, ".:")} {
@@ -143,6 +154,17 @@ func addrs(line string) []netip.Addr {
 		}
 	}
 	return out
+}
+
+// inWord says whether line[i] continues a word: it follows a letter or '_'
+// that does not end a "\n" or "\t" escape in a string literal.
+func inWord(line string, i int) bool {
+	if i == 0 {
+		return false
+	}
+	c := line[i-1]
+	word := c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+	return word && (i < 2 || line[i-2] != '\\')
 }
 
 // checked says whether a file (slash path relative to the root) is a test,
