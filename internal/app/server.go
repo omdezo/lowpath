@@ -52,6 +52,10 @@ type Config struct {
 	// Locator finds the public IP and ISP for /api/location. Nil: STUN and
 	// RIPEstat over the internet, only when the UI asks.
 	Locator Locator
+	// ServerLookup finds the network (AS, ISP, city) of a game server for
+	// the current server card. Nil: RIPEstat, cached, only when the card
+	// shows a server.
+	ServerLookup diag.NetworkLookup
 	// Platform is the OS layer: capture backend, socket owners, privileges,
 	// game detection, icons and folders. Nil: platform.Native(), the one
 	// built for this OS. Tests pass fakeplatform.
@@ -107,6 +111,7 @@ type Server struct {
 	art     *artStore
 	bloat   *bloatRunner
 	line    *lineWatch
+	current *currentServers
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -182,6 +187,9 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Locator == nil {
 		cfg.Locator = diag.NewInternetLocator()
 	}
+	if cfg.ServerLookup == nil {
+		cfg.ServerLookup = diag.NewCachedLookup(diag.NewRIPEstat(diag.RIPEstatOptions{}), diag.CacheOptions{Max: 256})
+	}
 	life, endLife := context.WithCancel(context.Background())
 	s := &Server{
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
@@ -200,6 +208,7 @@ func NewServer(cfg Config) (*Server, error) {
 		relays: func() []engine.PathSpec { return cfg.Relays.Paths("") },
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
 	}
+	s.current = newCurrentServers(cfg.Platform.Flows, cfg.Platform.Owners, cfg.ServerLookup, cfg.Locator, cfg.Ping, cfg.Store, life, cfg.Log.With("component", "current-server"))
 	return s, nil
 }
 
@@ -222,6 +231,20 @@ func (s *Server) Run(ctx context.Context) {
 		s.mu.Unlock()
 	}()
 	go s.line.run(s.lifetime, s.lineInput)
+	go func() {
+		// The current server card's flow learning: once a second, so the
+		// primary-server window counts seconds like a session's does.
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.lifetime.Done():
+				return
+			case <-t.C:
+				s.current.tick(s.runningGames())
+			}
+		}
+	}()
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
@@ -251,6 +274,7 @@ func (s *Server) Close() {
 	s.mu.Unlock()
 	s.bloat.stop("Lowpath is shutting down.")
 	s.endLife()
+	s.current.close()
 	s.stopSession()
 	s.relays.Close()
 	if s.servers != nil {
@@ -322,6 +346,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/games/{id}/favorite", s.handleFavorite)
 	mux.HandleFunc("GET /api/games/{id}/servers", s.handleServers)
 	mux.HandleFunc("POST /api/games/{id}/servers/ping", s.handleServers)
+	mux.HandleFunc("GET /api/games/{id}/current-server", s.handleCurrentServer)
 	mux.HandleFunc("POST /api/games/custom", s.handleAddCustomGame)
 	mux.HandleFunc("DELETE /api/games/custom/{id}", s.handleDeleteCustomGame)
 	mux.HandleFunc("POST /api/apply", s.handleApply)

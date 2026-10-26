@@ -202,3 +202,28 @@ func TestSplitHolder(t *testing.T) {
 		}
 	}
 }
+
+func TestRIPEstatCityCoordinates(t *testing.T) {
+	f, r := newFakeRIPE(t)
+	ctx := context.Background()
+	f.set("maxmind-geo-lite", `{"located_resources":[{"resource":"203.0.113.9/32","locations":[{"country":"NL","city":"Amsterdam","resources":["203.0.113.0/24"],"latitude":52.37,"longitude":4.89,"covered_percentage":100.0}]}]}`)
+	got, err := r.LookupNetwork(ctx, netip.MustParseAddr("203.0.113.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.City != "Amsterdam" || got.Lat == nil || got.Lon == nil || *got.Lat != 52.37 || *got.Lon != 4.89 {
+		t.Fatalf("got %+v, want Amsterdam with its coordinates", got)
+	}
+	// Country only (anycast): its center is no place to measure from.
+	f.set("maxmind-geo-lite", `{"located_resources":[{"resource":"203.0.113.9/32","locations":[{"country":"US","city":"","latitude":37.751,"longitude":-97.822,"covered_percentage":100.0}]}]}`)
+	got, err = r.LookupNetwork(ctx, netip.MustParseAddr("203.0.113.9"))
+	if err != nil || got.Country != "US" || got.Lat != nil || got.Lon != nil {
+		t.Fatalf("country only: %+v, %v", got, err)
+	}
+	// Out-of-range coordinates are dropped, the city is kept.
+	f.set("maxmind-geo-lite", `{"located_resources":[{"locations":[{"country":"NL","city":"Amsterdam","latitude":152.37,"longitude":4.89,"covered_percentage":100.0}]}]}`)
+	got, _ = r.LookupNetwork(ctx, netip.MustParseAddr("203.0.113.9"))
+	if got.City != "Amsterdam" || got.Lat != nil {
+		t.Fatalf("bad coordinates: %+v", got)
+	}
+}

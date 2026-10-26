@@ -101,3 +101,61 @@ func TestFlowTableGCAndList(t *testing.T) {
 		t.Fatal("a collected flow must come back as a fresh flow")
 	}
 }
+
+func TestFlowLearnerPicksBusiestUDPServer(t *testing.T) {
+	l := NewFlowLearner()
+	now := time.Now()
+	login := netip.MustParseAddrPort("198.51.100.7:443")
+	game := addrN(5)
+
+	// A reply nobody asked for doesn't make a server.
+	l.Observe(ProtoUDP, addrN(9), false, now)
+	if len(l.Servers()) != 0 {
+		t.Fatal("a packet sent to the game must not create a server")
+	}
+	// TCP first (the launcher logs in), then the match starts over UDP with
+	// fewer packets per second: game traffic still wins.
+	for range 20 {
+		l.Observe(ProtoTCP, login, true, now)
+	}
+	l.Tick(now)
+	if p := primaryOf(l.Servers()); p == nil || p.Addr != login {
+		t.Fatalf("primary %+v, want the only server so far", p)
+	}
+	for range 5 {
+		l.Observe(ProtoUDP, game, true, now)
+		l.Observe(ProtoUDP, game, false, now)
+	}
+	for range 20 {
+		l.Observe(ProtoTCP, login, true, now)
+	}
+	if !l.Tick(now.Add(time.Second)) {
+		t.Fatal("the UDP server should take over")
+	}
+	list := l.Servers()
+	p := primaryOf(list)
+	if p == nil || p.Addr != game || p.Proto != ProtoUDP || p.PktsUp != 5 || p.PktsDown != 5 {
+		t.Fatalf("primary %+v, want the UDP game server with 5 up, 5 down", p)
+	}
+	if !l.Knows(game) || l.Knows(addrN(9)) {
+		t.Fatal("Knows must report learned servers only")
+	}
+	if len(list) != 2 {
+		t.Fatalf("%d servers, want 2", len(list))
+	}
+
+	// The match ends: after a minute of silence both are forgotten.
+	l.Tick(now.Add(flowIdle + 2*time.Second))
+	if len(l.Servers()) != 0 {
+		t.Fatalf("servers after idling: %+v", l.Servers())
+	}
+}
+
+func primaryOf(list []ServerStatus) *ServerStatus {
+	for i := range list {
+		if list[i].Primary {
+			return &list[i]
+		}
+	}
+	return nil
+}

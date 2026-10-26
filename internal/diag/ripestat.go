@@ -210,12 +210,15 @@ func (r *RIPEstat) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo
 		info.Holder = clip(ov.Holder, 200)
 		info.ASName, info.ISP = splitHolder(info.Holder)
 	})
-	var country, city string
+	var g geoPlace
 	wg.Go(func() {
-		country, city, geoErr = r.geo(ctx, f, a)
+		g, geoErr = r.geo(ctx, f, a)
 	})
 	wg.Wait()
-	info.Country, info.City = country, city
+	info.Country, info.City = g.country, g.city
+	if g.city != "" && g.located {
+		info.Lat, info.Lon = &g.lat, &g.lon
+	}
 	var partial []string
 	if asErr != nil {
 		partial = append(partial, "ISP name unknown ("+asErr.Error()+")")
@@ -227,30 +230,45 @@ func (r *RIPEstat) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo
 	return info, nil
 }
 
+// geoPlace is one GeoLite2 location.
+type geoPlace struct {
+	country, city string
+	lat, lon      float64
+	located       bool // lat and lon were given and are in range
+}
+
 // geo picks the location covering most of the address's space. City is ""
-// when GeoLite only knows the country, which is common.
-func (r *RIPEstat) geo(ctx context.Context, f Family, a netip.Addr) (country, city string, err error) {
+// when GeoLite only knows the country, which is common (anycast services,
+// cloud ranges); its coordinates are then the country's center.
+func (r *RIPEstat) geo(ctx context.Context, f Family, a netip.Addr) (geoPlace, error) {
 	g, err := call[struct {
 		Located []struct {
 			Locations []struct {
-				Country string  `json:"country"`
-				City    string  `json:"city"`
-				Covered float64 `json:"covered_percentage"`
+				Country string   `json:"country"`
+				City    string   `json:"city"`
+				Lat     *float64 `json:"latitude"`
+				Lon     *float64 `json:"longitude"`
+				Covered float64  `json:"covered_percentage"`
 			} `json:"locations"`
 		} `json:"located_resources"`
 	}](ctx, r, f, "maxmind-geo-lite", a.String())
 	if err != nil {
-		return "", "", err
+		return geoPlace{}, err
 	}
+	var out geoPlace
 	best := -1.0
 	for _, lr := range g.Located {
 		for _, l := range lr.Locations {
 			if l.Covered > best && (l.Country != "" || l.City != "") {
-				best, country, city = l.Covered, strings.TrimSpace(l.Country), strings.TrimSpace(l.City)
+				best = l.Covered
+				out = geoPlace{country: strings.TrimSpace(l.Country), city: strings.TrimSpace(l.City)}
+				if l.Lat != nil && l.Lon != nil && *l.Lat >= -90 && *l.Lat <= 90 && *l.Lon >= -180 && *l.Lon <= 180 {
+					out.lat, out.lon, out.located = *l.Lat, *l.Lon, true
+				}
 			}
 		}
 	}
-	return country, city, nil
+	return out, nil
 }
 
 // splitHolder splits an AS holder string into its handle and name. RIPEstat
