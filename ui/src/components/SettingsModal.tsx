@@ -7,10 +7,7 @@ import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
 import { OtherSoftware } from "./Conflicts";
 import { RelaysPane } from "./RelaysPane";
-import { BloatTest } from "./BloatTest";
-import { RouteTrace } from "./RouteTrace";
-import { Verdict } from "./Verdict";
-import { WiFiCard } from "./WiFiCard";
+import { Diagnostics } from "./Diagnostics";
 
 export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
 
@@ -165,18 +162,7 @@ export function SettingsModal(props: Props) {
 
           {tab === "relays" && <RelaysPane relays={relays} settings={settings} onSettings={set} onRelaysChanged={onRelaysChanged} />}
 
-          {tab === "diagnostics" && (
-            <>
-              <h3>Diagnostics</h3>
-              <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
-                Is the lag on your side of the connection? Run the tests on Wi-Fi and again on a cable to compare.
-              </div>
-              <Verdict />
-              <WiFiCard tuningEnabled={settings.wifi_tuning ?? true} />
-              <BloatTest onError={onError} />
-              <RouteTrace onError={onError} />
-            </>
-          )}
+          {tab === "diagnostics" && <Diagnostics onError={onError} wifiTuning={settings.wifi_tuning ?? true} />}
 
           {tab === "optimization" && (
             <>

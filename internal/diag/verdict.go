@@ -115,6 +115,9 @@ type Diagnosis struct {
 	Link      string       `json:"link"`      // LinkWiFi, LinkEthernet, ... of the connection in use
 	Interface string       `json:"interface"` // its adapter name, "" unknown
 	Next      []Suggestion `json:"next,omitempty"`
+	// Segments are the parts of the route, PC to game server, with what
+	// was measured on each.
+	Segments []Segment `json:"segments"`
 }
 
 // WiFiSignal is the Wi-Fi link's radio state. Fields are nil or "" when
@@ -142,6 +145,20 @@ type GatewaySample struct {
 	// TailMS is the TailPct-th percentile (95 or 99) of the answered pings.
 	TailMS  *float64 `json:"tail_ms"`
 	TailPct int      `json:"tail_pct"`
+	// Spikes counts replies of 100 ms or more (0 when not counted).
+	Spikes int `json:"spikes,omitempty"`
+	// Link and Interface are the connection the pings ran on ("" unknown):
+	// router pings on Wi-Fi say nothing about the cable plugged in since.
+	Link      string `json:"link,omitempty"`
+	Interface string `json:"interface,omitempty"`
+	// Limited: the router limits how many pings it answers, so Lost isn't
+	// the link's loss.
+	Limited bool `json:"limited,omitempty"`
+	// Stopped: the router answered earlier in this series and has lost
+	// every ping since, so Lost == Sent is real loss (a frozen router, or
+	// Wi-Fi that stays connected but passes nothing), not a router that
+	// ignores ping.
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 func (g GatewaySample) lossPct() float64 {
@@ -322,6 +339,7 @@ func (e *VerdictEngine) Diagnose(ev Evidence) Diagnosis {
 		// Nothing the tests say matters while no game can connect at all,
 		// and none of them can run.
 		d.Verdict = offlineVerdict()
+		d.Segments = segments(v, d.Checks, d.Verdict)
 		return d
 	case found != nil:
 		d.Verdict = *found
@@ -329,6 +347,7 @@ func (e *VerdictEngine) Diagnose(ev Evidence) Diagnosis {
 		d.Verdict = noProblem(d.Checks)
 	}
 	d.Next = suggestions(d.Checks, d.Verdict, ev.Boost != nil)
+	d.Segments = segments(v, d.Checks, d.Verdict)
 	return d
 }
 
@@ -521,8 +540,16 @@ func (v *view) useTrace() {
 func (v *view) useGateway() {
 	if g := v.ev.Gateway; g != nil && g.Sent > 0 {
 		if conf, ok := v.ageConf(g.At); ok {
-			v.gateway, v.gatewayConf = g, conf
-			return
+			switch v.otherLink(g.Link, g.Interface) {
+			case linkSame:
+				v.gateway, v.gatewayConf = g, conf
+				return
+			case linkUnsure:
+				v.gateway, v.gatewayConf = g, conf.lower()
+				return
+			}
+			// Pinged on another connection: fall back to a bufferbloat
+			// test that ran on this one, if any.
 		}
 	}
 	if v.bloat == nil {

@@ -7,6 +7,7 @@ import type {
   CurrentServer,
   Diagnosis,
   Game,
+  GatewayView,
   Live,
   Mapping,
   NetLocation,
@@ -95,6 +96,7 @@ export const api = {
     call<TraceStatus>("POST", "/diag/trace", { ...target, mode }),
   stopTrace: () => call<TraceStatus>("DELETE", "/diag/trace"),
   verdict: () => call<Diagnosis>("GET", "/diag/verdict"),
+  gateway: () => call<GatewayView>("GET", "/diag/gateway"),
   wifi: () => call<WiFiView>("GET", "/diag/wifi"),
   wifiSurvey: () => call<WiFiView>("POST", "/diag/wifi/survey"),
 };
