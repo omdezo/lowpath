@@ -367,16 +367,18 @@ func TestRouteModeSession(t *testing.T) {
 
 func TestProcessesSortedBySockets(t *testing.T) {
 	self := uint32(os.Getpid())
+	pids := fakePIDs(3)
+	pidB, pidC, pidA := pids[0], pids[1], pids[2]
 	sock := func(port uint16, pid uint32) owner.Socket {
 		return owner.Socket{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), port), PID: pid}
 	}
 	fc := newFake(t)
 	fc.Owners.Set([]owner.Socket{
-		sock(1, 10),
-		sock(1, 11), sock(2, 11),
+		sock(1, pidB),
+		sock(1, pidC), sock(2, pidC),
 		sock(1, self), sock(2, self), sock(3, self),
-		sock(5, 12), sock(6, 12),
-	}, map[uint32]string{10: "b.exe", 11: "C.exe", self: "lowpath.exe", 12: "a.exe"})
+		sock(5, pidA), sock(6, pidA),
+	}, map[uint32]string{pidB: "b.exe", pidC: "C.exe", self: "lowpath.exe", pidA: "a.exe"})
 	ts, _ := newRealServer(t, fc)
 	var res struct{ Processes []capture.Process }
 	if code := call(t, ts, "GET", "/api/processes", "", &res); code != 200 {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,21 @@ import (
 func newFake(t *testing.T) *fakeplatform.Fake {
 	t.Helper()
 	return fakeplatform.New(t.TempDir())
+}
+
+// fakePIDs returns n distinct PIDs for the fake processes of a test, none of
+// them the test binary's own and all above 4. A fixed PID can't promise
+// that: in a fresh PID namespace (a container, WSL's docker-desktop) the
+// binary itself runs as PID 11 or so, and the app leaves its own PID out of
+// process lists and flow events, and PIDs 0 to 4 (the System processes on
+// Windows) too.
+func fakePIDs(n int) []uint32 {
+	first := max(uint32(os.Getpid()), 100) + 1
+	pids := make([]uint32, n)
+	for i := range pids {
+		pids[i] = first + uint32(i)
+	}
+	return pids
 }
 
 // lastCapture is the capture session the app started most recently.

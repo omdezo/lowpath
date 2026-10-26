@@ -187,6 +187,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   calls still running on it, so a late inject from the engine or a worker
   that comes back after a fail-open can no longer reach the driver through
   a released handle that Windows may have reused (#128).
+- The app tests no longer fail when the test binary itself gets a small
+  PID, as in a fresh container or WSL's `docker-desktop`: their fake
+  processes take PIDs that can't be the binary's own (#189).
 
 ## [0.2.0] - 2026-10-26
 

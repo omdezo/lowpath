@@ -229,21 +229,28 @@ func TestRecoverLeftoverOtherBackend(t *testing.T) {
 }
 
 // The Lowpath that wrote the marker is still running: leave its capture
-// alone. A reused PID (another program) does not count.
+// alone. A reused PID (another program, or this Lowpath after a reboot)
+// does not count.
 func TestRecoverLeftoverSkipsRunningOwner(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		running string
+		own     bool // the marker has this process's PID
 		recover bool
 	}{
-		{"same program", "lowpath.exe", false},
-		{"pid reused", "notepad.exe", true},
+		{"same program", "lowpath.exe", false, false},
+		{"pid reused", "notepad.exe", false, true},
+		{"own pid after a reboot", "lowpath.exe", true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fp := newFake(t)
-			fp.Owners.Set([]owner.Socket{}, map[uint32]string{4242: c.running})
+			pid := fakePIDs(1)[0]
+			if c.own {
+				pid = uint32(os.Getpid())
+			}
+			fp.Owners.Set([]owner.Socket{}, map[uint32]string{pid: c.running})
 			marker := newMarker(t)
-			marker.Save(capture.Marker{Backend: "fake", PID: 4242, Exe: "Lowpath.exe", Game: "cs2"})
+			marker.Save(capture.Marker{Backend: "fake", PID: pid, Exe: "Lowpath.exe", Game: "cs2"})
 			_, srv := newRealServer(t, fp, withMarker(marker))
 			_, still, _ := marker.Load()
 			recovered := len(fp.Capture.Recovered()) == 1
