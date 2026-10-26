@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -367,16 +368,18 @@ func TestRouteModeSession(t *testing.T) {
 
 func TestProcessesSortedBySockets(t *testing.T) {
 	self := uint32(os.Getpid())
+	pids := fakePIDs(3)
+	pidB, pidC, pidA := pids[0], pids[1], pids[2]
 	sock := func(port uint16, pid uint32) owner.Socket {
 		return owner.Socket{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), port), PID: pid}
 	}
 	fc := newFake(t)
 	fc.Owners.Set([]owner.Socket{
-		sock(1, 10),
-		sock(1, 11), sock(2, 11),
+		sock(1, pidB),
+		sock(1, pidC), sock(2, pidC),
 		sock(1, self), sock(2, self), sock(3, self),
-		sock(5, 12), sock(6, 12),
-	}, map[uint32]string{10: "b.exe", 11: "C.exe", self: "lowpath.exe", 12: "a.exe"})
+		sock(5, pidA), sock(6, pidA),
+	}, map[uint32]string{pidB: "b.exe", pidC: "C.exe", self: "lowpath.exe", pidA: "a.exe"})
 	ts, _ := newRealServer(t, fc)
 	var res struct{ Processes []capture.Process }
 	if code := call(t, ts, "GET", "/api/processes", "", &res); code != 200 {
@@ -457,6 +460,54 @@ func TestRunningGamesFromDetector(t *testing.T) {
 		if g.Running != (g.ID == "cs2") {
 			t.Errorf("%s running = %v", g.ID, g.Running)
 		}
+	}
+}
+
+// Stop on game exit: the session ends only after the game was seen while
+// it was on and is then gone, and the log says when the game was first
+// seen, so a session that never ended shows which half was missing.
+func TestStopOnGameExit(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		stopOn bool
+		scans  [][]string // what runs at each scan, in order
+		ends   bool
+		seen   int // "game seen" log lines
+	}{
+		{name: "seen then gone", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {"LPCHECK.EXE"}, {}}, ends: true, seen: 1},
+		{name: "never seen", stopOn: true, scans: [][]string{{}, {}, {}}},
+		{name: "only another game", stopOn: true, scans: [][]string{{"cs2.exe"}, {}}},
+		{name: "gone, setting off", stopOn: false, scans: [][]string{{"lpcheck.exe"}, {}, {}}, seen: 1},
+		{name: "back after a gap", stopOn: false, scans: [][]string{{"lpcheck.exe"}, {}, {"lpcheck.exe"}}, seen: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fc := newFake(t)
+			fc.Privileges.SetElevated(true)
+			var log lockedLog
+			ts, srv := newRealServer(t, fc, func(cfg *Config) {
+				cfg.Log = slog.New(slog.NewTextHandler(&log, nil))
+			})
+			call(t, ts, "PUT", "/api/settings", fmt.Sprintf(`{"capture_mode":"route","loopback_relay":true,"stop_on_game_exit":%v}`, c.stopOn), nil)
+			var g gameView
+			call(t, ts, "POST", "/api/games/custom", `{"name":"LP Check","process":"lpcheck.exe"}`, &g)
+			if code := call(t, ts, "POST", "/api/apply", `{"game_id":"`+g.ID+`","mode":"smart"}`, nil); code != 200 {
+				t.Fatalf("apply: %d", code)
+			}
+			for _, procs := range c.scans {
+				fc.Games.SetRunning(procs...)
+				srv.scanRunning()
+			}
+			if lv := srv.live(); (lv.Session == nil) != c.ends {
+				t.Errorf("session after the scans: %+v, want ended %v", lv.Session, c.ends)
+			}
+			out := log.String()
+			if n := strings.Count(out, `msg="game seen during the session" game=`+g.ID); n != c.seen {
+				t.Errorf("%d \"game seen\" lines, want %d:\n%s", n, c.seen, out)
+			}
+			if exited := strings.Contains(out, "game exited, stopping optimization"); exited != c.ends {
+				t.Errorf("game exit logged %v, want %v:\n%s", exited, c.ends, out)
+			}
+		})
 	}
 }
 
