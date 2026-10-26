@@ -330,6 +330,10 @@ func TestBrokenHandleStopsCapture(t *testing.T) {
 	if s := h.c.Stats(); !strings.Contains(s.LastError, "capture stopped") || s.Errors < maxRecvFailures {
 		t.Fatalf("stats = %+v", s)
 	}
+	<-h.c.Done()
+	if err := h.c.Err(); err == nil || !strings.Contains(err.Error(), "device gone") {
+		t.Fatalf("Err = %v, want the handle's error", err)
+	}
 }
 
 func TestStatsJSON(t *testing.T) {

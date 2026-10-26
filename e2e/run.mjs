@@ -117,7 +117,7 @@ function speedServer() {
 
 function startApp(data, importFile, bloatServer) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
-  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer], { windowsHide: true });
+  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms"], { windowsHide: true });
   app.stdout.pipe(log);
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -253,6 +253,15 @@ async function main() {
   const base = await lpcheck("direct (no Lowpath)", ["-for", "3s"]);
   check("Baseline: lpcheck reaches Google STUN directly", base.received > 0, `${base.received}/${base.sent} replies, ${base.avg} ms, public ${base.public}`);
 
+  // A previous run that was killed mid-boost (taskkill /F, a crash) leaves
+  // its session marker behind. Plant one whose process is gone (a child
+  // that already exited) so the app's start-up cleanup has to report it.
+  const gone = spawnSync(process.execPath, ["-e", ""], { windowsHide: true }).pid;
+  fs.writeFileSync(
+    path.join(data, "capture-session.json"),
+    JSON.stringify({ backend: "divert", pid: gone, exe: "lowpath.exe", game: "cs2", started: new Date(Date.now() - 3600e3).toISOString() }),
+  );
+
   const speed = await speedServer();
   const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -264,6 +273,28 @@ async function main() {
     await page.getByLabel("Search games").waitFor();
     await page.getByRole("heading", { name: "Your games" }).waitFor();
     check("App opens straight to the home screen", true);
+
+    // 1b. Fail-open: the leftover marker is cleaned up and explained.
+    const notice = page.getByRole("alert", { name: "Boost ended" });
+    await notice.waitFor({ timeout: 5000 }).catch(() => {});
+    const noticeText = (await notice.textContent().catch(() => "")) ?? "";
+    check(
+      "A boost the last run never finished is reported at start",
+      /Your last boost was cut short/.test(noticeText) && noticeText.includes("Counter-Strike 2") && noticeText.includes("normal connection"),
+      noticeText.trim().slice(0, 140),
+    );
+    check("The leftover session marker is removed", !fs.existsSync(path.join(data, "capture-session.json")));
+    await shot(page, "failsafe-recovered", "Start-up cleanup: the last run closed mid-boost; the game went back to the normal connection");
+    await notice.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
+    check("The notice can be dismissed", !(await notice.isVisible().catch(() => false)));
+    // The service forgets it too, so a reload or another window doesn't
+    // bring it back (the click's request may still be in flight).
+    let after = await live(page);
+    for (let i = 0; i < 20 && after?.failsafe; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      after = await live(page);
+    }
+    check("The service forgets a dismissed notice", after != null && !after.failsafe, JSON.stringify(after?.failsafe ?? null).slice(0, 140));
     await shot(page, "home", "Home: pick a game, press BOOST, play");
 
     // 2. No relays yet: the game screen offers the two ways to start.
@@ -357,6 +388,51 @@ async function main() {
     check("A grade comes with a measured idle ping", br && (!br.grade || br.idle_ms > 0), br && `grade ${br.grade || "none"}`);
     await page.getByRole("button", { name: "Run again" }).waitFor({ timeout: 5000 }).catch(() => {});
     await shot(page, "bloat-result", `Bufferbloat result: grade ${br?.grade || "none (see note)"}`);
+
+    // 4c. Diagnostics: route trace (MTR), shortened to 15 rounds by the
+    // -trace-* flags. First UDP to the loopback relay's port, then ICMP to
+    // Cloudflare through the real routers on the way.
+    const traceDone = async () => {
+      let tr;
+      for (let i = 0; i < 60; i++) {
+        tr = (await api(page, "GET", "/diag/trace")).body;
+        if (tr && !tr.running) break;
+        await page.waitForTimeout(500);
+      }
+      return tr;
+    };
+    await page.locator(".trace").scrollIntoViewIfNeeded();
+    await page.getByLabel("Trace target").selectOption("relay:loopback");
+    await page.getByRole("radio", { name: "UDP", exact: true }).click();
+    await page.getByRole("button", { name: "Start trace" }).click();
+    await page.locator(".trace-progress").waitFor({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+    await page.locator(".trace").scrollIntoViewIfNeeded();
+    await shot(page, "trace-running", "Route trace running: UDP to the loopback relay's port");
+    let tr = await traceDone();
+    let rt = tr?.result;
+    check(
+      "Route trace over UDP reaches the loopback relay",
+      tr && !tr.running && rt?.mode === "udp" && rt.reached && rt.end?.recv > 0,
+      rt ? `${rt.hops?.length ?? 0} hops, UDP ${rt.end?.recv ?? 0}/${rt.end?.sent ?? 0}: ${rt.verdict}` : JSON.stringify(tr),
+    );
+    await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.locator(".trace").scrollIntoViewIfNeeded();
+    await shot(page, "trace-udp", "Route trace result: UDP to the loopback relay");
+    await page.getByLabel("Trace target").selectOption("cloudflare");
+    await page.getByRole("button", { name: "Trace again" }).click();
+    tr = await traceDone();
+    rt = tr?.result;
+    check(
+      "Route trace over ICMP finds the routers to Cloudflare",
+      rt?.mode === "icmp" && rt.target === "1.1.1.1" && ((rt.reached && rt.hops?.length >= 2) || rt.verdict),
+      rt ? `${rt.hops?.length ?? 0} hops, reached ${rt.reached}, destination loss ${rt.dest_loss_pct ?? "—"}%: ${rt.verdict}` : JSON.stringify(tr),
+    );
+    const report = await page.evaluate(async () => (await fetch("/api/diag/trace/report")).text());
+    check("Route trace report exports as text", report.startsWith("Lowpath route trace to Cloudflare DNS (1.1.1.1)") && report.includes("Persist%"), `${report.split("\n").length} lines`);
+    await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.locator(".trace-foot").scrollIntoViewIfNeeded();
+    await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.

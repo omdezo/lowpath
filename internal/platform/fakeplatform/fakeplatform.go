@@ -63,10 +63,12 @@ func (f *Fake) Platform() *platform.Platform {
 
 // Capture is a capture backend whose sessions the test drives.
 type Capture struct {
-	mu       sync.Mutex
-	avail    error
-	startErr error
-	sessions []*Session
+	mu         sync.Mutex
+	avail      error
+	startErr   error
+	recoverErr error
+	sessions   []*Session
+	recovered  []capture.Marker
 }
 
 func (c *Capture) Name() string { return "fake" }
@@ -95,9 +97,27 @@ func (c *Capture) Start(cfg capture.Config) (capture.Session, error) {
 	if cfg.OnPacket == nil {
 		return nil, errors.New("fakeplatform: Config.OnPacket is required")
 	}
-	s := &Session{cfg: cfg, injected: make(chan Injected, 1024)}
+	s := &Session{cfg: cfg, injected: make(chan Injected, 1024), done: make(chan struct{})}
 	c.sessions = append(c.sessions, s)
 	return s, nil
+}
+
+// SetRecoverErr makes Recover fail with err.
+func (c *Capture) SetRecoverErr(err error) { c.mu.Lock(); c.recoverErr = err; c.mu.Unlock() }
+
+// Recover records the marker it was asked to clean up after.
+func (c *Capture) Recover(m capture.Marker) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recovered = append(c.recovered, m)
+	return c.recoverErr
+}
+
+// Recovered lists the markers Recover got, oldest first.
+func (c *Capture) Recovered() []capture.Marker {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.recovered)
 }
 
 // Sessions lists every session started so far, oldest first.
@@ -130,6 +150,9 @@ type Session struct {
 	captured, injCount atomic.Uint64
 	dropped            atomic.Uint64
 	closed             atomic.Bool
+	done               chan struct{}
+	stopOnce           sync.Once
+	reason             atomic.Pointer[error]
 }
 
 // Config is what the app asked to capture.
@@ -172,11 +195,34 @@ func (s *Session) Stats() capture.Stats {
 }
 
 func (s *Session) Close() error {
-	s.closed.Store(true)
+	s.stop()
 	return nil
 }
 
-// Closed reports whether the app closed the session.
+func (s *Session) stop() {
+	s.stopOnce.Do(func() {
+		s.closed.Store(true)
+		close(s.done)
+	})
+}
+
+// Fail makes the session stop on its own with err, the way the capture
+// watchdog fails open.
+func (s *Session) Fail(err error) {
+	s.reason.CompareAndSwap(nil, &err)
+	s.stop()
+}
+
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+func (s *Session) Err() error {
+	if e := s.reason.Load(); e != nil {
+		return *e
+	}
+	return nil
+}
+
+// Closed reports whether the session stopped: closed by the app, or Fail.
 func (s *Session) Closed() bool { return s.closed.Load() }
 
 // Owners is a socket-owner table the test fills in.
@@ -265,6 +311,8 @@ type Games struct {
 	exes    map[string]string
 	libs    []string
 	roots   []string
+	wine    []string
+	install []string
 }
 
 // SetRunning replaces the running processes (image names, any case).
@@ -293,6 +341,14 @@ func (g *Games) SetSteam(libraries, roots []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.libs, g.roots = slices.Clone(libraries), slices.Clone(roots)
+}
+
+// SetWine sets the Wine prefixes' drive_c folders and the launcher install
+// folders.
+func (g *Games) SetWine(driveC, installs []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.wine, g.install = slices.Clone(driveC), slices.Clone(installs)
 }
 
 func (g *Games) Running() map[string]bool {
@@ -328,6 +384,18 @@ func (g *Games) SteamRoots() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.roots)
+}
+
+func (g *Games) WinePrefixes() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.wine)
+}
+
+func (g *Games) LauncherInstalls() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.install)
 }
 
 // Icons hands out icons the test registered per program path.

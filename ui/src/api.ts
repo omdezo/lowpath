@@ -15,6 +15,8 @@ import type {
   RouteMode,
   ServerList,
   Settings,
+  TraceMode,
+  TraceStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -63,6 +65,7 @@ export const api = {
   apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string) =>
     call<Live>("POST", "/apply", { game_id, mode, region, route_id }),
   stop: () => call<Live>("POST", "/stop"),
+  dismissFailsafe: () => call<Live>("DELETE", "/failsafe"),
   saveSettings: (s: Settings) => call<Settings>("PUT", "/settings", s),
   impair: (path_id: string, action: "degrade" | "outage" | "restore") =>
     call<{ ok: boolean }>("POST", "/demo/impair", { path_id, action }),
@@ -79,6 +82,10 @@ export const api = {
   bloat: () => call<BloatStatus>("GET", "/diag/bloat"),
   startBloat: () => call<BloatStatus>("POST", "/diag/bloat"),
   stopBloat: () => call<BloatStatus>("DELETE", "/diag/bloat"),
+  trace: () => call<TraceStatus>("GET", "/diag/trace"),
+  startTrace: (target: { target_id: string } | { host: string }, mode: TraceMode) =>
+    call<TraceStatus>("POST", "/diag/trace", { ...target, mode }),
+  stopTrace: () => call<TraceStatus>("DELETE", "/diag/trace"),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need
@@ -98,6 +105,10 @@ export function describeError(e: unknown, fallback: string): { title?: string; m
       };
     case "capture_failed":
       return { title: "Couldn't capture game traffic", msg: e.message || "The capture driver failed to start." };
+    case "trace_running":
+      return { title: "A route trace is running", msg: e.message || "Wait for the route trace to finish, or stop it." };
+    case "bloat_running":
+      return { title: "The bufferbloat test is running", msg: e.message || "Wait for the bufferbloat test to finish." };
     case "session_active":
       return { title: "Stop the boost first", msg: e.message || "The bufferbloat test fills your connection, which would lag the game." };
     default:

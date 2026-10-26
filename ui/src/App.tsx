@@ -12,6 +12,7 @@ import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { AddGameModal } from "./components/AddGame";
 import { CaptureBanner } from "./components/CaptureBanner";
 import { LineBanner } from "./components/LineBanner";
+import { FailsafeBanner } from "./components/FailsafeBanner";
 import { Toasts, type Toast } from "./components/Toasts";
 import type { Point } from "./components/LiveGraph";
 
@@ -36,6 +37,14 @@ export function App() {
   const [showSettings, setShowSettings] = useState<SettingsTab | null>(null);
   const [showAddGame, setShowAddGame] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // The fail-open notice the user closed (by its time): hidden here at once,
+  // while the service forgets it for reloads and other windows.
+  const [failsafeSeen, setFailsafeSeen] = useState("");
+  const dismissFailsafe = useCallback((at: string) => {
+    setFailsafeSeen(at);
+    // If the service can't be reached, the notice stays hidden in this window.
+    api.dismissFailsafe().then(setLive).catch(() => {});
+  }, []);
   const [history, setHistory] = useState<Point[]>([]);
   const [now, setNow] = useState(Date.now());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -311,6 +320,11 @@ export function App() {
         {captureBlocked && platform && (
           <div className="main-banner">
             <CaptureBanner platform={platform} down={down} onOpenNetwork={() => setShowSettings("network")} onError={onError} />
+          </div>
+        )}
+        {live?.failsafe && live.failsafe.at !== failsafeSeen && !live.session && (
+          <div className="main-banner">
+            <FailsafeBanner failsafe={live.failsafe} onDismiss={() => dismissFailsafe(live.failsafe?.at ?? "")} />
           </div>
         )}
         {live?.line?.active && (

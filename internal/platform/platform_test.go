@@ -34,8 +34,15 @@ func TestNativeIsComplete(t *testing.T) {
 	if err := p.Capture.Available(); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("capture on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
 	}
-	if _, err := p.Owners.UDPSockets(); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("owner lookup on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+	switch _, err := p.Owners.UDPSockets(); runtime.GOOS {
+	case "linux", "darwin":
+		if err != nil {
+			t.Errorf("owner lookup on %s: %v", runtime.GOOS, err)
+		}
+	default:
+		if !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("owner lookup on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+		}
 	}
 	if p.Privileges.CanElevate() {
 		t.Error("CanElevate without a prompt to show")

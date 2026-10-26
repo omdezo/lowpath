@@ -84,6 +84,19 @@ type Config struct {
 	BloatLoader diag.Loader
 	// Ping sends one ICMP echo. Nil: icmp.Ping.
 	Ping diag.PingFunc
+	// Marker records a running route-mode session on disk, so the next
+	// start can clean up after a run that was killed or crashed. Nil: no
+	// record (tests); cmd/lowpath keeps capture-session.json in the data
+	// folder.
+	Marker SessionMarker
+	// PingTTL sends one TTL-limited echo for the route trace. Nil:
+	// icmp.PingTTL. Names looks up hop names; nil: reverse DNS.
+	PingTTL diag.TTLPingFunc
+	Names   diag.NameFunc
+	// TraceCount and TraceInterval shorten the route trace (tests, the
+	// end-to-end run); zero: 200 probes per hop, one per second.
+	TraceCount    int
+	TraceInterval time.Duration
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -110,8 +123,10 @@ type Server struct {
 	auth    *auth
 	art     *artStore
 	bloat   *bloatRunner
+	trace   *traceRunner
 	line    *lineWatch
 	current *currentServers
+	marker  SessionMarker // nil: none
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -129,6 +144,7 @@ type Server struct {
 	installed map[string]bool
 	running   map[string]bool
 	mapping   *mappingResult
+	failsafe  *failsafeView // the last boost that ended without the user asking
 	closed    bool
 	done      chan struct{} // closed by Close; ends the live streams
 }
@@ -177,6 +193,12 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Ping == nil {
 		cfg.Ping = icmp.Ping
 	}
+	if cfg.PingTTL == nil {
+		cfg.PingTTL = icmp.PingTTL
+	}
+	if cfg.Names == nil {
+		cfg.Names = reverseName
+	}
 	if cfg.BloatLoader == nil {
 		l, err := diag.NewHTTPLoader(diag.HTTPLoaderConfig{UserAgent: "Lowpath/" + Version + " (bufferbloat test)"})
 		if err != nil {
@@ -200,7 +222,8 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line: newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		line:   newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		marker: cfg.Marker,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -208,6 +231,11 @@ func NewServer(cfg Config) (*Server, error) {
 		relays: func() []engine.PathSpec { return cfg.Relays.Paths("") },
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
 	}
+	s.trace = &traceRunner{
+		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
+		count: cfg.TraceCount, interval: cfg.TraceInterval,
+	}
+	s.recoverLeftover()
 	s.current = newCurrentServers(cfg.Platform.Flows, cfg.Platform.Owners, cfg.ServerLookup, cfg.Locator, cfg.Ping, cfg.Store, life, cfg.Log.With("component", "current-server"))
 	return s, nil
 }
@@ -218,18 +246,7 @@ func (s *Server) Run(ctx context.Context) {
 	// Fetch the library's artwork in the background so covers are ready
 	// the first time the home screen opens.
 	go s.art.warm(ctx, s.allGames())
-	go func() {
-		libs := s.plat.Games.SteamLibraries()
-		inst := map[string]bool{}
-		for _, g := range s.games {
-			if detect.Installed(g.Paths, g.Steam, libs) {
-				inst[g.ID] = true
-			}
-		}
-		s.mu.Lock()
-		s.installed = inst
-		s.mu.Unlock()
-	}()
+	go s.scanInstalled()
 	go s.line.run(s.lifetime, s.lineInput)
 	go func() {
 		// The current server card's flow learning: once a second, so the
@@ -273,6 +290,7 @@ func (s *Server) Close() {
 	close(s.done)
 	s.mu.Unlock()
 	s.bloat.stop("Lowpath is shutting down.")
+	s.trace.stop()
 	s.endLife()
 	s.current.close()
 	s.stopSession()
@@ -307,6 +325,23 @@ func (s *Server) game(id string) (Game, bool) {
 		}
 	}
 	return Game{}, false
+}
+
+// scanInstalled finds which catalog games are installed: in a Steam
+// library, at their usual folder or, on Linux and macOS, inside a Wine or
+// Proton prefix or a launcher's install folder.
+func (s *Server) scanInstalled() {
+	games := s.plat.Games
+	lib := detect.Library{Steam: games.SteamLibraries(), DriveC: games.WinePrefixes(), Installs: games.LauncherInstalls()}
+	inst := map[string]bool{}
+	for _, g := range s.games {
+		if lib.Has(g.Paths, g.Steam) {
+			inst[g.ID] = true
+		}
+	}
+	s.mu.Lock()
+	s.installed = inst
+	s.mu.Unlock()
 }
 
 func (s *Server) scanRunning() {
@@ -352,6 +387,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/apply", s.handleApply)
 	mux.HandleFunc("POST /api/stop", s.handleStop)
 	mux.HandleFunc("GET /api/live", s.handleLive)
+	mux.HandleFunc("DELETE /api/failsafe", s.handleDismissFailsafe)
 	mux.HandleFunc("PUT /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/relays", s.handleRelays)
 	mux.HandleFunc("POST /api/relays", s.handleAddRelay)
@@ -365,6 +401,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/diag/bloat", s.handleBloat)
 	mux.HandleFunc("POST /api/diag/bloat", s.handleStartBloat)
 	mux.HandleFunc("DELETE /api/diag/bloat", s.handleStopBloat)
+	mux.HandleFunc("GET /api/diag/trace", s.handleTrace)
+	mux.HandleFunc("POST /api/diag/trace", s.handleStartTrace)
+	mux.HandleFunc("DELETE /api/diag/trace", s.handleStopTrace)
+	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -619,11 +659,14 @@ type liveView struct {
 	// Line is the passive bufferbloat detector during a session (nil
 	// without one).
 	Line *diag.PassiveState `json:"line"`
+	// Failsafe is the last boost that ended without the user asking (nil:
+	// none since the last Boost).
+	Failsafe *failsafeView `json:"failsafe"`
 }
 
 func (s *Server) live() liveView {
 	s.mu.Lock()
-	v := liveView{Status: s.status, Session: s.sess}
+	v := liveView{Status: s.status, Session: s.sess, Failsafe: s.failsafe}
 	for id := range s.running {
 		v.Running = append(v.Running, id)
 	}
@@ -706,6 +749,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"analysis":     analysis,
 		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"bufferbloat":  s.store.Bloat(),
+		"route_trace":  s.lastTrace(), // addresses cut to /24 and /48
 		"live":         s.live(),
 	})
 }

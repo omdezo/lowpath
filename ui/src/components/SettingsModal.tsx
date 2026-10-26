@@ -7,6 +7,7 @@ import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
 import { RelaysPane } from "./RelaysPane";
 import { BloatTest } from "./BloatTest";
+import { RouteTrace } from "./RouteTrace";
 
 export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
 
@@ -164,9 +165,10 @@ export function SettingsModal(props: Props) {
             <>
               <h3>Diagnostics</h3>
               <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
-                Is the lag on your side of the connection? Run the test on Wi-Fi and again on a cable to compare.
+                Is the lag on your side of the connection? Run the tests on Wi-Fi and again on a cable to compare.
               </div>
               <BloatTest onError={onError} />
+              <RouteTrace onError={onError} />
             </>
           )}
 
