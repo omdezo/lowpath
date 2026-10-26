@@ -182,6 +182,10 @@ func captureErr(err error) *apiError {
 	if errors.Is(err, capture.ErrNeedAdmin) {
 		return &apiError{409, "needs_admin", errors.New("route mode needs administrator rights: restart Lowpath as administrator, or switch to proxy mode")}
 	}
+	if errors.Is(err, errors.ErrUnsupported) {
+		// Not a failure: this system has no capture backend (yet).
+		return &apiError{501, "unsupported", fmt.Errorf("route mode can't capture game traffic here (%s): switch to proxy mode", captureReason(err))}
+	}
 	return &apiError{500, "capture_failed", err}
 }
 

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"lowpath/internal/app"
+	"lowpath/internal/capture"
 	"lowpath/internal/platform"
 	"lowpath/internal/platform/fakeplatform"
 )
@@ -123,6 +124,7 @@ func TestAppOnFakePlatform(t *testing.T) {
 	fp := fakeplatform.New(t.TempDir())
 	fp.OS = "testos"
 	fp.Privileges.SetCanElevate(true)
+	fp.Capture.SetAvailable(capture.ErrNeedAdmin)
 	quit := make(chan struct{})
 	o := options{data: t.TempDir(), addr: "127.0.0.1:0"}
 	srv, err := buildServer(t.Context(), o, fp.Platform(), slog.New(slog.NewTextHandler(io.Discard, nil)), func() { close(quit) })
@@ -142,6 +144,7 @@ func TestAppOnFakePlatform(t *testing.T) {
 			Capture    struct {
 				Backend   string `json:"backend"`
 				Available bool   `json:"available"`
+				Reason    string `json:"reason"`
 			} `json:"capture"`
 		} `json:"platform"`
 	}
@@ -152,7 +155,7 @@ func TestAppOnFakePlatform(t *testing.T) {
 	json.NewDecoder(res.Body).Decode(&b)
 	res.Body.Close()
 	p := b.Platform
-	if p.OS != "testos" || p.Admin || !p.CanElevate || p.Capture.Backend != "fake" || !p.Capture.Available {
+	if p.OS != "testos" || p.Admin || !p.CanElevate || p.Capture.Backend != "fake" || p.Capture.Available || p.Capture.Reason == "" {
 		t.Fatalf("bootstrap platform %+v", p)
 	}
 

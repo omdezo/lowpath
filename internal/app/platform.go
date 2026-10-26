@@ -18,7 +18,8 @@ type platformView struct {
 	OS    string `json:"os"`
 	Admin bool   `json:"admin"`
 	// CanElevate: POST /api/elevate can restart the app with the rights
-	// route mode needs (the UI shows the button only then).
+	// route mode needs, and those rights are all capture lacks (the UI shows
+	// the button only then; a restart can't fix a missing driver).
 	CanElevate bool        `json:"can_elevate"`
 	Capture    captureInfo `json:"capture"`
 }
@@ -31,11 +32,13 @@ type captureInfo struct {
 
 func (s *Server) platform() platformView {
 	admin := s.plat.Privileges.Elevated()
+	avail := s.plat.Capture.Available()
 	v := platformView{
-		OS: s.plat.OS, Admin: admin, CanElevate: s.elevate != nil && !admin,
-		Capture: captureInfo{Backend: s.plat.Capture.Name()},
+		OS: s.plat.OS, Admin: admin,
+		CanElevate: s.elevate != nil && !admin && platform.NeedsElevation(avail),
+		Capture:    captureInfo{Backend: s.plat.Capture.Name()},
 	}
-	if err := s.plat.Capture.Available(); err != nil {
+	if err := avail; err != nil {
 		v.Capture.Reason = captureReason(err)
 	} else {
 		v.Capture.Available = true

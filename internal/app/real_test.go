@@ -266,6 +266,8 @@ func TestApplyErrors(t *testing.T) {
 
 	fc.Capture.SetAvailable(capture.ErrNoDriver)
 	expect("driver unavailable", 500, "capture_failed")
+	fc.Capture.SetAvailable(fmt.Errorf("capture: not on this OS yet: %w", errors.ErrUnsupported))
+	expect("no capture backend on this OS", 501, "unsupported")
 	fc.Capture.SetAvailable(nil)
 	fc.Capture.SetStartErr(errors.New("WinDivertOpen: the service cannot be started"))
 	expect("capture start fails", 500, "capture_failed")
@@ -417,12 +419,22 @@ func TestBootstrapPlatformFromLayer(t *testing.T) {
 	// With an Elevate hook and no admin rights, the UI may offer the restart;
 	// once elevated it may not.
 	fc = newFake(t)
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
 	ts, _ = newRealServer(t, fc, func(c *Config) { c.Elevate = func() error { return nil } })
 	b = bootstrap{}
 	call(t, ts, "GET", "/api/bootstrap", "", &b)
 	if !b.Platform.CanElevate || b.Platform.Admin {
 		t.Errorf("unelevated with a prompt: %+v", b.Platform)
 	}
+	// A restart can't fix a driver that doesn't run on this PC (WinDivert
+	// on ARM64): no button that would only show a pointless prompt.
+	fc.Capture.SetAvailable(capture.ErrNoDriver)
+	b = bootstrap{}
+	call(t, ts, "GET", "/api/bootstrap", "", &b)
+	if b.Platform.CanElevate {
+		t.Errorf("restart offered for a missing driver: %+v", b.Platform)
+	}
+	fc.Capture.SetAvailable(capture.ErrNeedAdmin)
 	fc.Privileges.SetElevated(true)
 	b = bootstrap{}
 	call(t, ts, "GET", "/api/bootstrap", "", &b)

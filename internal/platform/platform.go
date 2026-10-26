@@ -114,6 +114,19 @@ func (p *Platform) Check() error {
 	return nil
 }
 
+// ElevationHelps reports whether restarting with more rights would make
+// route mode work: the system can ask for them, this process doesn't have
+// them, and the capture backend's only complaint is the missing rights. A
+// missing driver or an OS without a backend isn't fixed by a prompt, so
+// neither the start-up restart nor the UI's restart button should offer one.
+func (p *Platform) ElevationHelps() bool {
+	return p.Privileges.CanElevate() && !p.Privileges.Elevated() && NeedsElevation(p.Capture.Available())
+}
+
+// NeedsElevation reports whether err (from CaptureBackend.Available) is
+// only about missing rights.
+func NeedsElevation(err error) bool { return errors.Is(err, capture.ErrNeedAdmin) }
+
 // ErrElevateCancelled is what Privileges.Relaunch returns when the user says
 // no to the administrator prompt.
 var ErrElevateCancelled = errors.New("the administrator prompt was cancelled")

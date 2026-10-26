@@ -101,7 +101,10 @@ func run(o options, plat *platform.Platform) error {
 		return err
 	}
 	priv := plat.Privileges
-	if o.waitPID == 0 && !o.noElevate && !o.demo && priv.CanElevate() && !priv.Elevated() {
+	// Ask only when the rights are what route mode lacks: a prompt can't
+	// fix a missing driver (WinDivert has no ARM64 build) or an OS with no
+	// capture backend yet.
+	if o.waitPID == 0 && !o.noElevate && !o.demo && plat.ElevationHelps() {
 		switch err := priv.Relaunch(childArgs(o)); {
 		case err == nil:
 			logger.Info("restarting as administrator")

@@ -296,8 +296,10 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `-data`, `-demo`, `-relays file.json` (optional import), `-headless` (no
   window), `-open` (browser instead of window), `-no-elevate`.
 - Elevation: bind the port first (if another copy serves it, focus that one
-  and exit, no UAC prompt); then, if `Privileges.CanElevate()`, not elevated
-  and not `-no-elevate`, `Privileges.Relaunch` (on Windows `runas` through
+  and exit, no UAC prompt); then, if `Platform.ElevationHelps()` (the
+  system can prompt, the process isn't elevated, and capture's only problem
+  is `ErrNeedAdmin`: a prompt can't fix a missing driver) and not
+  `-no-elevate`, `Privileges.Relaunch` (on Windows `runas` through
   ShellExecuteW) passing `-wait-pid <self>`; on UAC
   cancel keep running unelevated (route mode shows "needs admin").
   `POST /api/elevate` does the same on demand; the child waits for the parent
@@ -331,6 +333,9 @@ Bootstrap adds:
              "capture": {"backend": "divert", "available": true, "reason": ""}},
 "relays": [RelayView]
 ```
+`can_elevate` is true only when `POST /api/elevate` is wired, the process
+isn't elevated and capture reports `ErrNeedAdmin`, so the banner never offers
+a restart that can't help.
 `RelayView = {id, label, region, continent, addr, egress, has_key, builtin}`
 (the loopback relay appears with `builtin: true` when the setting is on).
 
@@ -354,7 +359,8 @@ Live adds `"capture": null | {"mode": "route", "captured", "passed",
 Session adds `"capture_mode"`.
 
 New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
-`unauthorized` (401).
+`unsupported` (501: route mode, the process list or the restart on a system
+without that part yet), `unauthorized` (401).
 
 **Session.** Every `/api` request except the two below needs the
 `lowpath_session` cookie (HttpOnly, SameSite=Strict, no expiry), a random

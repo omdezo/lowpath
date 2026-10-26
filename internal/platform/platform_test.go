@@ -2,12 +2,15 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"lowpath/internal/capture"
 )
 
 func TestNativeIsComplete(t *testing.T) {
@@ -109,5 +112,35 @@ func TestDriverDirsOnThisOS(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && (len(dirs) != 0 || len(errs) == 0 || !errors.Is(errs[0], errors.ErrUnsupported)) {
 		t.Errorf("driver folders on %s: %q %v, want none (unsupported)", runtime.GOOS, dirs, errs)
+	}
+}
+
+type privs struct{ elevated, canElevate bool }
+
+func (p privs) Elevated() bool        { return p.elevated }
+func (p privs) CanElevate() bool      { return p.canElevate }
+func (privs) Relaunch([]string) error { return nil }
+
+// A restart prompt only helps when missing rights are capture's sole
+// problem: it can't install a driver WinDivert doesn't ship (ARM64) or give
+// an OS a backend it doesn't have.
+func TestElevationHelps(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		priv  privs
+		avail error
+		want  bool
+	}{
+		{"needs admin, can ask", privs{canElevate: true}, fmt.Errorf("open: %w", capture.ErrNeedAdmin), true},
+		{"needs admin, no prompt", privs{}, capture.ErrNeedAdmin, false},
+		{"already elevated", privs{elevated: true, canElevate: true}, capture.ErrNeedAdmin, false},
+		{"capture works", privs{canElevate: true}, nil, false},
+		{"no driver for this CPU", privs{canElevate: true}, capture.ErrNoDriver, false},
+		{"no backend on this OS", privs{canElevate: true}, fmt.Errorf("x: %w", errors.ErrUnsupported), false},
+	} {
+		p := &Platform{Privileges: c.priv, Capture: capture.NewUnavailable(c.avail)}
+		if got := p.ElevationHelps(); got != c.want {
+			t.Errorf("%s: ElevationHelps = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
