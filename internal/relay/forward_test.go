@@ -40,15 +40,25 @@ func loopback(a netip.AddrPort) netip.AddrPort {
 	return netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), a.Port())
 }
 
+// statsWhen polls the hop's counters until ready accepts them, for up to 2 s,
+// and returns the last reading. The hop counts a packet just after passing
+// it on, so whoever receives the packet can look before the counter moves:
+// nothing about a socket orders the two. Callers wait for the counters that
+// must have moved, then check exact values on what comes back.
+func statsWhen(f *Forwarder, ready func(ForwarderStats) bool) ForwarderStats {
+	s := f.Stats()
+	for end := time.Now().Add(2 * time.Second); !ready(s) && time.Now().Before(end); s = f.Stats() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	return s
+}
+
 // waitUp polls until the hop has passed n packets on to the next hop.
 func waitUp(t *testing.T, f *Forwarder, n uint64) {
 	t.Helper()
-	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
-		if f.Stats().PacketsUp >= n {
-			return
-		}
+	if s := statsWhen(f, func(s ForwarderStats) bool { return s.PacketsUp >= n }); s.PacketsUp < n {
+		t.Fatalf("hop passed on %d packets, want %d", s.PacketsUp, n)
 	}
-	t.Fatalf("hop passed on %d packets, want %d", f.Stats().PacketsUp, n)
 }
 
 func TestForwarderRelaysBothWays(t *testing.T) {
@@ -71,7 +81,9 @@ func TestForwarderRelaysBothWays(t *testing.T) {
 			t.Errorf("client %s missed the reply", name)
 		}
 	}
-	if s := f.Stats(); s.Peers != 2 || s.PacketsUp != 2 || s.PacketsDown < 3 {
+	// One reply to a, then the second one to both.
+	s := statsWhen(f, func(s ForwarderStats) bool { return s.PacketsUp >= 2 && s.PacketsDown >= 3 })
+	if s.Peers != 2 || s.PacketsUp != 2 || s.PacketsDown < 3 {
 		t.Fatalf("stats %+v", s)
 	}
 }
@@ -92,12 +104,9 @@ func TestForwarderIgnoresJunk(t *testing.T) {
 	if h, _, err := proto.Parse(buf[:n]); err != nil || h.Type != proto.TProbe {
 		t.Fatalf("next hop got %q, want only the overlay packet", buf[:n])
 	}
-	// The forwarder counts a packet just after sending it on, so the next
-	// hop can see it a moment before the counter moves.
-	s := f.Stats()
-	for end := time.Now().Add(time.Second); s.PacketsUp == 0 && time.Now().Before(end); s = f.Stats() {
-		time.Sleep(5 * time.Millisecond)
-	}
+	// UDP doesn't promise order either, so wait for the junk to be counted
+	// as well as the probe.
+	s := statsWhen(f, func(s ForwarderStats) bool { return s.PacketsUp >= 1 && s.Malformed >= 1 })
 	if s.Malformed != 1 || s.Peers != 1 || s.PacketsUp != 1 {
 		t.Fatalf("stats %+v", s)
 	}
@@ -142,7 +151,7 @@ func TestForwarderPeerLimits(t *testing.T) {
 	if _, _, err := recv(late, 300*time.Millisecond); err == nil {
 		t.Fatal("a client got through a hop full of answered clients")
 	}
-	if s := g.Stats(); s.Peers != 2 || s.LimitDrops != 1 || s.Evicted != 0 {
+	if s := statsWhen(g, func(s ForwarderStats) bool { return s.LimitDrops >= 1 }); s.Peers != 2 || s.LimitDrops != 1 || s.Evicted != 0 {
 		t.Fatalf("stats %+v, want the newcomer refused and nobody evicted", s)
 	}
 	g.expire(time.Now().Add(unansweredPeerTTL + time.Second))

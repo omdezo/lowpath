@@ -21,7 +21,9 @@
     Skip go vet and go test.
 
 .PARAMETER SkipUI
-    Don't rebuild the UI; embed whatever is in ui\dist.
+    Don't rebuild the UI; embed the last build in ui\dist\app, or, when
+    there is none (a fresh clone), the placeholder page that says how to
+    build it.
 
 .EXAMPLE
     .\build.ps1
@@ -64,8 +66,11 @@ try {
     if (-not (Get-Command go -ErrorAction SilentlyContinue)) { throw 'Go is not installed (https://go.dev/dl/)' }
 
     # --- UI ---------------------------------------------------------------
+    # npm run build writes ui\dist\app, which git ignores; without it the
+    # programs embed the tracked ui\dist\placeholder page instead.
+    $uiBuilt = Join-Path $root 'ui\dist\app\index.html'
     if ($SkipUI) {
-        Write-Host '==> UI: skipped (-SkipUI), embedding the existing ui\dist' -ForegroundColor Yellow
+        Write-Host '==> UI: skipped (-SkipUI), embedding the existing ui\dist\app' -ForegroundColor Yellow
     } else {
         if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is not installed (https://nodejs.org/); or build with -SkipUI' }
         Push-Location (Join-Path $root 'ui')
@@ -73,6 +78,9 @@ try {
             if (-not (Test-Path 'node_modules')) { Invoke-Native 'npm ci' { npm ci } }
             Invoke-Native 'npm run build' { npm run build }
         } finally { Pop-Location }
+    }
+    if (-not (Test-Path $uiBuilt)) {
+        Write-Warning 'No UI build in ui\dist\app: the app will show a page that says how to build it. Run without -SkipUI.'
     }
 
     # --- Windows resources (icon, manifest, version) ------------------------

@@ -397,6 +397,11 @@ async function main() {
   try {
     // 1. Open the app: no account, straight to the game library.
     await page.goto(link);
+    // An app built before the UI (a fresh clone, build.ps1 -SkipUI) shows
+    // ui/dist/placeholder: say so instead of timing out on the first step.
+    if (await page.locator('meta[name="lowpath-ui"][content="placeholder"]').count()) {
+      throw new Error(`${APP} was built without the UI: run build.ps1 (or npm run build in ui, then build.ps1 -SkipUI)`);
+    }
     await page.getByLabel("Search games").waitFor();
     await page.getByRole("heading", { name: "Your games" }).waitFor();
     check("App opens straight to the home screen", true);

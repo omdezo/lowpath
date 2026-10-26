@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"time"
 
@@ -75,7 +74,7 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		}
 	}
 
-	dist, err := fs.Sub(ui.Dist, "dist")
+	dist, err := ui.FS()
 	if err != nil {
 		logger.Warn("no UI to serve in front of the service", "err", err)
 		return nil, fmt.Sprintf("this build has no UI to show in front of it (%v)", err), nil
@@ -95,6 +94,10 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		}
 		if !expected && errors.Is(err, platform.ErrServiceNotRunning) {
 			return nil, "", nil // nothing listens: the usual case without a service
+		}
+		if errors.Is(err, platform.ErrPeerRefused) {
+			logger.Warn("the Lowpath service doesn't serve this account; running the engine in this window", "api", api.String(), "err", err)
+			return nil, "it only serves accounts signed in at this computer, and this one isn't", nil
 		}
 		logger.Warn("the Lowpath service isn't answering; running the engine in this window", "api", api.String(), "err", err)
 		if errors.Is(err, platform.ErrNotService) {
@@ -117,7 +120,8 @@ func waitForService(ctx context.Context, fe *app.Frontend, wait time.Duration) (
 		c, cancel := context.WithTimeout(ctx, checkTimeout)
 		v, err := fe.Check(c)
 		cancel()
-		if err == nil || ctx.Err() != nil || !time.Now().Before(deadline) {
+		// A refusal is an answer: asking again won't change it.
+		if err == nil || ctx.Err() != nil || errors.Is(err, platform.ErrPeerRefused) || !time.Now().Before(deadline) {
 			return v, err
 		}
 		select {

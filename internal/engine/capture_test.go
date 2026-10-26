@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -260,8 +261,13 @@ func TestCaptureModeFlowPerRemote(t *testing.T) {
 		}
 	}
 
-	time.Sleep(1200 * time.Millisecond) // one selection tick ranks the servers
-	snap := e.Snapshot()
+	// The first server contacted is primary until a selection tick (1 s)
+	// ranks them; a busy machine can run that tick late.
+	var snap engine.Snapshot
+	waitFor(t, 5*time.Second, func() bool {
+		snap = e.Snapshot()
+		return slices.ContainsFunc(snap.Servers, func(sv engine.ServerStatus) bool { return sv.Primary && sv.Addr == servers[1] })
+	})
 	if snap.Flows != 3 || len(snap.Servers) != 3 {
 		t.Fatalf("flows %d servers %d, want 3 and 3", snap.Flows, len(snap.Servers))
 	}
@@ -310,7 +316,11 @@ func TestTokenAndServerLegOnTheWire(t *testing.T) {
 		e.Send(gameLocal, remote, []byte("tick"))
 		time.Sleep(20 * time.Millisecond)
 	}
-	time.Sleep(800 * time.Millisecond)
+	// Wait for the echoes and a few answered probes instead of a fixed time.
+	waitFor(t, 3*time.Second, func() bool {
+		snap := e.Snapshot()
+		return len(s.all()) >= 19 && snap.ServerLegKnown && snap.After.Samples >= 5
+	})
 
 	r.mu.Lock()
 	tokens, types, dsts := r.tokens, r.types, r.probeDsts
@@ -351,7 +361,8 @@ func TestProxyModeProbesNameTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e.Stop()
-	time.Sleep(600 * time.Millisecond)
+	// Wait for an answered probe instead of a fixed time.
+	waitFor(t, 3*time.Second, func() bool { return e.Snapshot().ServerLegKnown })
 	r.mu.Lock()
 	dsts, tokens := r.probeDsts, r.tokens
 	if len(dsts) != 1 || dsts[target] == 0 {
