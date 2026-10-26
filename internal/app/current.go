@@ -618,9 +618,10 @@ func (n *netLookups) run(a netip.Addr, e *netEntry) {
 		e.expires = now.Add(netLookupTTL)
 	}
 	switch {
-	case err != nil && transient && e.info != nil:
+	case transient && e.info != nil && (err != nil || sameNetwork(e.info, &info)):
 		// What an earlier lookup found is still right: keep showing it
-		// rather than a timeout.
+		// rather than a timeout, or than the same network with a part
+		// lost to one.
 	case err != nil:
 		e.info = nil
 		e.note = "Network unknown: " + err.Error()
@@ -633,6 +634,13 @@ func (n *netLookups) run(a netip.Addr, e *netEntry) {
 	default:
 		e.info, e.note = &info, ""
 	}
+}
+
+// sameNetwork reports whether partial, an answer with a part lost to a
+// timeout, names the network already known, and known lacks no part for
+// such a reason.
+func sameNetwork(known, partial *diag.NetworkInfo) bool {
+	return !known.Transient() && known.ASN == partial.ASN && known.Prefix == partial.Prefix
 }
 
 // transientBackoff is how long the streak-th spoiled lookup in a row is

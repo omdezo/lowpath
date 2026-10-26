@@ -222,22 +222,22 @@ func TestNetLookupsBackOffAndKeepWhatTheyKnow(t *testing.T) {
 	}
 
 	// The registry answers (kept 1 h), then once without the ISP name: the
-	// streak starts again at 3 s.
+	// complete answer stays, and the streak starts again at 3 s.
 	expect(time.Minute)
 	if info, _, _ := n.get(docServer); info == nil || info.ISP != "Example Broadband" {
 		t.Fatalf("complete: %+v", info)
 	}
 	expect(time.Hour)
-	if info, _, _ := n.get(docServer); info == nil || info.ASN != 64500 || info.ISP != "" || !info.Transient() {
-		t.Fatalf("partial: %+v", info)
+	if info, _, _ := n.get(docServer); info == nil || info.ISP != "Example Broadband" || info.Partial != "" {
+		t.Fatalf("a part lost to a timeout replaced the complete answer: %+v", info)
 	}
-	// It stalls next time: the partial stays, and the next wait is 6 s.
+	// It stalls next time: the answer stays, and the next wait is 6 s.
 	expect(3 * time.Second)
 	if info, note, _ := n.get(docServer); info == nil || info.ASN != 64500 || note != "" {
 		t.Fatalf("a timeout replaced what was known: %+v, %q", info, note)
 	}
 
-	// While the next lookup runs the card still shows the partial.
+	// While the next lookup runs the card still shows the answer.
 	fake.mu.Lock()
 	fake.gate = make(chan struct{})
 	fake.mu.Unlock()
@@ -266,5 +266,35 @@ func TestTransientBackoff(t *testing.T) {
 		if got := transientBackoff(streak); got != want {
 			t.Errorf("streak %d: %v, want %v", streak, got, want)
 		}
+	}
+}
+
+// A complete answer stays on the card when the next lookup of the same
+// network loses a part to a timeout; an answer naming another network
+// replaces it, partial or not.
+func TestNetLookupsKeepCompleteOverTransientPartial(t *testing.T) {
+	full := ripeAnswer(t, 200, 200)
+	partial := ripeAnswer(t, http.StatusBadGateway, 200)
+	moved := partial
+	moved.ASN, moved.ASNs = 64501, []uint32{64501}
+	fake := &scriptedLookup{replies: []lookupReply{{info: full}, {info: partial}, {info: moved}}}
+	n := newTestLookups(fake)
+	n.get(docServer)
+	n.settle(t, docServer)
+
+	n.clock = n.clock.Add(netLookupTTL)
+	n.get(docServer)
+	n.settle(t, docServer)
+	if info, note, _ := n.get(docServer); info == nil || info.ISP != "Example Broadband" || info.Partial != "" || note != "" {
+		t.Fatalf("a timeout dropped the ISP name: %+v, %q", info, note)
+	}
+	// Still asked again soon: the registry may answer fully then.
+	n.clock = n.clock.Add(netLookupTransientTTL)
+	if _, _, pending := n.get(docServer); !pending {
+		t.Fatal("not asked again after a transient partial")
+	}
+	n.settle(t, docServer)
+	if info, _, _ := n.get(docServer); info == nil || info.ASN != 64501 || info.ISP != "" {
+		t.Fatalf("another network didn't replace the known one: %+v", info)
 	}
 }
