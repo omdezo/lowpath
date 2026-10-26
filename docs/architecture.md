@@ -223,7 +223,7 @@ type Handle struct{ ... }
 func Open(filter string, layer Layer, priority int16, flags uint64) (*Handle, error)
 func (h *Handle) Recv(buf []byte, addr *Address) (int, error)
 func (h *Handle) Send(pkt []byte, addr *Address) (int, error)
-func (h *Handle) Shutdown() error; func (h *Handle) Close() error
+func (h *Handle) Shutdown() error; func (h *Handle) Close() error  // Close waits up to 100 ms for calls in flight
 func (h *Handle) SetParam(p Param, v uint64) error
 func CalcChecksums(pkt []byte, addr *Address) error
 func CompileFilter(filter string, layer Layer) error  // WinDivertHelperCompileFilter; works WITHOUT admin

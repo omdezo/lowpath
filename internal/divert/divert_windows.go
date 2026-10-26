@@ -269,8 +269,8 @@ func (h *Handle) shutdown(how uintptr) error {
 // Calls that are already running when Close starts finish first: Close
 // shuts down receiving so that a blocked Recv returns, and waits up to
 // releaseWait for them. A call still running after that is stuck in the
-// driver; Close releases the handle anyway, since leaving it open would keep
-// diverting the traffic, and reports how many calls it left.
+// driver. Close releases the handle anyway, and reports how many calls it
+// left: a capture that is failing open must not hang on its own handle.
 func (h *Handle) Close() error {
 	inFlight, first := h.gate.shut()
 	if !first {
@@ -278,7 +278,7 @@ func (h *Handle) Close() error {
 	}
 	var stuck error
 	if inFlight > 0 {
-		syscall.SyscallN(h.procs.shutdown, h.h, shutdownRecv) // the caller may not have; a second time is harmless
+		syscall.SyscallN(h.procs.shutdown, h.h, shutdownRecv) // the caller may not have; the driver accepts a repeat
 		if n := h.gate.wait(releaseWait); n > 0 {
 			stuck = fmt.Errorf("divert: close: calls still running after %v: %d", releaseWait, n)
 		}

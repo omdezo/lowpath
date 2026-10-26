@@ -330,3 +330,54 @@ func TestHandleCallsDoNotAllocate(t *testing.T) {
 		t.Errorf("Recv: %.1f allocations per call", n)
 	}
 }
+
+// The same against the real driver, as administrator: a Recv blocked on an
+// empty queue returns ErrClosed whether Close's own WinDivertShutdown or the
+// caller's ShutdownRecv releases it, and Close doesn't need releaseWait.
+func TestCloseRealHandle(t *testing.T) {
+	if !IsAdmin() {
+		t.Skip("needs administrator rights to open a WinDivert handle")
+	}
+	loadForTest(t)
+	for _, callerShutdown := range []bool{false, true} {
+		h, err := Open("false", LayerNetwork, 0, FlagSniff|FlagRecvOnly)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		received := make(chan error, 1)
+		go func() {
+			buf := make([]byte, MTUMax)
+			var a Address
+			_, err := h.Recv(buf, &a)
+			received <- err
+		}()
+		for h.gate.state.Load() == 0 { // the receiver is on its way into the driver
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if _, err := h.GetParam(ParamQueueLength); err != nil {
+			t.Fatalf("GetParam: %v", err)
+		}
+		if callerShutdown {
+			if err := h.ShutdownRecv(); err != nil {
+				t.Fatalf("ShutdownRecv: %v", err)
+			}
+		}
+		start := time.Now()
+		if err := h.Close(); err != nil {
+			t.Fatalf("Close (caller shutdown %v): %v", callerShutdown, err)
+		}
+		t.Logf("Close with a blocked Recv (caller shutdown %v): %v", callerShutdown, time.Since(start))
+		select {
+		case err := <-received:
+			if !errors.Is(err, ErrClosed) {
+				t.Errorf("blocked Recv: %v, want ErrClosed", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Recv still blocked after Close")
+		}
+		if _, err := h.GetParam(ParamQueueLength); !errors.Is(err, ErrClosed) {
+			t.Errorf("GetParam after Close: %v, want ErrClosed", err)
+		}
+	}
+}
