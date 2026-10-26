@@ -9,6 +9,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Route mode on Linux: a TUN device, an nftables mark and a policy-routing
+  rule send only the selected game's UDP through Lowpath, and the relays'
+  replies go back through the TUN; every other program keeps its normal
+  route, and everything is removed on Stop, on a crash or when the app is
+  killed (#41).
 - Route trace (MTR) in Settings → Diagnostics: loss and delay at every
   router on the way to a relay, game server or any host, 200 probes per
   hop over ICMP (no admin rights on Windows), or with the relay's own UDP
