@@ -228,24 +228,41 @@ func TestCaptureModeFlowPerRemote(t *testing.T) {
 		servers = append(servers, g.Addr())
 	}
 	e, s := startCapture(t, engine.Config{Paths: dn.Paths, DupLevel: 2})
+	// This test is about flows, not route selection: send once every path
+	// has answered a probe, so a machine busy enough to delay the first
+	// replies past a selection tick can't make the engine fall back mid-test.
+	// A fallback taken before the replies were read lasts until the next
+	// tick, however up the paths look, so wait that out too.
+	ready := func() bool { s := e.Snapshot(); return allPathsUp(s) && !s.Fallback }
+	if !waitFor(t, 10*time.Second, ready) {
+		s := e.Snapshot()
+		t.Fatalf("paths %+v (fallback %v) never all came up over a lossless network", s.Paths, s.Fallback)
+	}
 
 	// One game socket talks to three servers; the middle one is busiest and
 	// must become the primary even though another was contacted first.
 	weights := []int{1, 4, 1}
 	sent := make([]int, len(servers))
+	refused := 0
 	pkt := make([]byte, 32)
 	for round := range 40 {
 		for i, w := range weights {
 			for range w {
 				pkt[0] = byte(i)
 				binary.BigEndian.PutUint32(pkt[1:], uint32(round))
-				e.Send(gameLocal, servers[i], pkt)
-				sent[i]++
+				if e.Send(gameLocal, servers[i], pkt) {
+					sent[i]++
+				} else {
+					refused++
+				}
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	waitFor(t, 2*time.Second, func() bool { return len(s.all()) >= 240 })
+	if refused > 0 {
+		t.Errorf("Send refused %d packets: the engine fell back mid-test (events %+v)", refused, e.Snapshot().Events)
+	}
+	waitFor(t, 5*time.Second, func() bool { return len(s.all()) >= sent[0]+sent[1]+sent[2] })
 
 	back := make([]int, len(servers))
 	for _, d := range s.all() {
@@ -286,7 +303,8 @@ func TestSendFallsBackOnlyWithoutKillSwitch(t *testing.T) {
 		if !e.Send(gameLocal, remote, []byte("hello")) {
 			t.Errorf("kill=%v: Send refused a packet before any route was judged down", kill)
 		}
-		if !waitFor(t, 3*time.Second, func() bool { return e.Snapshot().Fallback }) {
+		// Judged dead at the 2 s tick, once its first probe timed out.
+		if !waitFor(t, 5*time.Second, func() bool { return e.Snapshot().Fallback }) {
 			t.Fatalf("kill=%v: expected fallback state", kill)
 		}
 		if got := e.Send(gameLocal, remote, []byte("hello")); got != kill {
@@ -413,6 +431,10 @@ func TestProxyModePingBefore(t *testing.T) {
 	if n := direct.Load(); n != 0 {
 		t.Errorf("the server got %d packets directly; with PingBefore nothing may go to it but game traffic", n)
 	}
+}
+
+func allPathsUp(s engine.Snapshot) bool {
+	return !slices.ContainsFunc(s.Paths, func(p engine.PathStatus) bool { return !p.Up })
 }
 
 func activeIDs(s engine.Snapshot) map[string]bool {

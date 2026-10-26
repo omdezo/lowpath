@@ -102,6 +102,12 @@ const (
 	probeInterval = 100 * time.Millisecond
 	swapHold      = 10 * time.Second // minimum time between optional route swaps
 	legStale      = probeTimeout + 2*time.Second
+	// startGrace bounds how long after Start a path in use is kept while
+	// none of its probes has an outcome yet. Long enough for the first
+	// probes to come back after a stall of a second or two; short enough
+	// that routes which are all dead from the start still fall back within
+	// a few seconds even if the probes themselves never got to run.
+	startGrace = probeTimeout + 2*time.Second
 )
 
 // routing is the data plane's view of the path selection. It is replaced as
@@ -554,9 +560,15 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	// With no measurements yet, trust every path; the first tick corrects it.
 	optimistic := !e.chosen && seed == nil
 	e.chosen = true
+	// A path in use is judged on its probes' outcomes, not on their absence:
+	// at the first tick its probes may still be in flight, or not even sent
+	// on a machine that starved the engine, and falling back on that would
+	// send the game direct for nothing. Paths not in use get no such credit.
+	grace := now.Sub(e.start) < startGrace
 	var up []ranked
 	for _, c := range cands {
-		if optimistic || c.s.Up && c.s.Loss < 50 {
+		unjudged := grace && !c.s.measured() && slices.Contains(cur.active, c.p)
+		if optimistic || unjudged || c.s.Up && c.s.Loss < 50 {
 			up = append(up, c)
 		}
 	}
@@ -592,7 +604,10 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	// Keep current paths that are still healthy (hysteresis). Dead paths are
 	// replaced at once; a merely worse path is swapped only when auto-switch
 	// is on, the spare is clearly better, and we haven't swapped recently,
-	// so the route set doesn't flap on probe noise.
+	// so the route set doesn't flap on probe noise. A path not judged yet
+	// (grace above) is not kept here: it only fills a slot below, after every
+	// path that has answered, so a spare known to work isn't held back by
+	// paths that may be dead.
 	var bestSpare *ranked
 	for i := range up {
 		if !slices.Contains(active, up[i].p) {
@@ -603,7 +618,7 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	canSwap := e.cfg.AutoSwitch && bestSpare != nil && now.Sub(e.lastSwap) >= swapHold
 	for _, p := range active {
 		s, ok := isUp(p)
-		if !ok || len(next) >= k {
+		if !ok || !s.measured() || len(next) >= k {
 			continue
 		}
 		if canSwap && s.Score() > bestSpare.s.Score()*1.2+8 {

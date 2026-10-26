@@ -548,6 +548,14 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   different IPs). Pick the best path; the active set is the top-k of its
   group. Switch to another group only when the current group has no live
   path (failover), and log an event saying the server will see a new IP.
+- **Selection** runs once a second. Start trusts every path (or the Analyze
+  seed). A path is judged down on its probes' outcomes (none sent in the
+  last 3 s answered, or ≥ 50% loss), never on replies still in flight:
+  for up to 3 s after Start (`startGrace`), a path in use none of whose
+  probes has an answer or a 1 s timeout yet keeps its place, unless a path
+  that has answered can take it. Every path down → fallback (direct, or
+  dropped with the kill switch); with all relays dead from the start that
+  happens at the 2 s tick, at most about 3 s after Start.
 - **Primary server**: the remote with the most upstream packets in the last
   ~5 s. Snapshot lists up to 8 servers.
 - **Before** in capture mode: `icmp.Ping` to the primary server's IP, 5 Hz,

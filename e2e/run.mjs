@@ -86,6 +86,7 @@ function lpcheck(label, args) {
         avg: rtt ? +rtt[2] : NaN,
         public: pub ? pub[1] : "",
         local: local ? local[1] : "",
+        ended: Date.now(),
       };
       lpRuns.push(r);
       resolve(r);
@@ -305,6 +306,67 @@ const selectGame = (page, name) => page.locator(".game-row", { hasText: name }).
 
 const boostBtn = (page, game) => page.getByRole("button", { name: `Boost ${game}` });
 const stopBtn = (page, game) => page.getByRole("button", { name: `Stop optimizing ${game}` });
+
+// until polls get() until done(value) holds or ms pass, and returns the last
+// value either way, so a check waits for the state it tests instead of
+// sleeping a fixed time and reading whatever is there then.
+async function until(page, get, done, ms, every = 250) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await get();
+    if (done(v) || Date.now() >= end) return v;
+    await page.waitForTimeout(every);
+  }
+}
+
+// started clicks a button that starts a background job (the bufferbloat
+// test, a route trace) and returns the answer to the POST it sends. The
+// server marks the job running before it answers, so a poll after this one
+// can't read the job before it (#177).
+async function started(page, button, apiPath) {
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api" + apiPath, { timeout: 10000 }),
+    button.click(),
+  ]);
+  return { status: res.status(), body: await res.json().catch(() => null) };
+}
+
+// jobDone polls a background job until it has stopped with a result other
+// than the one from before it started (before: that result's started_at),
+// or with an error.
+const jobDone = (page, apiPath, before, ms) =>
+  until(
+    page,
+    async () => (await api(page, "GET", apiPath)).body,
+    (j) => j && !j.running && (!!j.error || (j.result && j.result.started_at !== before)),
+    ms,
+    500,
+  );
+
+// isoMs reads an RFC 3339 time as Go writes it (no to nine fraction
+// digits) in ms since the epoch: Date.parse is only specified for exactly
+// three.
+function isoMs(iso) {
+  const m = /^(.*T\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$/.exec(iso ?? "");
+  return m ? Date.parse(`${m[1]}.${(m[2] ?? "").padEnd(3, "0").slice(0, 3)}${m[3]}`) : NaN;
+}
+
+// lastStart is the started_at of a job's last finished result, null for none.
+const lastStart = async (page, apiPath) => (await api(page, "GET", apiPath)).body?.result?.started_at ?? null;
+
+// secs writes a duration in ms as "1.2 s".
+const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
+
+// appLog returns the lines of the app's log (in its -data folder) that
+// contain text.
+function appLog(data, text) {
+  const file = path.join(data, "lowpath.log");
+  const log = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  return log.split(/\r?\n/).filter((l) => l.includes(text));
+}
+
+// logTime is the time= of a log line in ms since the epoch, NaN without one.
+const logTime = (line) => isoMs(line?.match(/^time=(\S+)/)?.[1]);
 
 // waitForRoutes waits for the automatic route measurement after a game is picked.
 async function waitForRoutes(page, id, ms = 20000) {
@@ -543,24 +605,24 @@ async function main() {
     await scrollToStart(page, 'section[aria-label="Router pings"]');
     await shot(page, "router-pings", `Router pings: ${gw?.state === "on" ? `${gw.rate_hz} a second, the last minute charted` : gw?.state ?? "—"}`);
     await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
-    await page.getByRole("button", { name: "Run test" }).click();
+    const bloatBefore = await lastStart(page, "/diag/bloat");
+    const bloatStart = await started(page, page.getByRole("button", { name: "Run test" }), "/diag/bloat");
     await page.locator(".bloat-live", { hasText: "Downloading" }).waitFor({ timeout: 15000 }).catch(() => {});
     const gwBloat = (await api(page, "GET", "/diag/gateway")).body;
     check("Router pinger pauses while the bufferbloat test loads the line", gwBloat?.state === "paused" && !gwBloat.running, gwBloat?.state);
     await page.waitForTimeout(1500);
     await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-running", "Bufferbloat test running: download phase, live ping and load");
-    let bloat;
-    for (let i = 0; i < 80; i++) {
-      bloat = (await api(page, "GET", "/diag/bloat")).body;
-      if (!bloat?.running) break;
-      await page.waitForTimeout(500);
-    }
-    const br = bloat?.result;
+    const bloat = bloatStart.status === 202 ? await jobDone(page, "/diag/bloat", bloatBefore, 40000) : null;
+    const br = bloat?.result?.started_at !== bloatBefore ? bloat?.result : null;
     check(
       "Bufferbloat test finishes with a result",
       bloat && !bloat.running && br && br.phases?.length === 4,
-      br ? `grade ${br.grade || "none"}, idle ${br.idle_ms?.toFixed?.(1)} ms, +${br.down_increase_ms?.toFixed?.(1)} / +${br.up_increase_ms?.toFixed?.(1)} ms, ${Math.round(br.data_mb)} MB; to ${br.target}${br.note ? `; ${br.note}` : ""}` : JSON.stringify(bloat),
+      bloatStart.status !== 202
+        ? `start: ${bloatStart.status} ${bloatStart.body?.message ?? ""}`
+        : br
+          ? `grade ${br.grade || "none"}, idle ${br.idle_ms?.toFixed?.(1)} ms, +${br.down_increase_ms?.toFixed?.(1)} / +${br.up_increase_ms?.toFixed?.(1)} ms, ${Math.round(br.data_mb)} MB; to ${br.target}${br.note ? `; ${br.note}` : ""}`
+          : JSON.stringify(bloat),
     );
     check("Bufferbloat test loaded the line both ways", br && br.phases?.[1]?.load_mbps > 0 && br.phases?.[2]?.load_mbps > 0, br && `${br.phases?.[1]?.load_mbps?.toFixed?.(0)} / ${br.phases?.[2]?.load_mbps?.toFixed?.(0)} Mbit/s`);
     check("A grade comes with a measured idle ping", br && (!br.grade || br.idle_ms > 0), br && `grade ${br.grade || "none"}`);
@@ -571,41 +633,48 @@ async function main() {
     // 4c. Diagnostics: route trace (MTR), shortened to 15 rounds by the
     // -trace-* flags. First UDP to the loopback relay's port, then ICMP to
     // Cloudflare through the real routers on the way.
-    const traceDone = async () => {
-      let tr;
-      for (let i = 0; i < 60; i++) {
-        tr = (await api(page, "GET", "/diag/trace")).body;
-        if (tr && !tr.running) break;
-        await page.waitForTimeout(500);
+    // Each check reads the trace its own click started: the click's POST
+    // answered first, then a result newer than the last one, and not
+    // started before that POST's trace (#177).
+    const startTrace = async (button) => ({ before: await lastStart(page, "/diag/trace"), post: await started(page, button, "/diag/trace") });
+    const traceDone = async ({ before, post }) => {
+      if (post.status !== 202) return { why: `start: ${post.status} ${post.body?.message ?? ""}` };
+      const tr = await jobDone(page, "/diag/trace", before, 30000);
+      const rt = tr?.result;
+      if (tr?.running) return { why: "still running after 30 s" };
+      if (tr?.error) return { why: `failed: ${tr.error}` };
+      // progress is null when the new trace ended before the POST answered
+      // (one whose first probe can't be sent ends at once): then only the
+      // started_at above tells the traces apart.
+      const since = post.body?.progress?.started_at;
+      if (!rt || rt.started_at === before || isoMs(rt.started_at) < isoMs(since)) {
+        return { why: `an older trace: ${rt?.mode} to ${rt?.target} from ${rt?.started_at}, this one started ${since ?? "before the POST answered"}` };
       }
-      return tr;
+      return { rt };
     };
     await page.locator(".trace").scrollIntoViewIfNeeded();
     await page.getByLabel("Trace target").selectOption("relay:loopback");
     await page.getByRole("radio", { name: "UDP", exact: true }).click();
-    await page.getByRole("button", { name: "Start trace" }).click();
+    const udpStart = await startTrace(page.getByRole("button", { name: "Start trace" }));
     await page.locator(".trace-progress").waitFor({ timeout: 5000 }).catch(() => {});
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1200); // a few hops on screen for the screenshot
     await page.locator(".trace").scrollIntoViewIfNeeded();
     await shot(page, "trace-running", "Route trace running: UDP to the loopback relay's port");
-    let tr = await traceDone();
-    let rt = tr?.result;
+    let { rt, why } = await traceDone(udpStart);
     check(
       "Route trace over UDP reaches the loopback relay",
-      tr && !tr.running && rt?.mode === "udp" && rt.reached && rt.end?.recv > 0,
-      rt ? `${rt.hops?.length ?? 0} hops, UDP ${rt.end?.recv ?? 0}/${rt.end?.sent ?? 0}: ${rt.verdict}` : JSON.stringify(tr),
+      rt?.mode === "udp" && rt.reached && rt.end?.recv > 0,
+      rt ? `${rt.hops?.length ?? 0} hops, UDP ${rt.end?.recv ?? 0}/${rt.end?.sent ?? 0}: ${rt.verdict}` : why,
     );
     await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
     await page.locator(".trace").scrollIntoViewIfNeeded();
     await shot(page, "trace-udp", "Route trace result: UDP to the loopback relay");
     await page.getByLabel("Trace target").selectOption("cloudflare");
-    await page.getByRole("button", { name: "Trace again" }).click();
-    tr = await traceDone();
-    rt = tr?.result;
+    ({ rt, why } = await traceDone(await startTrace(page.getByRole("button", { name: "Trace again" }))));
     check(
       "Route trace over ICMP finds the routers to Cloudflare",
       rt?.mode === "icmp" && rt.target === "1.1.1.1" && ((rt.reached && rt.hops?.length >= 2) || rt.verdict),
-      rt ? `${rt.hops?.length ?? 0} hops, reached ${rt.reached}, destination loss ${rt.dest_loss_pct ?? "—"}%: ${rt.verdict}` : JSON.stringify(tr),
+      rt ? `${rt.hops?.length ?? 0} hops, reached ${rt.reached}, destination loss ${rt.dest_loss_pct ?? "—"}%: ${rt.verdict}` : why,
     );
     const report = await page.evaluate(async () => (await fetch("/api/diag/trace/report")).text());
     check("Route trace report exports as text", report.startsWith("Lowpath route trace to Cloudflare DNS (1.1.1.1)") && report.includes("Persist%"), `${report.split("\n").length} lines`);
@@ -613,16 +682,25 @@ async function main() {
     await page.locator(".trace-foot").scrollIntoViewIfNeeded();
     await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
 
-    // 4d. The verdict reads the tests above (it refreshes every 4 s).
-    await page.waitForTimeout(4500);
+    // 4d. The verdict reads the tests above. The page refreshes it every
+    // 4 s, so wait until it shows the title the API gives now, not one from
+    // the poll before.
     await scrollToStart(page, ".verdict");
-    const vd = (await api(page, "GET", "/diag/verdict")).body;
-    const vchk = (rule) => vd?.checks?.find((c) => c.rule === rule);
-    const shown = (await page.locator(".verdict-main .t").textContent().catch(() => "")) ?? "";
+    const vchk = (vd, rule) => vd?.checks?.find((c) => c.rule === rule);
+    const verdictRead = ({ vd, shown }) => vd?.checks?.length === 5 && vchk(vd, "home")?.status !== "unknown" && !!vchk(vd, "isp")?.summary && shown === vd.verdict.title;
+    const { vd, shown } = await until(
+      page,
+      async () => ({ vd: (await api(page, "GET", "/diag/verdict")).body, shown: (await page.locator(".verdict-main .t").textContent().catch(() => "")) ?? "" }),
+      verdictRead,
+      12000,
+      500,
+    );
     check(
       "Verdict reads the bufferbloat test and the route trace",
-      vd?.checks?.length === 5 && vchk("home")?.status !== "unknown" && vchk("isp")?.summary && shown === vd.verdict.title,
-      vd ? `${vd.verdict.id} (${vd.verdict.confidence}): ${vd.verdict.title}; ${vd.checks.map((c) => `${c.rule} ${c.status}`).join(", ")}` : "no answer",
+      verdictRead({ vd, shown }),
+      vd
+        ? `${vd.verdict.id} (${vd.verdict.confidence}): ${vd.verdict.title}; ${vd.checks.map((c) => `${c.rule} ${c.status}`).join(", ")}${shown === vd.verdict.title ? "" : `; the page shows "${shown}"`}`
+        : "no answer",
     );
     const diagText = await page.evaluate(async () => (await fetch("/api/diag/verdict/report")).text());
     // Shared reports keep only the network part of public addresses.
@@ -728,10 +806,27 @@ async function main() {
     check("After (relay + server leg) is measured", s.after?.up && s.server_leg_known, `${s.after?.rtt_ms?.toFixed(1)} ms incl. ${s.server_leg_ms?.toFixed(1)} ms relay→server`);
     check("Game server detected", (s.servers || []).some((x) => x.addr.startsWith(stunIP)), (s.servers || []).map((x) => x.addr).join(", "));
 
-    // With "Stop on game exit" on (default) the session ends after lpcheck does.
-    const autoStopped = await waitForStop(page, 15000);
-    if (!autoStopped) await stopBtn(page, "lpcheck").click();
-    check("Session ends when the game exits", autoStopped, autoStopped ? "auto-stopped" : "had to press Stop");
+    // With "Stop on game exit" on (default) the session ends after lpcheck
+    // does: the app looks for the game every 3 s, and stops once it saw it
+    // during the session and then doesn't. Wait for the session itself to
+    // end, then for the window to show it, and say which part missed (#201).
+    // A failed read is not a session that ended: only an answer without one is.
+    const ended = await until(page, async () => (await api(page, "GET", "/bootstrap")).body?.live ?? null, (v) => v && !v.session, 15000, 500);
+    const sessionEnded = !!ended && !ended.session;
+    const shownEnded = sessionEnded && (await waitForStop(page, 5000));
+    if (!shownEnded) await stopBtn(page, "lpcheck").click();
+    const seen = appLog(data, `msg="game seen during the session" game=${GAME_ID}`).at(-1);
+    const exited = appLog(data, `msg="game exited, stopping optimization" game=${GAME_ID}`).at(-1);
+    const sessStart = isoMs(l.session?.started_at);
+    check(
+      "Session ends when the game exits",
+      shownEnded,
+      [
+        seen ? `lpcheck seen ${secs(logTime(seen) - sessStart)} into the session` : "lpcheck never seen during the session",
+        exited ? `stopped ${secs(logTime(exited) - pr.ended)} after it exited` : `no stop ${secs(Date.now() - pr.ended)} after it exited`,
+        sessionEnded ? (shownEnded ? "Boost button back" : "the window still showed Stop 5 s later; pressed it") : ended ? "pressed Stop" : "/api/bootstrap didn't answer; pressed Stop",
+      ].join("; "),
+    );
     await waitForStop(page, 5000);
     await scrollTop(page);
     await shot(page, "stopped", "Stopped: traffic back to normal");

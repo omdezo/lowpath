@@ -144,6 +144,18 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- A boost no longer falls back to the direct route for a second right after
+  it starts when the PC is busy: a route in use is judged on what its
+  probes said, so one whose first probes are still in flight (or not sent
+  yet) at the first selection tick keeps carrying the game. Routes that
+  are all dead still fall back, about one second later than before, once
+  their first probes go unanswered for 1 s, and within about 3 s of
+  the start even if no probe could be sent (#178).
+- The service's Unix socket now reads a refused account's request before
+  answering 403, so that window always learns it isn't served ("only
+  serves accounts signed in at this computer") and runs the engine itself,
+  instead of sometimes getting an "unsolicited response" transport error
+  because the answer arrived before its request was sent (#197).
 - Route mode on Linux notices when another program removes its routing
   rule (systemd-networkd does this to rules its `.network` files don't
   declare) or, on kernels before 5.12, its nftables table (a firewall's
@@ -194,6 +206,20 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   calls still running on it, so a late inject from the engine or a worker
   that comes back after a fail-open can no longer reach the driver through
   a released handle that Windows may have reused (#128).
+- The app tests no longer fail when the test binary itself gets a small
+  PID, as in a fresh container or WSL's `docker-desktop`: their fake
+  processes take PIDs that can't be the binary's own (#189). The Wi-Fi
+  scan pause tests no longer fail on a machine too busy to run the test
+  for a couple of seconds: they wait for the refresh and for the revert
+  to finish instead of giving them 2 s and 300 ms (#190).
+- The end-to-end test waits for the state each check reads instead of a
+  fixed time: the bufferbloat test and each route trace wait for their
+  own click's start and a newer result (no more reading the previous UDP
+  trace as the ICMP one), the verdict waits until the page shows the
+  title the API gives, and "Session ends when the game exits" waits for
+  the session to end in the API, then in the window. The log now says
+  when the game was first seen during a session, so the check can say
+  which half missed (#177, #201).
 
 ## [0.2.0] - 2026-10-26
 

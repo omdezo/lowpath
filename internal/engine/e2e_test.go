@@ -252,7 +252,8 @@ func TestFallbackWhenAllRelaysDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The first selection tick (1 s) finds the relay dead; a busy
+		// The relay is judged dead at the first selection tick after its
+		// first probe went unanswered for 1 s (the 2 s tick); a busy
 		// machine can run it late.
 		waitFor(t, 5*time.Second, func() bool { return e.Snapshot().Fallback })
 		got, _ := gameClient(t, e.ListenAddr(), 50, 2*time.Millisecond)
