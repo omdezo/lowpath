@@ -851,3 +851,101 @@
     transition: none;
   }
 }
+
+/* game page: Valve SDR servers with a direct ping */
+.pops {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pops-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pops-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.pops-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 4px;
+  max-width: 62ch;
+}
+
+.pops-head .btn {
+  flex: none;
+}
+
+.pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.pop-row-head {
+  background: none;
+  border-color: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.pop-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pop-icon {
+  flex: none;
+  color: var(--faint);
+}
+
+.pop-name .title {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pop-name .desc {
+  display: block;
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pops-more {
+  align-self: flex-start;
+  font-size: 13px;
+}
+
+.pops-msg {
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+
+.pops-foot {
+  font-size: 12px;
+}

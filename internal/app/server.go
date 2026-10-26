@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"lowpath/internal/catalog"
 	"lowpath/internal/demo"
 	"lowpath/internal/detect"
 	"lowpath/internal/engine"
@@ -41,6 +42,11 @@ type Config struct {
 	Network Network
 	Sim     *demo.Network
 
+	// Servers answers "which servers does this game have, and how far are
+	// they" before the game connects (Valve's SDR POPs). Nil: no server
+	// lists; the game page leaves the card out.
+	Servers ServerLists
+
 	// Platform is the OS layer: capture backend, socket owners, privileges,
 	// game detection, icons and folders. Nil: platform.Native(), the one
 	// built for this OS. Tests pass fakeplatform.
@@ -62,11 +68,20 @@ type Config struct {
 	Session string
 }
 
+// ServerLists is the catalog of known game servers (catalog.ValveServers).
+// List and Ping answer at once from memory and refresh in the background.
+type ServerLists interface {
+	List(appID int) catalog.ServerList
+	Ping(appID int) catalog.ServerList
+	Close()
+}
+
 type Server struct {
 	store   *Store
 	games   []Game
 	net     Network
 	relays  *RelayNetwork
+	servers ServerLists   // nil: no server lists
 	sim     *demo.Network // nil unless demo mode
 	plat    *platform.Platform
 	log     *slog.Logger
@@ -130,7 +145,7 @@ func NewServer(cfg Config) (*Server, error) {
 		cfg.Quit = func() {}
 	}
 	return &Server{
-		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, sim: cfg.Sim,
+		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
 		plat: cfg.Platform, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
 		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
@@ -187,6 +202,9 @@ func (s *Server) Close() {
 	s.mu.Unlock()
 	s.stopSession()
 	s.relays.Close()
+	if s.servers != nil {
+		s.servers.Close()
+	}
 }
 
 // allGames is the catalog followed by the user's custom games.
@@ -238,6 +256,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/games/{id}/routes", s.handleRoutes)
 	mux.HandleFunc("POST /api/games/{id}/analyze", s.handleAnalyze)
 	mux.HandleFunc("POST /api/games/{id}/favorite", s.handleFavorite)
+	mux.HandleFunc("GET /api/games/{id}/servers", s.handleServers)
+	mux.HandleFunc("POST /api/games/{id}/servers/ping", s.handleServers)
 	mux.HandleFunc("POST /api/games/custom", s.handleAddCustomGame)
 	mux.HandleFunc("DELETE /api/games/custom/{id}", s.handleDeleteCustomGame)
 	mux.HandleFunc("POST /api/apply", s.handleApply)
