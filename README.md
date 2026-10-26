@@ -118,7 +118,10 @@ cd lowpath
 ```
 
 Building needs [Go](https://go.dev/dl/) and [Node.js](https://nodejs.org/).
-Lowpath asks for administrator rights once at start (UAC).
+Lowpath asks for administrator rights once at start (UAC). To never see that
+prompt again, a reboot included, install the background service once with
+`.\dist\lowpathsvc.exe install` (development version; see the
+[development guide](docs/development.md#background-service-no-administrator-prompt)).
 
 ### First boost
 
@@ -175,6 +178,7 @@ anti-cheats may object to the capture driver. Both are tracked on the
 
 ```
 cmd/lowpath        desktop app (API + embedded UI + window)
+cmd/lowpathsvc     background service: install once, no admin prompt after
 cmd/relay          relay server
 cmd/lpcheck        STUN route checker
 internal/          platform layer, capture, engine, relay, protocol, app and helpers

@@ -22,6 +22,21 @@ type platformView struct {
 	// the button only then; a restart can't fix a missing driver).
 	CanElevate bool        `json:"can_elevate"`
 	Capture    captureInfo `json:"capture"`
+	// Service is the background service (LowpathSvc) as this server sees
+	// it.
+	Service serviceView `json:"service"`
+}
+
+// serviceView says whether the window goes through the background service.
+type serviceView struct {
+	// State: "in_use" (this server is the service), "running" (installed
+	// and running, but this window runs its own engine, as with -demo),
+	// "stopped", "not_installed", "unsupported" (none on this OS yet) or
+	// "unknown" (the service manager didn't answer; Message says why).
+	// For "running" and "stopped", Message says why this window doesn't
+	// use the service, when the window knows.
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
 }
 
 type captureInfo struct {
@@ -37,6 +52,7 @@ func (s *Server) platform() platformView {
 		OS: s.plat.OS, Admin: admin,
 		CanElevate: s.elevate != nil && !admin && platform.NeedsElevation(avail),
 		Capture:    captureInfo{Backend: s.plat.Capture.Name()},
+		Service:    s.serviceView(),
 	}
 	if err := avail; err != nil {
 		v.Capture.Reason = captureReason(err)
@@ -44,6 +60,25 @@ func (s *Server) platform() platformView {
 		v.Capture.Available = true
 	}
 	return v
+}
+
+func (s *Server) serviceView() serviceView {
+	if s.inService {
+		return serviceView{State: "in_use"}
+	}
+	st, err := s.plat.Service.State()
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		return serviceView{State: "unsupported"}
+	case err != nil:
+		return serviceView{State: "unknown", Message: err.Error()}
+	case !st.Installed:
+		return serviceView{State: "not_installed"}
+	case st.Running:
+		return serviceView{State: "running", Message: s.serviceNote}
+	default:
+		return serviceView{State: "stopped", Message: s.serviceNote}
+	}
 }
 
 func captureReason(err error) string {

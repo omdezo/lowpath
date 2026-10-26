@@ -25,6 +25,18 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   the route bar's Home part says *Watch* when the router pings are clean
   but the signal is weak, and the report gains a Wi-Fi line. Linux shows
   the signal strength (#11).
+- Dev-mode background service `LowpathSvc` (Windows): `lowpathsvc install`
+  asks for administrator rights once, and from then on the Lowpath window
+  runs unelevated and drives the service over the named pipe
+  `\\.\pipe\lowpath`, so Boost works after a reboot with no UAC prompt (#6).
+  The window starts a stopped service by itself, says "Lost connection to
+  the Lowpath service" while it restarts after a crash, and refuses a pipe
+  served by any other process; Settings → Network shows whether the service
+  is in use, or why this window doesn't use it. `lowpathsvc status` and
+  `uninstall` too; `-no-service` keeps the engine in the window. The
+  service's data folder is created admins-only in one step and secured
+  again at every start; a folder users could change is moved aside. On
+  macOS the socket is `/var/run/lowpath/api.sock`.
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements

@@ -59,7 +59,7 @@ The backlog in §5 follows four rules. They exist because earlier drafts got the
 | Measurement | ICMP before; probe RTT + egress ICMP leg after; says "server ignores ping" honestly | `internal/engine/baseline.go`, `internal/icmp` |
 | Catalog | 22 games: process names, Steam app id, install paths. **No server pools, regions, ports, prefixes or login hosts** | `internal/app/games.json`, `catalog.go` |
 | Server knowledge | Learned from live flows only; busiest flow is primary and remembered | `internal/engine/flows.go` |
-| App shell | One elevated `Lowpath.exe` (WebView2 + React), localhost API with per-launch secret; no tray, autostart, update, signing or installer | `cmd/lowpath`, `internal/app`, `ui/` |
+| App shell | `Lowpath.exe` (WebView2 + React), localhost API with per-launch secret. Without the service it runs the engine itself, elevated. With the dev-mode `LowpathSvc` (`lowpathsvc install`, one UAC, starts at boot) it stays unelevated and passes the API to the service over `\\.\pipe\lowpath` (#6). No tray, update, signing or installer | `cmd/lowpath`, `cmd/lowpathsvc`, `internal/app`, `internal/shell`, `ui/` |
 | Licence | MIT, free, no accounts | `README.md` |
 
 ---

@@ -60,7 +60,14 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       <span style={{ flex: 1 }}>
         <b>Route mode can't capture game traffic:</b> {reason}.{" "}
         {canElevate ? (
-          "Restart Lowpath as administrator to fix this."
+          platform.service?.state === "not_installed" ? (
+            <>
+              Restart Lowpath as administrator to fix this, or install the background service once with{" "}
+              <code className="inline-code">lowpathsvc install</code> so it never asks again.
+            </>
+          ) : (
+            "Restart Lowpath as administrator to fix this."
+          )
         ) : (
           <>
             Use{" "}

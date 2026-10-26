@@ -8,17 +8,22 @@
 // From a normal terminal it tests proxy mode end to end and checks that route
 // mode asks for admin rights. From an administrator terminal it also tests
 // route mode: real WinDivert capture of lpcheck.exe, tunnel, and injection.
+// Last, it runs the window in front of the background service
+// (bin\lowpathsvc.exe run on a pipe of its own, no admin rights needed):
+// Boost through the service, the service killed and back.
 import { chromium } from "playwright-core";
 import { spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const APP = path.join(ROOT, "bin", "lowpath.exe");
+const SVC = path.join(ROOT, "bin", "lowpathsvc.exe");
 const LPCHECK = path.join(ROOT, "dist", "lpcheck.exe");
 const OUT = path.join(ROOT, "e2e", "out");
 // LOWPATH_E2E_PORT lets two worktrees run the test at the same time.
@@ -134,10 +139,15 @@ function startApp(data, importFile, bloatServer, inventory, wifi) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
   const app = spawn(
     APP,
-    ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory, "-wifi-reading", wifi],
+    ["-headless", "-no-elevate", "-no-service", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory, "-wifi-reading", wifi],
     { windowsHide: true },
   );
   app.stdout.pipe(log);
+  return launchLink(app, log);
+}
+
+// launchLink waits for the one-time launch link a -headless app prints.
+function launchLink(app, log) {
   return new Promise((resolve, reject) => {
     let buf = "";
     const timer = setTimeout(() => reject(new Error("Lowpath did not print its launch link within 20 s")), 20000);
@@ -154,6 +164,99 @@ function startApp(data, importFile, bloatServer, inventory, wifi) {
     });
     app.on("exit", (code) => reject(new Error(`Lowpath exited early (code ${code})`)));
   });
+}
+
+// freePort asks the OS for a loopback port nobody uses.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+// startService runs the background service in the foreground, unelevated,
+// on a pipe of its own: what LowpathSvc runs, minus the service manager.
+function startService(data, pipe, importFile, logName) {
+  const log = fs.createWriteStream(path.join(OUT, logName));
+  const svc = spawn(SVC, ["run", "-data", data, "-pipe", pipe, "-relays", importFile, "-compat-inventory", path.join(data, "inventory.json")], { windowsHide: true });
+  svc.stdout.pipe(log);
+  svc.stderr.pipe(log);
+  return svc;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// serviceSplit is the M0 service acceptance on this PC without admin
+// rights: the window in front of a running service, Boost through it, the
+// service killed (the window says so) and started again (it reconnects).
+async function serviceSplit(browser, importFile) {
+  const pipe = String.raw`\\.\pipe\lowpath-e2e-` + process.pid;
+  const svcData = fs.mkdtempSync(path.join(os.tmpdir(), "lowpath-e2e-svc-"));
+  const uiData = fs.mkdtempSync(path.join(os.tmpdir(), "lowpath-e2e-ui-"));
+  let svc = startService(svcData, pipe, importFile, "lowpathsvc.log");
+  await sleep(1500);
+  const port = await freePort();
+  const uiLog = fs.createWriteStream(path.join(OUT, "lowpath-frontend.log"));
+  const ui = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${port}`, "-data", uiData, "-service-pipe", pipe], { windowsHide: true });
+  ui.stdout.pipe(uiLog);
+  const page = await (await browser.newContext({ viewport: { width: 1100, height: 720 } })).newPage();
+  try {
+    const { link } = await launchLink(ui, uiLog);
+    await page.goto(link);
+    await page.getByRole("heading", { name: "Your games" }).waitFor();
+    const boot = (await api(page, "GET", "/bootstrap")).body;
+    check("Service: the window runs no engine and talks to the service", boot?.platform?.service?.state === "in_use", JSON.stringify(boot?.platform?.service));
+
+    await openSettings(page, "Network");
+    const row = page.getByTestId("service-row");
+    await row.scrollIntoViewIfNeeded();
+    check("Service: Settings → Network says the service is in use", ((await row.textContent()) ?? "").includes("In use"));
+    await shot(page, "service-in-use", "Settings → Network: routing runs in the background service, so this window never asks for administrator rights");
+    await closeSettings(page);
+
+    // Proxy mode through the loopback relay: no admin rights needed here.
+    const set = await api(page, "PUT", "/settings", { ...boot.settings, capture_mode: "proxy", loopback_relay: true });
+    const add = await api(page, "POST", "/games/custom", { name: "lpcheck", process: "lpcheck.exe" });
+    check("Service: settings and the custom game are saved through the window", set.status === 200 && add.status === 200, `${set.status} ${add.status}`);
+    await page.reload();
+    await selectGame(page, "lpcheck");
+    await waitForRoutes(page, GAME_ID, 15000);
+    await boostBtn(page, "lpcheck").click();
+    await stopBtn(page, "lpcheck").waitFor();
+    let l = await live(page);
+    check("Service: Boost from the window starts a session in the service", l?.status === "optimizing" && l?.snapshot?.listen, `listening on ${l?.snapshot?.listen}`);
+    const run = await lpcheck("proxy mode through the service", ["-server", l.snapshot.listen, "-for", "6s"]);
+    check("Service: traffic flows through the service's session", run.sent > 0 && run.received / run.sent >= 0.9, `${run.received}/${run.sent} replies, ${run.avg} ms`);
+    await shot(page, "service-boosting", "Boosting through the background service");
+
+    // Kill the service the way taskkill /F would.
+    svc.kill();
+    const lost = page.getByText("Lost connection to the Lowpath service");
+    await lost.waitFor({ timeout: 8000 }).catch(() => {});
+    check("Service killed: the window says it lost the service", await lost.isVisible().catch(() => false));
+    const down = await api(page, "GET", "/bootstrap");
+    check("Service killed: the API answers service_unavailable", down.status === 503 && down.body?.error === "service_unavailable", `${down.status} ${down.body?.error}`);
+    await shot(page, "service-lost", "The service was killed: the window says so and keeps trying");
+
+    // What the service manager does after a crash: start it again.
+    svc = startService(svcData, pipe, importFile, "lowpathsvc-restart.log");
+    await lost.waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
+    check("Service back: the window reconnects by itself", !(await lost.isVisible().catch(() => false)));
+    l = await live(page);
+    check("Service back: no session left running in a dead process", l?.status === "idle" && !l?.session, l?.status);
+    await shot(page, "service-back", "The service is back: the window reconnected without a restart");
+  } catch (e) {
+    check("Service flow", false, e.message.split("\n")[0]);
+    await shot(page, "service-failure", `Failure: ${e.message.split("\n")[0]}`).catch(() => {});
+  } finally {
+    await page.context().close();
+    ui.kill();
+    svc.kill();
+  }
 }
 
 // api calls the daemon from inside the page, so it carries the session cookie.
@@ -258,7 +361,7 @@ async function waitForStop(page, ms) {
 async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
-  for (const f of [APP, LPCHECK]) {
+  for (const f of [APP, SVC, LPCHECK]) {
     if (!fs.existsSync(f)) throw new Error(`${f} is missing: run build.ps1 first`);
   }
   const admin = isAdmin();
@@ -388,6 +491,10 @@ async function main() {
     const other = page.getByTestId("other-software");
     await other.locator(".conn-headline", { hasText: "None found" }).waitFor({ timeout: 5000 }).catch(() => {});
     check("Other network software: none on a clean system", ((await other.locator(".conn-headline").textContent().catch(() => "")) ?? "") === "None found");
+    // This window runs its own engine (-no-service); the row says whether a
+    // service is there to use instead.
+    const svcRow = (await page.getByTestId("service-row").textContent().catch(() => "")) ?? "";
+    check("Settings → Network shows the background service's state", /Background service(Not installed|Not used|Stopped)/.test(svcRow), svcRow.slice(0, 80));
     await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
@@ -735,11 +842,12 @@ async function main() {
     await shot(page, "failure", `Failure: ${e.message.split("\n")[0]}`).catch(() => {});
   } finally {
     helper?.kill();
-    await browser.close();
     app.kill();
     speed.close();
-    writeReport(admin);
   }
+  await serviceSplit(browser, importFile);
+  await browser.close();
+  writeReport(admin);
   const failed = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - failed}/${results.length} checks passed. Report: ${path.join(OUT, "report.md")}`);
   process.exitCode = failed ? 1 : 0;

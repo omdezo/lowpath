@@ -102,6 +102,7 @@ func newUnixLikePaths() Paths { return fakePaths{} }
 type fakePaths struct{ userDirs }
 
 func (fakePaths) DriverDirs(bool) ([]string, []error) { return nil, nil }
+func (fakePaths) ServiceDataDir() (string, error)     { return "", nil }
 
 func TestUserDirs(t *testing.T) {
 	u := userDirs{
@@ -182,5 +183,29 @@ func TestElevationHelps(t *testing.T) {
 		if got := p.ElevationHelps(); got != c.want {
 			t.Errorf("%s: ElevationHelps = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestNativeServiceParts(t *testing.T) {
+	p := Native()
+	want := DefaultSocketPath
+	switch runtime.GOOS {
+	case "windows":
+		want = `\\.\pipe\lowpath`
+	case "darwin":
+		// macOS has no /run.
+		if want != "/var/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on macOS", want)
+		}
+	case "linux":
+		if want != "/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on Linux", want)
+		}
+	}
+	if p.ServiceAPI.String() != want {
+		t.Errorf("service API %q, want %q", p.ServiceAPI.String(), want)
+	}
+	if d, err := p.Paths.ServiceDataDir(); err != nil || !strings.EqualFold(filepath.Base(d), appDir) && d != "/var/lib/lowpath" {
+		t.Errorf("ServiceDataDir = %q, %v", d, err)
 	}
 }

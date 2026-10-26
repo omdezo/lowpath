@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -70,19 +72,21 @@ func (a *auth) ok(r *http.Request) bool {
 // it signs that browser in and redirects to the UI. It works once per launch,
 // so it must not be logged or shown anywhere another program could read it
 // before the window uses it.
-func (s *Server) LaunchPath() string {
-	s.auth.mu.Lock()
-	defer s.auth.mu.Unlock()
-	if s.auth.launch == "" {
+func (s *Server) LaunchPath() string { return s.auth.launchPath() }
+
+func (a *auth) launchPath() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.launch == "" {
 		return "/"
 	}
-	return pathSession + "?t=" + s.auth.launch
+	return pathSession + "?t=" + a.launch
 }
 
 // handleSession trades the launch token for the session cookie.
-func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	if !s.auth.redeem(r.URL.Query().Get("t")) {
-		if s.auth.ok(r) { // already signed in, e.g. this URL was reloaded
+func (a *auth) handleSession(w http.ResponseWriter, r *http.Request) {
+	if !a.redeem(r.URL.Query().Get("t")) {
+		if a.ok(r) { // already signed in, e.g. this URL was reloaded
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
@@ -91,12 +95,42 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: s.auth.session, Path: "/",
+		Name: sessionCookie, Value: a.session, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
 	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+func handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"version": Version})
+}
+
+// guard keeps the API to the app's own window: requests must target a
+// loopback Host (blocks DNS rebinding), mutating calls must carry a custom
+// header, which a cross-origin page cannot send without a CORS preflight we
+// never answer, and /api needs the session cookie. The UI's static files are
+// served to anyone; they hold nothing secret.
+func (a *auth) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			if r.Method != http.MethodGet && r.Header.Get("X-Lowpath") != "1" {
+				http.Error(w, "missing X-Lowpath header", http.StatusForbidden)
+				return
+			}
+			if r.URL.Path != pathSession && r.URL.Path != pathVersion && !a.ok(r) {
+				writeErr(w, http.StatusUnauthorized, "unauthorized",
+					errors.New("this page is not signed in to Lowpath: use the Lowpath window, or close Lowpath and start it again"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

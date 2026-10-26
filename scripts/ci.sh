@@ -19,7 +19,7 @@ go test ./...
 
 stage cross
 for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
-  GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -o "dist/cross/${target/\//-}/" ./cmd/lowpath ./cmd/relay ./cmd/lpcheck
+  GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -o "dist/cross/${target/\//-}/" ./cmd/lowpath ./cmd/lowpathsvc ./cmd/relay ./cmd/lpcheck
 done
 
 if command -v npm >/dev/null; then

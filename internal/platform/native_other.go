@@ -34,6 +34,9 @@ func Native() *Platform {
 		Paths:      NewUnixPaths(),
 		Flows:      detect.NewKernelNetwork(),
 		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
+		Service:    NewServiceManager(),
+		// The socket's folder is root's, so only a root service can take the name.
+		ServiceAPI: NewSocketAPI(DefaultSocketPath, 0o666),
 		WiFi:       diag.NewWLAN(),
 	}
 }

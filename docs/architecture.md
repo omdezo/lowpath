@@ -73,6 +73,8 @@ type Platform struct {
     Paths      Paths
     Flows      FlowWatcher
     Inventory  SystemInventory // = compat.System
+    Service    ServiceManager  // the background service (LowpathSvc)
+    ServiceAPI ServiceAPI      // the channel between the window and the service
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -97,6 +99,21 @@ type Paths interface {
     DataDir() (string, error)   // settings, relays, log
     CacheDir() (string, error)  // rebuildable (window profile)
     DriverDirs(elevated bool) ([]string, []error) // elevated: protected folders only
+    ServiceDataDir() (string, error) // the service's state and log (machine-wide)
+}
+type ServiceManager interface {
+    State() (ServiceState, error)    // {Installed, Running, PID, Exe}; no admin rights
+    Start() error                    // users may start it (granted at install)
+    Install(cfg ServiceConfig) error // {Exe, Args, DataDir, Seed}; ErrNeedAdmin unelevated
+    Uninstall() error
+}
+type ServiceAPI interface {
+    Listen() (net.Listener, error)              // fails if another process holds the name
+    Dial(ctx context.Context) (net.Conn, error) // ErrServiceNotRunning, ErrNotService
+    String() string
+}
+type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platform
+    Run(name string, run func(ctx context.Context) error) (ok bool, err error)
 }
 ```
 
@@ -109,6 +126,7 @@ type Paths interface {
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
+| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -837,6 +855,87 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.
 
+## Background service (dev mode) — `cmd/lowpathsvc`, `app.Frontend`
+
+The M7 split between an elevated service and an unelevated window, in its
+minimal form (#6): so a remote tester never has to click a UAC prompt after
+the one-time install, a reboot included.
+
+```
+Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (LocalSystem)
+  WebView2 window ── loopback HTTP ──▶ app.Frontend ── \\.\pipe\lowpath ──▶ app.Server.ServiceHandler()
+  (per-launch session cookie, guard)   (strips the cookie,       (engine, capture, catalog,
+                                        503 when the service      diagnostics; the same JSON
+                                        doesn't answer)           API as today)
+```
+
+- **Install** (`lowpathsvc install`): unelevated, it relaunches itself
+  through UAC once (`Privileges.Relaunch`, `-import <this user's data
+  folder> -pause`). Elevated, it copies itself to `<Program
+  Files>\Lowpath\lowpathsvc.exe` (a service running as SYSTEM from a
+  user-writable folder would let any program replace it, MITRE T1574.010),
+  makes `%ProgramData%\Lowpath` SYSTEM- and Administrators-only (owner
+  Administrators, protected DACL `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`,
+  set in the same `CreateDirectory` call that makes it, so it never exists
+  with ProgramData's inherited "Users may create files and folders"; a
+  folder already there is kept only when SYSTEM or Administrators own it
+  and its protected DACL allows nobody else, and anything else, such as a
+  folder a user made first, one that inherited ProgramData's access list, a
+  file or a link, is moved aside to `Lowpath.untrusted-<time>`), writes the user's `state.json` into it if it
+  has none (relays, keys, settings, custom games), and creates or updates
+  the service: automatic start, `LocalSystem`, unrestricted service SID,
+  restart after 2 s, 5 s and 30 s on failure (also when `run` returns an
+  error), and the DACL
+  `D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)`:
+  the default plus `SERVICE_START` for Interactive Users, never stop or
+  reconfigure. Then it starts the service. `lowpathsvc uninstall` stops and
+  deletes it and keeps the data folder; `lowpathsvc status` needs no rights.
+- **The service** is started by the service manager with `-data
+  %ProgramData%\Lowpath`. Before it opens anything there, it secures that
+  folder the same way (`ServiceManager.SecureDataDir`), on every start: a
+  data folder deleted since the install would otherwise come back with
+  ProgramData's access list, and a user could plant a junction where this
+  SYSTEM process writes its log and caches. If that fails, it stops before
+  serving, and the service manager retries. It takes the pipe first (failing fast if another
+  process holds it), builds the same `app.Server` as the window would
+  (`internal/shell.Build`, `Config.InService`), and serves
+  `Server.ServiceHandler()`: the API without the session check, since the
+  pipe's access list is the gate. A stop or shutdown cancels the run's
+  context: the session stops first (capture closed, the game direct), then
+  the HTTP server, within the 15 s stop hint. The capture marker, crash
+  log and fail-open work as in the window (Capture → Fail-open), so a
+  killed service's game goes direct within a second, the service manager
+  restarts it, and the window shows "Your last boost was cut short".
+- **The pipe**: `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x120083;;;IU)`.
+  Interactive Users (signed in at the PC or over Remote Desktop, not
+  services or network logons) get read, write and read attributes, not
+  `GENERIC_WRITE`, which includes `FILE_CREATE_PIPE_INSTANCE`: a user who
+  could add an instance could answer the window in the service's place.
+  The first instance is created with `FILE_CREATE`, so the service fails
+  instead of joining a pipe someone made first, and remote clients are
+  rejected. The window checks the other end with
+  `GetNamedPipeServerProcessId` against the service's PID from the service
+  manager, and refuses anything else (`ErrNotService`).
+- **The window** (`cmd/lowpath`): after binding its port, unless `-demo`
+  or `-no-service`, it asks the service manager. Not installed: as before
+  (in-process engine, UAC prompt when route mode needs it). Stopped: it
+  starts the service and waits up to 20 s. Then it checks `GET
+  /api/version` through the pipe; when the service answers, it serves the
+  UI with `app.Frontend` and asks for no rights at all. A service that
+  doesn't answer is logged and the window runs the engine itself.
+  `-service-pipe NAME` talks to a service run by hand (`lowpathsvc run
+  -pipe NAME`, no PID check) and fails if it doesn't answer; the end-to-end
+  test uses it.
+- **Frontend**: a reverse proxy over `ServiceAPI.Dial` (3 s dial timeout, no
+  environment proxy, Server-Sent Events flushed at once). `/api/session`
+  and `/api/version` are answered locally, so a second launch finds the
+  window while the service restarts. A request the service can't answer
+  gets 503 `service_unavailable`; the UI's live stream drops, it shows
+  "Lost connection to the Lowpath service. Reconnecting…", and reconnects
+  when the service is back. Closing the window asks the service to stop
+  the boost (`POST /api/stop`), as it stops when the engine runs in the
+  window; the service keeps running for the next launch.
+
 - **Wi-Fi** (`wifi*.go`, roadmap L9 and §3.6's Wi-Fi row). Windows uses
   the Native Wifi API (`wlanapi.dll`, loaded lazily; no admin rights).
   `Link` maps the default route's interface index to the adapter's GUID
@@ -988,7 +1087,14 @@ New error kinds: `needs_admin` (409), `no_relays` (409), `conflict` (409, with
 `conflicts`: the programs to close first), `capture_failed` (500, with
 `conflicts` when one is running),
 `unsupported` (501: route mode, the process list or the restart on a system
-without that part yet), `unauthorized` (401).
+without that part yet), `unauthorized` (401), `service_unavailable` (503,
+from the window in front of the background service when the service
+doesn't answer, or isn't the installed one).
+
+The platform view adds `"service": {"state": "in_use" | "running" |
+"stopped" | "not_installed" | "unsupported" | "unknown", "message"?}`:
+`in_use` when this API is the background service's, the others from
+`ServiceManager.State` in a window that runs its own engine.
 
 **Session.** Every `/api` request except the two below needs the
 `lowpath_session` cookie (HttpOnly, SameSite=Strict, no expiry), a random
@@ -1024,7 +1130,14 @@ prints that URL to stderr only, never to the log.
 - No relays → game panel shows an onboarding card (add a relay / enable the
   loopback test relay) instead of a broken Apply.
 - Route mode without admin → banner with **Restart as administrator**
-  (`POST /api/elevate`).
+  (`POST /api/elevate`), and, when the service isn't installed, the
+  one-time `lowpathsvc install` instead.
+- Settings → Network: **Background service** row: In use, Not used
+  (`-demo`, or the window's own reason: `-no-service`, the service isn't
+  answering, isn't the installed process, or wouldn't start, from
+  `platform.service.message`), Stopped, Not installed (with the install
+  command) or "—" with the service manager's error; hidden where the OS has
+  no service yet.
 - `live.conflicts` → a banner above every page: running ones in red
   (`block`) or amber (`warn`), "<name> is running." + the action + a
   **Why?** that unfolds the explanation and the evidence; installed-only
@@ -1084,6 +1197,13 @@ prints that URL to stderr only, never to the log.
 - Linux, as root (WSL2 works): `go test -run TestTUNRouting -v ./internal/capture`
   runs the TUN backend in network namespaces of its own; with
   `LOWPATH_LPCHECK=<linux lpcheck>` it also runs the lpcheck acceptance test.
+- Background service, once as administrator: `dist\lowpathsvc.exe install`
+  (one UAC prompt), reboot, open Lowpath: no prompt, Settings → Network
+  says the service is in use, Boost in route mode works. `taskkill /F /FI
+  "SERVICES eq LowpathSvc"` mid-boost: the game keeps playing direct, the
+  window shows the lost connection, the service is back within seconds and
+  the window says the boost was cut short. Unelevated, the end-to-end test
+  plays the same split with `lowpathsvc run` on a pipe of its own.
 
 ## Known limitations
 

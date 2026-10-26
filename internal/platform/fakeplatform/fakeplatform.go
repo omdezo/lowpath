@@ -38,6 +38,8 @@ type Fake struct {
 	Paths      *Paths
 	Flows      *Flows
 	Inventory  *Inventory
+	Service    *Service
+	ServiceAPI *ServiceAPI
 	WiFi       *WiFi
 }
 
@@ -55,6 +57,8 @@ func New(dir string) *Fake {
 		Paths:      &Paths{dir: dir},
 		Flows:      &Flows{},
 		Inventory:  &Inventory{},
+		Service:    &Service{},
+		ServiceAPI: NewServiceAPI(),
 		WiFi:       &WiFi{linkErr: diag.ErrNoWiFi, surveyErr: diag.ErrNoWiFi, tuneErr: diag.ErrNoWiFi},
 	}
 }
@@ -64,6 +68,7 @@ func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
 		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory, WiFi: f.WiFi,
+		Service: f.Service, ServiceAPI: f.ServiceAPI,
 	}
 }
 
@@ -621,6 +626,9 @@ type Paths struct{ dir string }
 
 func (p *Paths) DataDir() (string, error)  { return filepath.Join(p.dir, "data"), nil }
 func (p *Paths) CacheDir() (string, error) { return filepath.Join(p.dir, "cache"), nil }
+func (p *Paths) ServiceDataDir() (string, error) {
+	return filepath.Join(p.dir, "service"), nil
+}
 func (p *Paths) DriverDirs(bool) ([]string, []error) {
 	return []string{filepath.Join(p.dir, "driver")}, nil
 }

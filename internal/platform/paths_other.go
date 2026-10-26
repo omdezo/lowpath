@@ -17,3 +17,7 @@ func NewUnixPaths() *UnixPaths { return &UnixPaths{newUserDirs()} }
 func (p *UnixPaths) DriverDirs(bool) ([]string, []error) {
 	return nil, []error{fmt.Errorf("platform: no capture driver on %s: %w", runtime.GOOS, errors.ErrUnsupported)}
 }
+
+// ServiceDataDir is /var/lib/lowpath, where a service run as root keeps its
+// state.
+func (p *UnixPaths) ServiceDataDir() (string, error) { return "/var/lib/lowpath", nil }
