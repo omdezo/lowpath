@@ -91,7 +91,7 @@ internal/icmp      ICMP echo (IcmpSendEcho on Windows, raw/ping socket on Linux)
 internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
-internal/detect    installed/running games, exe icons, Steam libraries
+internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
 internal/diag      bufferbloat test, passive detector, default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike impairment
@@ -131,6 +131,13 @@ go test ./...
   stray replies, timeouts, closed ports, cancellation), RIPEstat parsing
   against canned replies, the lookup cache, and every locator state
   (offline, no IPv6, partial, private addresses, shared lookups).
+- **Current server:** the Kernel-Network event parser for every flow event
+  id, the ETW struct layouts against the SDK sizes, the unelevated
+  `ERROR_ACCESS_DENIED` path (as administrator the same test watches its own
+  UDP packet to 192.0.2.1), the flow learner's server choice, the city check
+  against the speed of light in fibre, the live pinger (loss, jitter,
+  unanswered and unsendable pings), and the card's whole flow on
+  `fakeplatform`: game starts, flow events, lookup, ping, saving, game exit.
 - **Bufferbloat:** grading grading against a simulated line (latency
   that rises under load, lost pings, a refusing load server, no target),
   the HTTP loader against a local speed-test server, target choice, the

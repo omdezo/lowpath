@@ -71,6 +71,7 @@ type Platform struct {
     Games      GameDetector
     Icons      IconProvider
     Paths      Paths
+    Flows      FlowWatcher
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -84,6 +85,11 @@ type GameDetector interface {
     SteamRoots() []string
 }
 type IconProvider interface{ ExeIcon(path string, size int) (image.Image, error) }
+type FlowWatcher interface {
+    // every process's UDP/TCP sends and receives (addresses, ports, size;
+    // never payload) until Close; detect.ErrNeedAdmin / errors.ErrUnsupported
+    Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
+}
 type Paths interface {
     DataDir() (string, error)   // settings, relays, log
     CacheDir() (string, error)  // rebuildable (window profile)
@@ -98,6 +104,7 @@ type Paths interface {
 | Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | `platform.Root`: euid 0; no prompt yet (#44) |
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `/proc/*/comm` on Linux; no Steam folders or icons yet (#43) |
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
+| Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -366,6 +373,55 @@ func NewValveServers(ValveOptions) *ValveServers              // List(appID), Pi
   round gets its own round when that one ends. A 200 reply that isn't a
   config (Wi-Fi login page, proxy) is reported as such.
 
+## Current server — `internal/app/current.go`
+
+The game page names the server a game is talking to, for every game,
+catalog entry or not:
+
+- **Where it comes from**, best first: a running session's flow table
+  (`source: "boost"`); otherwise the OS's flow events (`"traffic"`); otherwise
+  the last server saved for the game (`"history"`, state `last`). Sessions in
+  route mode and the flow watch both save the primary every 5 s (the watch
+  only once it sent ≥ 10 packets).
+- **Flow events** (Windows): an ETW real-time session ("Lowpath Flows") on
+  Microsoft-Windows-Kernel-Network `{7dd42a49-5329-4832-8dfd-43d979153a88}`,
+  keywords IPv4|IPv6, events 10/11/26/27 (TCP data sent/received) and
+  42/43/58/59 (UDP). User data starts `PID u32, size u32, daddr, saddr,
+  dport u16, sport u16` (addresses u32 or 16 bytes, all network byte order).
+  No packet driver, so it also works next to anti-cheats that refuse
+  WinDivert, and it can't break networking. The session opens while a known
+  game runs and closes 30 s after the last one exits; a session left by a
+  crashed Lowpath is stopped and replaced. Unelevated it fails with
+  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`), retried every 5 min. The
+  callback only looks the PID up in a map of game PIDs (refreshed every 2 s
+  from `Owners.ProcessNames`) and drops the rest.
+- **Learning** (`engine.FlowLearner`): the same rules as a session (primary
+  = most upstream packets over 5 s, UDP before TCP, ties keep the current
+  one, forgotten after 60 s idle). Only sends create servers; a receive
+  whose ends are reversed is matched to a known server. Ignored: ports 53,
+  80, 443 (also QUIC), 853, 1900, 5353, 5355, loopback, link-local,
+  multicast, broadcast.
+- **Network**: RIPEstat (`network-info`, `as-overview`, `maxmind-geo-lite`),
+  cached 24 h, looked up in the background; private, CGNAT and loopback
+  addresses are never sent. `NetworkInfo` gains `lat`/`lon` when GeoLite2
+  names a city (a country-only answer's point is its center, useless here).
+- **City check** (`catalog.CheckGeo`): light in fibre covers ≈ 204 km/ms
+  (c / 1.468), so a fastest ping of r ms puts the server within
+  r / 2 × 204 km. A database city farther than that plus 250 km (city-level
+  geolocation error at both ends) is marked `too_far` ("can't be right");
+  with no ping or no city, `unknown`.
+- **Ping** (`catalog.LivePinger`): ICMP once a second while the card polls
+  (stops 15 s after the last poll), last 30 results: mean, min, standard
+  deviation (jitter, as in the routes table), loss. A server that never
+  answers gets "—" and "doesn't answer pings", not 100 % loss; IPv6 and
+  "can't send" are notes, never loss.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | /api/games/{id}/current-server | `{state: "live"\|"last"\|"none", source, message, watch: {state: "on"\|"idle"\|"needs_admin"\|"unsupported"\|"error", message}, server: null \| {addr, proto, pkts_up, pkts_down, last_seen, network: NetworkInfo\|null, network_note, looking_up, lan, geo: {state, distance_km, max_km, note}, ping_ms, jitter_ms, loss_pct, sent, received, ping_note}, others: [{addr, proto, pkts_up, pkts_down}], you: {city, country}\|null}` |
+
+The snapshot's `servers` entries gain `proto`.
+
 ## Diagnostics — `internal/diag`
 
 Measures the user's own connection. Nothing needs admin rights, and every
@@ -544,6 +600,11 @@ prints that URL to stderr only, never to the log.
 - Library: **Add game** → modal listing running processes with UDP sockets
   (from `/api/processes`), name field, add; custom games get a delete action.
 - Demo-only controls (Network lab) only when `demo` is true.
+- Every game: a **Current server** card (polls every 2 s): city and
+  country (struck through with the reason when the ping rules it out), the
+  check's note, address and protocol, AS and ISP, prefix, and ping, jitter
+  and loss with "—" and the reason when unknown; "Live" or "Last time"; the
+  other servers the game talks to; why the flow watch is off when it is.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,
   direct ping and loss (six rows, "Show all"), "—" and the reason when a POP

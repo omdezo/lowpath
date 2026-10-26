@@ -83,6 +83,7 @@ export interface EngineEvent {
 // A game server the captured game is talking to (route mode).
 export interface GameServer {
   addr: string;
+  proto?: "udp" | "tcp";
   pkts_up: number;
   pkts_down: number;
   last_seen: string;
@@ -300,6 +301,21 @@ export interface Bootstrap {
 
 // GET /api/location: the public address the internet sees and the network
 // behind it (internal/diag). Empty fields are unknown.
+// The registry's answer for a public address (internal/diag NetworkInfo).
+export interface NetworkInfo {
+  asn?: number;
+  asns?: number[];
+  holder?: string;
+  as_name?: string;
+  isp?: string;
+  prefix?: string;
+  country?: string;
+  city?: string;
+  lat?: number;
+  lon?: number;
+  partial?: string;
+}
+
 export interface Endpoint {
   ip: string;
   source: string;
@@ -322,4 +338,42 @@ export interface NetLocation {
   ipv4: Endpoint | null;
   ipv6: Endpoint | null;
   ipv6_note?: string;
+}
+
+// GET /api/games/{id}/current-server: the server the game is talking to
+// (internal/app/current.go). Unknown numbers are null.
+export interface GeoCheck {
+  state: "ok" | "too_far" | "unknown";
+  distance_km: number | null;
+  max_km: number | null;
+  note?: string;
+}
+
+export interface CurrentServerInfo {
+  addr: string;
+  proto?: "udp" | "tcp";
+  pkts_up: number | null;
+  pkts_down: number | null;
+  last_seen: string | null;
+  network: NetworkInfo | null;
+  network_note?: string;
+  looking_up: boolean;
+  lan: boolean;
+  geo: GeoCheck;
+  ping_ms: number | null;
+  jitter_ms: number | null;
+  loss_pct: number | null;
+  sent: number;
+  received: number;
+  ping_note?: string;
+}
+
+export interface CurrentServer {
+  state: "live" | "last" | "none";
+  source?: "boost" | "traffic" | "history";
+  message?: string;
+  watch: { state: "on" | "idle" | "needs_admin" | "unsupported" | "error"; message?: string };
+  server: CurrentServerInfo | null;
+  others: { addr: string; proto: string; pkts_up: number; pkts_down: number }[];
+  you: { city?: string; country?: string } | null;
 }
