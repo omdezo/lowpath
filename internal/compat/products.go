@@ -74,7 +74,7 @@ func winpkFilter() Product {
 		ID: "winpkfilter", Name: "Windows Packet Filter", Kind: KindPacketFilter,
 		Keys: []string{"winpkfilter", "windowspacketfilter"}, Exact: []string{"ndisrd"},
 		Running: LevelWarn, ServiceRunning: LevelWarn,
-		Why: "%s (WinpkFilter, driver ndisrd) is a packet filter driver that ExitLag and NoPing install. It does nothing on its own, but a program that uses it sees every packet before Lowpath does, and its uninstaller sometimes leaves it behind. If a game connects badly only while it is loaded, remove it.",
+		Why:    "%s (WinpkFilter, driver ndisrd) is a packet filter driver that ExitLag and NoPing install. It does nothing on its own, but a program that uses it sees every packet before Lowpath does, and its uninstaller sometimes leaves it behind. If a game connects badly only while it is loaded, remove it.",
 		Action: "If you no longer use ExitLag or NoPing, uninstall \"Windows Packet Filter\" in Settings → Apps → Installed apps, then restart the PC.",
 	}
 }

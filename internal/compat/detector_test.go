@@ -21,9 +21,9 @@ type static struct {
 }
 
 func (s static) Processes() ([]string, error) { return s.inv.Processes, s.errs["processes"] }
-func (s static) Services() ([]Service, error)  { return s.inv.Services, s.errs["services"] }
-func (s static) Programs() ([]string, error)   { return s.inv.Programs, s.errs["programs"] }
-func (s static) Adapters() ([]Adapter, error)  { return s.inv.Adapters, s.errs["adapters"] }
+func (s static) Services() ([]Service, error) { return s.inv.Services, s.errs["services"] }
+func (s static) Programs() ([]string, error)  { return s.inv.Programs, s.errs["programs"] }
+func (s static) Adapters() ([]Adapter, error) { return s.inv.Adapters, s.errs["adapters"] }
 func (s static) DefaultRoute() (int, error) {
 	if err := s.errs["route"]; err != nil {
 		return 0, err

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/compat"
 	"lowpath/internal/demo"
 	"lowpath/internal/engine"
 )
@@ -44,20 +45,25 @@ type applyReq struct {
 	Mode    string `json:"mode"`
 	Region  string `json:"region"`
 	RouteID string `json:"route_id"`
+	// IgnoreConflicts starts route mode even next to another booster or
+	// packet tool (the UI's "Boost anyway", for a program Lowpath names
+	// wrongly or one the player knows is idle).
+	IgnoreConflicts bool `json:"ignore_conflicts"`
 }
 
 // apiError carries the HTTP status and error kind a failed apply reports.
 type apiError struct {
-	code int
-	kind string
-	err  error
+	code      int
+	kind      string
+	err       error
+	conflicts []compat.Conflict // what is in the way (kind "conflict", or a capture failure they may explain)
 }
 
 func (e *apiError) Error() string { return e.err.Error() }
 func (e *apiError) Unwrap() error { return e.err }
 
 func failf(code int, kind, format string, a ...any) *apiError {
-	return &apiError{code, kind, fmt.Errorf(format, a...)}
+	return &apiError{code: code, kind: kind, err: fmt.Errorf(format, a...)}
 }
 
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
@@ -68,9 +74,12 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.apply(req); err != nil {
 		var ae *apiError
-		if errors.As(err, &ae) {
+		switch {
+		case errors.As(err, &ae) && ae.conflicts != nil:
+			writeJSON(w, ae.code, map[string]any{"error": ae.kind, "message": ae.err.Error(), "conflicts": ae.conflicts})
+		case errors.As(err, &ae):
 			writeErr(w, ae.code, ae.kind, ae.err)
-		} else {
+		default:
 			writeErr(w, 500, "apply_failed", err)
 		}
 		return
@@ -95,6 +104,14 @@ func (s *Server) apply(req applyReq) error {
 	var target, direct netip.AddrPort
 	switch mode {
 	case CaptureRoute:
+		// Before the rights check: restarting as administrator wouldn't
+		// help while another program captures the same packets.
+		if !req.IgnoreConflicts {
+			if block := s.conflicts.scan().Blocking(); len(block) > 0 {
+				s.log.Warn("boost refused: another program captures game traffic", "conflicts", compat.Names(block))
+				return conflictErr(block)
+			}
+		}
 		if err := s.plat.Capture.Available(); err != nil {
 			return captureErr(err)
 		}
@@ -161,7 +178,7 @@ func (s *Server) apply(req applyReq) error {
 // (smart), one continent (region) or a single relay (specific).
 func pickPaths(paths []engine.PathSpec, req *applyReq) ([]engine.PathSpec, error) {
 	if len(paths) == 0 {
-		return nil, &apiError{409, "no_relays", errNoRelays}
+		return nil, &apiError{code: 409, kind: "no_relays", err: errNoRelays}
 	}
 	switch req.Mode {
 	case "smart", "":
@@ -185,13 +202,13 @@ func pickPaths(paths []engine.PathSpec, req *applyReq) ([]engine.PathSpec, error
 // knows: needs_admin (it offers a restart as administrator) or capture_failed.
 func captureErr(err error) *apiError {
 	if errors.Is(err, capture.ErrNeedAdmin) {
-		return &apiError{409, "needs_admin", errors.New("route mode needs administrator rights: restart Lowpath as administrator, or switch to proxy mode")}
+		return &apiError{code: 409, kind: "needs_admin", err: errors.New("route mode needs administrator rights: restart Lowpath as administrator, or switch to proxy mode")}
 	}
 	if errors.Is(err, errors.ErrUnsupported) {
 		// Not a failure: this system has no capture backend (yet).
-		return &apiError{501, "unsupported", fmt.Errorf("route mode can't capture game traffic here (%s): switch to proxy mode", captureReason(err))}
+		return &apiError{code: 501, kind: "unsupported", err: fmt.Errorf("route mode can't capture game traffic here (%s): switch to proxy mode", captureReason(err))}
 	}
-	return &apiError{500, "capture_failed", err}
+	return &apiError{code: 500, kind: "capture_failed", err: err}
 }
 
 // capHolder lets the engine's Deliver callback see the capture through an
@@ -227,7 +244,7 @@ func (s *Server) startRoute(sess *session, g Game, cfg engine.Config) error {
 	if err != nil {
 		s.unmarkSession()
 		eng.Stop()
-		return captureErr(err)
+		return s.withConflictHint(captureErr(err))
 	}
 	holder.Store(&capHolder{c})
 	sess.eng, sess.capt = eng, c
