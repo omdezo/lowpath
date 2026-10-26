@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
-import { AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wrench, X } from "lucide-react";
+import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wrench, X } from "lucide-react";
 import { api } from "../api";
 import type { CaptureMode, Platform, RelayView, Settings } from "../types";
 import { cap } from "../util";
 import { Modal, Toggle } from "./Bits";
 import { RelaysPane } from "./RelaysPane";
+import { BloatTest } from "./BloatTest";
 
-export type SettingsTab = "general" | "network" | "relays" | "optimization" | "advanced";
+export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
 
 interface Props {
   initialTab?: SettingsTab;
@@ -19,10 +20,11 @@ interface Props {
   onRelaysChanged: () => void;
   onRemap: () => void;
   onClose: () => void;
+  onError: (msg: string, title?: string) => void;
 }
 
 export function SettingsModal(props: Props) {
-  const { initialTab, settings, relays, platform, version, demo, onChange, onRelaysChanged, onRemap, onClose } = props;
+  const { initialTab, settings, relays, platform, version, demo, onChange, onRelaysChanged, onRemap, onClose, onError } = props;
   const [tab, setTab] = useState<SettingsTab>(initialTab ?? "network");
   const [saved, setSaved] = useState(false);
 
@@ -42,6 +44,7 @@ export function SettingsModal(props: Props) {
     { id: "general", label: "General", icon: <SlidersHorizontal size={16} /> },
     { id: "network", label: "Network", icon: <Network size={16} /> },
     { id: "relays", label: "Relays", icon: <Server size={16} /> },
+    { id: "diagnostics", label: "Diagnostics", icon: <Activity size={16} /> },
     { id: "optimization", label: "Optimization", icon: <Gauge size={16} /> },
     { id: "advanced", label: "Advanced", icon: <Wrench size={16} /> },
   ];
@@ -154,6 +157,16 @@ export function SettingsModal(props: Props) {
           )}
 
           {tab === "relays" && <RelaysPane relays={relays} settings={settings} onSettings={set} onRelaysChanged={onRelaysChanged} />}
+
+          {tab === "diagnostics" && (
+            <>
+              <h3>Diagnostics</h3>
+              <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
+                Is the lag on your side of the connection? Run the test on Wi-Fi and again on a cable to compare.
+              </div>
+              <BloatTest onError={onError} />
+            </>
+          )}
 
           {tab === "optimization" && (
             <>

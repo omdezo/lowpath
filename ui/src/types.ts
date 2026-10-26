@@ -103,6 +103,80 @@ export interface Live {
   snapshot: Snapshot | null;
   capture?: CaptureStats | null;
   running: string[] | null;
+  // Passive bufferbloat detector, during a session only.
+  line?: LineState | null;
+}
+
+// Passive detector (internal/diag PassiveState). null numbers are unknown.
+export interface LineState {
+  active: boolean;
+  direction?: "download" | "upload" | "both";
+  since?: string;
+  watching: boolean;
+  reason?: string;
+  rtt_ms: number | null;
+  baseline_ms: number | null;
+  other_down_mbps: number | null;
+  other_up_mbps: number | null;
+  line_down_mbps: number | null;
+  line_up_mbps: number | null;
+  line_source?: "test" | "peak";
+}
+
+export type BloatPhase = "picking" | "idle" | "download" | "upload" | "recovery";
+
+export interface LatencyStats {
+  sent: number;
+  lost: number;
+  min_ms: number | null;
+  p50_ms: number | null;
+  p95_ms: number | null;
+}
+
+export interface BloatPhaseResult {
+  phase: Exclude<BloatPhase, "picking">;
+  internet: LatencyStats;
+  gateway: LatencyStats | null;
+  load_mbps: number | null;
+  rx_mbps: number | null;
+  tx_mbps: number | null;
+  load_error?: string;
+}
+
+export type Grade = "A+" | "A" | "B" | "C" | "D" | "F" | "";
+
+export interface BloatResult {
+  started_at: string;
+  finished_at: string;
+  grade: Grade;
+  note?: string;
+  target: string;
+  gateway: string;
+  interface: string;
+  link: "" | "ethernet" | "wifi" | "other";
+  idle_ms: number | null;
+  down_increase_ms: number | null;
+  up_increase_ms: number | null;
+  down_mbps: number | null;
+  up_mbps: number | null;
+  data_mb: number;
+  phases: BloatPhaseResult[] | null;
+}
+
+export interface BloatProgress {
+  phase: BloatPhase;
+  elapsed_s: number;
+  total_s: number;
+  last_ms: number | null;
+  load_mbps: number | null;
+  target: string;
+}
+
+export interface BloatStatus {
+  running: boolean;
+  progress: BloatProgress | null;
+  result: BloatResult | null;
+  error?: string;
 }
 
 export interface Settings {

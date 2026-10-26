@@ -204,6 +204,10 @@ func TestCaptureModeRoundTripThroughEgress(t *testing.T) {
 	if snap.Copies != 2 || snap.Dups == 0 {
 		t.Errorf("copies %d dups %d, want 2 copies and dropped duplicates", snap.Copies, snap.Dups)
 	}
+	// Every copy of every packet is on the wire, IPv4+UDP headers (28 bytes) included.
+	if min := uint64(2 * n * (28 + proto.FixedLen)); snap.WireUp < min || snap.WireDown < uint64(len(seen)*(28+proto.FixedLen)) {
+		t.Errorf("wire bytes up %d down %d, want at least %d up", snap.WireUp, snap.WireDown, min)
+	}
 }
 
 func TestCaptureModeFlowPerRemote(t *testing.T) {

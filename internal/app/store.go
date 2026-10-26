@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"lowpath/internal/diag"
 )
 
 type Settings struct {
@@ -70,6 +72,9 @@ type persisted struct {
 	// Servers holds the game servers route mode saw each game use, newest
 	// first, so the next Analyze has something to ping for the baseline.
 	Servers map[string][]netip.AddrPort `json:"servers"`
+	// Bloat is the last finished bufferbloat test; its throughput is the
+	// line rate the passive detector compares against.
+	Bloat *diag.BloatResult `json:"bloat,omitempty"`
 }
 
 type Store struct {
@@ -274,5 +279,20 @@ func (s *Store) RecordServer(gameID string, a netip.AddrPort) error {
 		s.d.Servers = map[string][]netip.AddrPort{}
 	}
 	s.d.Servers[gameID] = next
+	return s.saveLocked()
+}
+
+// Bloat is the last finished bufferbloat test, or nil.
+func (s *Store) Bloat() *diag.BloatResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.d.Bloat
+}
+
+// SetBloat saves a finished bufferbloat test.
+func (s *Store) SetBloat(r diag.BloatResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.d.Bloat = &r
 	return s.saveLocked()
 }

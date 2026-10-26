@@ -50,6 +50,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `-addr 127.0.0.1:7878` | UI/API address (loopback only). |
 | `-data DIR` | State and log folder (default `%APPDATA%\Lowpath`). |
 | `-relays file.json` | Also use a read-only relay list ([example](../relays.example.json)). |
+| `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
 
 ### Files on disk
 
@@ -84,6 +85,7 @@ internal/proto     overlay framing {type, token, flow, seq, ts, addr}
 internal/icmp      ICMP echo (IcmpSendEcho on Windows, raw/ping socket on Linux)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries
+internal/diag      bufferbloat test, passive detector, default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike impairment
 internal/gamesim   echo game server
@@ -111,9 +113,15 @@ go test ./...
 - **App:** local API guard and per-launch session, relay and custom-game
   validation, error kinds, game art lookup, and a full route-mode session
   through the loopback relay with a fake capture device.
+- **Diagnostics:** bufferbloat grading against a simulated line (latency
+  that rises under load, lost pings, a refusing load server, no target),
+  the HTTP loader against a local speed-test server, target choice, the
+  passive detector's rules second by second, `/proc` and sysfs parsing from
+  fixtures, and the Windows IP Helper calls without admin rights.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
-Google through a keyed relay and through the engine in capture mode.
+Google through a keyed relay and through the engine in capture mode, and a
+short real bufferbloat test against Cloudflare (about 100 MB of data).
 
 ### End-to-end UI test
 
@@ -126,8 +134,9 @@ saves a screenshot of every step plus `report.md` to `e2e\out\`:
 cd e2e; npm install; node run.mjs
 ```
 
-From a normal terminal it covers the home screen, relay setup, adding a
-custom game, automatic route measurement, Boost in proxy mode with live
+From a normal terminal it covers the home screen, relay setup, the
+bufferbloat test (against a paced local load server started by the test),
+adding a custom game, automatic route measurement, Boost in proxy mode with live
 traffic, auto-stop on game exit, and route mode asking for admin rights. From
 an **administrator** terminal it also tests route mode for real: WinDivert
 captures `lpcheck.exe`, tunnels it through the relay, injects the replies,

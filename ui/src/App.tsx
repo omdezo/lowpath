@@ -11,6 +11,7 @@ import { NetworkLab } from "./components/NetworkLab";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { AddGameModal } from "./components/AddGame";
 import { CaptureBanner } from "./components/CaptureBanner";
+import { LineBanner } from "./components/LineBanner";
 import { Toasts, type Toast } from "./components/Toasts";
 import type { Point } from "./components/LiveGraph";
 
@@ -312,6 +313,11 @@ export function App() {
             <CaptureBanner platform={platform} down={down} onOpenNetwork={() => setShowSettings("network")} onError={onError} />
           </div>
         )}
+        {live?.line?.active && (
+          <div className="main-banner">
+            <LineBanner line={live.line} />
+          </div>
+        )}
         {game && live ? (
           <>
             <GamePanel
@@ -354,6 +360,7 @@ export function App() {
             setPhase("mapping");
           }}
           onClose={() => setShowSettings(null)}
+          onError={onError}
         />
       )}
       {showAddGame && <AddGameModal games={games} onAdded={onGameAdded} onClose={() => setShowAddGame(false)} />}

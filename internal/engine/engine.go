@@ -84,6 +84,13 @@ type Snapshot struct {
 	Dups           uint64         `json:"dups_dropped"`
 	Fallback       bool           `json:"fallback"`
 	Events         []Event        `json:"events"`
+
+	// WireUp/WireDown are the bytes Lowpath itself put on (and took off)
+	// the network for the game: every relay copy and the direct fallback,
+	// with IPv4+UDP headers. The passive bufferbloat detector subtracts
+	// them from the adapter's totals to find "other" traffic.
+	WireUp   uint64 `json:"wire_bytes_up"`
+	WireDown uint64 `json:"wire_bytes_down"`
 }
 
 const (
@@ -133,7 +140,11 @@ type Engine struct {
 	events   []Event
 
 	pktsUp, pktsDown, dups atomic.Uint64
+	wireUp, wireDown       atomic.Uint64
 }
+
+// udpOverhead is the IPv4 + UDP header around every datagram on the wire.
+const udpOverhead = 28
 
 func Start(cfg Config) (*Engine, error) {
 	if len(cfg.Paths) == 0 {
@@ -282,6 +293,7 @@ func (e *Engine) send(local, remote netip.AddrPort, payload []byte) (*flow, bool
 		h.Token = p.token
 		out = proto.Append(out[:0], h, payload)
 		p.conn.Write(out)
+		e.wireUp.Add(uint64(len(out) + udpOverhead))
 	}
 	*bp = out[:0]
 	bufPool.Put(bp)
@@ -302,6 +314,7 @@ func (e *Engine) readListener() {
 		if f, ok := e.send(src, e.cfg.Target, buf[:n]); !ok {
 			if c := e.directFor(f); c != nil {
 				c.Write(buf[:n])
+				e.wireUp.Add(uint64(n + udpOverhead))
 			}
 		}
 	}
@@ -319,6 +332,7 @@ func (e *Engine) readPath(p *path) {
 			continue // e.g. ICMP unreachable while the relay is down
 		}
 		now := time.Now()
+		e.wireDown.Add(uint64(n + udpOverhead))
 		h, payload, err := proto.Parse(buf[:n])
 		if err != nil {
 			continue
@@ -388,6 +402,7 @@ func (e *Engine) directFor(f *flow) *net.UDPConn {
 				continue
 			}
 			e.pktsDown.Add(1)
+			e.wireDown.Add(uint64(n + udpOverhead))
 			f.srv.down.Add(1)
 			e.listener.WriteToUDPAddrPort(buf[:n], f.local)
 		}
@@ -699,6 +714,7 @@ func (e *Engine) Snapshot() Snapshot {
 	snap.ServerLeg, snap.ServerLegKnown = e.serverLeg(now)
 	snap.Flows, snap.Servers = e.flows.list()
 	snap.PktsUp, snap.PktsDown, snap.Dups = e.pktsUp.Load(), e.pktsDown.Load(), e.dups.Load()
+	snap.WireUp, snap.WireDown = e.wireUp.Load(), e.wireDown.Load()
 	for _, p := range e.paths {
 		snap.Paths = append(snap.Paths, PathStatus{PathSpec: p.spec, Stats: p.probes.stats(now), Active: slices.Contains(r.active, p)})
 	}
