@@ -17,6 +17,7 @@ import (
 	"image"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/compat"
 	"lowpath/internal/detect"
 	"lowpath/internal/owner"
 )
@@ -80,6 +81,13 @@ type FlowWatcher interface {
 	Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
 }
 
+// SystemInventory reads what else on the PC handles network traffic: running
+// programs, services and drivers, installed programs, network adapters and
+// the internet route. The conflict detector (internal/compat) names other
+// boosters, packet filter drivers and full-tunnel VPNs from it. A part the
+// OS doesn't have reports errors.ErrUnsupported.
+type SystemInventory = compat.System
+
 // IconProvider reads a program's own icon.
 type IconProvider interface {
 	// ExeIcon renders the program's main icon at size×size.
@@ -109,6 +117,7 @@ type Platform struct {
 	Icons      IconProvider
 	Paths      Paths
 	Flows      FlowWatcher
+	Inventory  SystemInventory
 }
 
 // Check reports a Platform with a missing part, which would otherwise fail
@@ -124,7 +133,7 @@ func (p *Platform) Check() error {
 	}{
 		{"OS", p.OS == ""}, {"Capture", p.Capture == nil}, {"Owners", p.Owners == nil},
 		{"Privileges", p.Privileges == nil}, {"Games", p.Games == nil}, {"Icons", p.Icons == nil},
-		{"Paths", p.Paths == nil}, {"Flows", p.Flows == nil},
+		{"Paths", p.Paths == nil}, {"Flows", p.Flows == nil}, {"Inventory", p.Inventory == nil},
 	} {
 		if part.unset {
 			missing = append(missing, part.name)
