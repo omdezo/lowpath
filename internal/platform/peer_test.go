@@ -67,6 +67,19 @@ func TestSessionPolicy(t *testing.T) {
 	}
 }
 
+func TestPeerCredString(t *testing.T) {
+	for p, want := range map[PeerCred]string{
+		{UID: 1000, PID: 4242}: "uid 1000 (process 4242)",
+		{UID: 65534}:           "uid 65534",
+		{UID: 0, PID: 1}:       "uid 0 (process 1)",
+		{UID: unknownUID}:      "an account the system didn't name",
+	} {
+		if got := p.String(); got != want {
+			t.Errorf("%#v: %q, want %q", p, got, want)
+		}
+	}
+}
+
 func writeFiles(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
 	for name, body := range files {

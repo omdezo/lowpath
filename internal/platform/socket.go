@@ -179,6 +179,7 @@ func (l *peerListener) Accept() (net.Conn, error) {
 		p, err := l.peer(c)
 		if err != nil {
 			// Fail closed: an account that can't be named isn't served.
+			p = PeerCred{UID: unknownUID}
 			err = fmt.Errorf("%w: can't tell which account connected: %w", ErrPeerRefused, err)
 		} else {
 			err = l.admit.Admit(p)

@@ -23,7 +23,14 @@ type PeerCred struct {
 	PID int
 }
 
+// unknownUID is the account of a peer the system didn't name:
+// (uid_t)-1, which no account has (setreuid(2) reads it as "unchanged").
+const unknownUID = ^uint32(0)
+
 func (p PeerCred) String() string {
+	if p.UID == unknownUID {
+		return "an account the system didn't name"
+	}
 	if p.PID == 0 {
 		return "uid " + strconv.FormatUint(uint64(p.UID), 10)
 	}

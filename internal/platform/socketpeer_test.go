@@ -122,11 +122,15 @@ func TestSocketAPIPeerCheck(t *testing.T) {
 		} else {
 			<-served
 		}
+		want := tc.peer
+		if tc.err != nil {
+			want = PeerCred{UID: unknownUID} // not uid 0: root is never refused
+		}
 		select {
 		case r := <-reports:
 			if !tc.report {
 				t.Errorf("%s: reported %v", tc.name, r.err)
-			} else if !errors.Is(r.err, ErrPeerRefused) || r.peer.UID != tc.peer.UID {
+			} else if !errors.Is(r.err, ErrPeerRefused) || r.peer != want {
 				t.Errorf("%s: report %v %v", tc.name, r.peer, r.err)
 			}
 		default:
