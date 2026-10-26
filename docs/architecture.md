@@ -73,6 +73,8 @@ type Platform struct {
     Paths      Paths
     Flows      FlowWatcher
     Inventory  SystemInventory // = compat.System
+    Service    ServiceManager  // the background service (LowpathSvc)
+    ServiceAPI ServiceAPI      // the channel between the window and the service
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -98,6 +100,21 @@ type Paths interface {
     CacheDir() (string, error)  // rebuildable (window profile)
     LogDir() (string, error)    // log, crash reports
     DriverDirs(elevated bool) ([]string, []error) // elevated: protected folders only
+    ServiceDataDir() (string, error) // the service's state and log (machine-wide)
+}
+type ServiceManager interface {
+    State() (ServiceState, error)    // {Installed, Running, PID, Exe}; no admin rights
+    Start() error                    // users may start it (granted at install)
+    Install(cfg ServiceConfig) error // {Exe, Args, DataDir, Seed}; ErrNeedAdmin unelevated
+    Uninstall() error
+}
+type ServiceAPI interface {
+    Listen() (net.Listener, error)              // fails if another process holds the name
+    Dial(ctx context.Context) (net.Conn, error) // ErrServiceNotRunning, ErrNotService
+    String() string
+}
+type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platform
+    Run(name string, run func(ctx context.Context) error) (ok bool, err error)
 }
 ```
 
@@ -110,6 +127,7 @@ type Paths interface {
 | Paths | `%APPDATA%\Lowpath` (data and log), `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); log in `$XDG_STATE_HOME/Lowpath` (`~/.local/state`) or `~/Library/Logs/Lowpath`; no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
+| Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -154,6 +172,18 @@ users can't read, unlike a command line. When the last window closes,
 exits; quitting the app sends the windows SIGTERM, then kills one that hangs
 after 3 s. SIGHUP (the terminal or session going away) stops the app like
 SIGTERM.
+
+Start-up order (`run` in `cmd/lowpath`): the log opens in `Paths.LogDir`;
+the UI port is bound, and if a copy already serves it, `Instance.Signal`
+asks that copy for its window and this start exits before any prompt; then
+the background service is tried (see Background service), and only without
+one does the app ask for rights (`Privileges.Relaunch`) and run the engine
+itself. Either way the same shell shows the window and answers later
+starts; in front of the service the fresh launch links come from
+`app.Frontend`, which holds the session, so a second start signs in even
+while the service restarts. The single-instance socket is the user's own
+and is never put in the service's socket folder (`/run/lowpath`,
+`/var/run/lowpath`), whose mode the service relies on.
 
 `internal/owner` is the socket-owner resolver:
 
@@ -709,6 +739,11 @@ func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, err
 func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 func NewVerdictEngine(VerdictConfig) *VerdictEngine; (*VerdictEngine).Diagnose(Evidence) Diagnosis
 func (DiagnosisReport) Text() string
+type WLAN interface {                   // per OS, behind diag.NewWLAN(); platform.WiFi
+    Link(index int) (WiFiLink, error)   // RSSI, quality, band, channel, width, PHY, Tx/Rx rate, MLO links
+    Survey(index int) (WiFiSurvey, error) // BSS Load of the AP, networks on its channel (scan cache)
+    Tune(index int) (WiFiTuning, error) // background scan off + streaming mode on until Close
+}
 func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View() GatewayView, Sample() *GatewaySample
 ```
 
@@ -856,7 +891,8 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   measured), what measured it and a summary, and `blamed` on the verdict's
   segment. Home: router pings (median, loss; loss null when the router
   limits replies), `bad` when the home or line check found its problem,
-  `warn` for spikes without loss. ISP: a route trace on this connection
+  `warn` for spikes without loss or, on Wi-Fi, clean pings over a weak or
+  crowded signal (the home check stays clear). ISP: a route trace on this connection
   (time from this PC to the destination; the loss the ISP check cites when
   loss starts past home, else what persists from the first hop past home,
   null when loss starts at home),
@@ -868,6 +904,141 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   (the trace already redacted) and measures nothing itself, so
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.
+
+## Background service (dev mode) — `cmd/lowpathsvc`, `app.Frontend`
+
+The M7 split between an elevated service and an unelevated window, in its
+minimal form (#6): so a remote tester never has to click a UAC prompt after
+the one-time install, a reboot included.
+
+```
+Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (LocalSystem)
+  WebView2 window ── loopback HTTP ──▶ app.Frontend ── \\.\pipe\lowpath ──▶ app.Server.ServiceHandler()
+  (per-launch session cookie, guard)   (strips the cookie,       (engine, capture, catalog,
+                                        503 when the service      diagnostics; the same JSON
+                                        doesn't answer)           API as today)
+```
+
+- **Install** (`lowpathsvc install`): unelevated, it relaunches itself
+  through UAC once (`Privileges.Relaunch`, `-import <this user's data
+  folder> -pause`). Elevated, it copies itself to `<Program
+  Files>\Lowpath\lowpathsvc.exe` (a service running as SYSTEM from a
+  user-writable folder would let any program replace it, MITRE T1574.010),
+  makes `%ProgramData%\Lowpath` SYSTEM- and Administrators-only (owner
+  Administrators, protected DACL `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`,
+  set in the same `CreateDirectory` call that makes it, so it never exists
+  with ProgramData's inherited "Users may create files and folders"; a
+  folder already there is kept only when SYSTEM or Administrators own it
+  and its protected DACL allows nobody else, and anything else, such as a
+  folder a user made first, one that inherited ProgramData's access list, a
+  file or a link, is moved aside to `Lowpath.untrusted-<time>`), writes the user's `state.json` into it if it
+  has none (relays, keys, settings, custom games), and creates or updates
+  the service: automatic start, `LocalSystem`, unrestricted service SID,
+  restart after 2 s, 5 s and 30 s on failure (also when `run` returns an
+  error), and the DACL
+  `D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)`:
+  the default plus `SERVICE_START` for Interactive Users, never stop or
+  reconfigure. Then it starts the service. `lowpathsvc uninstall` stops and
+  deletes it and keeps the data folder; `lowpathsvc status` needs no rights.
+- **The service** is started by the service manager with `-data
+  %ProgramData%\Lowpath`. Before it opens anything there, it secures that
+  folder the same way (`ServiceManager.SecureDataDir`), on every start: a
+  data folder deleted since the install would otherwise come back with
+  ProgramData's access list, and a user could plant a junction where this
+  SYSTEM process writes its log and caches. If that fails, it stops before
+  serving, and the service manager retries. It takes the pipe first (failing fast if another
+  process holds it), builds the same `app.Server` as the window would
+  (`internal/shell.Build`, `Config.InService`), and serves
+  `Server.ServiceHandler()`: the API without the session check, since the
+  pipe's access list is the gate. A stop or shutdown cancels the run's
+  context: the session stops first (capture closed, the game direct), then
+  the HTTP server, within the 15 s stop hint. The capture marker, crash
+  log and fail-open work as in the window (Capture → Fail-open), so a
+  killed service's game goes direct within a second, the service manager
+  restarts it, and the window shows "Your last boost was cut short".
+- **The pipe**: `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x120083;;;IU)`.
+  Interactive Users (signed in at the PC or over Remote Desktop, not
+  services or network logons) get read, write and read attributes, not
+  `GENERIC_WRITE`, which includes `FILE_CREATE_PIPE_INSTANCE`: a user who
+  could add an instance could answer the window in the service's place.
+  The first instance is created with `FILE_CREATE`, so the service fails
+  instead of joining a pipe someone made first, and remote clients are
+  rejected. The window checks the other end with
+  `GetNamedPipeServerProcessId` against the service's PID from the service
+  manager, and refuses anything else (`ErrNotService`).
+- **The window** (`cmd/lowpath`): after binding its port, unless `-demo`
+  or `-no-service`, it asks the service manager. Not installed: as before
+  (in-process engine, UAC prompt when route mode needs it). Stopped: it
+  starts the service and waits up to 20 s. Then it checks `GET
+  /api/version` through the pipe; when the service answers, it serves the
+  UI with `app.Frontend` and asks for no rights at all. A service that
+  doesn't answer is logged and the window runs the engine itself.
+  `-service-pipe NAME` talks to a service run by hand (`lowpathsvc run
+  -pipe NAME`, no PID check) and fails if it doesn't answer; the end-to-end
+  test uses it. On Linux and macOS there is no service manager yet
+  (`ErrUnsupported`), so the window checks the socket once: a service
+  started by hand as root (`lowpathsvc run`) is used, and nothing listening,
+  the usual case, costs no wait. Only after this step does the window ask
+  for rights (UAC, polkit or the macOS administrator dialog, see Desktop
+  shell). `lowpathsvc install` and `uninstall` say there that they aren't
+  available yet, without a prompt: polkit gives the program file network
+  capabilities and restarts it as the same user, which would never make
+  the installer root.
+- **Frontend**: a reverse proxy over `ServiceAPI.Dial` (3 s dial timeout, no
+  environment proxy, Server-Sent Events flushed at once). `/api/session`
+  and `/api/version` are answered locally, so a second launch finds the
+  window while the service restarts. A request the service can't answer
+  gets 503 `service_unavailable`; the UI's live stream drops, it shows
+  "Lost connection to the Lowpath service. Reconnecting…", and reconnects
+  when the service is back. Closing the window asks the service to stop
+  the boost (`POST /api/stop`), as it stops when the engine runs in the
+  window; the service keeps running for the next launch.
+
+- **Wi-Fi** (`wifi*.go`, roadmap L9 and §3.6's Wi-Fi row). Windows uses
+  the Native Wifi API (`wlanapi.dll`, loaded lazily; no admin rights).
+  `Link` maps the default route's interface index to the adapter's GUID
+  (`GetIfEntry2Ex`), then reads `wlan_intf_opcode_realtime_connection_quality`
+  (PHY, link quality, Rx/Tx rate and per link the center frequency, width
+  and RSSI; the strongest link is the one judged on Wi-Fi 7 multi-link) and
+  `wlan_intf_opcode_rssi`. Both are location-free: since Windows 11 24H2
+  `current_connection` and `WlanGetNetworkBssList` return
+  `ERROR_ACCESS_DENIED` without location consent and the first call shows
+  Windows' location prompt, so `Link` falls back to `current_connection` only on builds before
+  the rule (below 25976, read with `RtlGetVersion`), with `channel_number`
+  for the channel; from the rule on, a failed realtime query leaves only
+  `channel_number` and `rssi`, so a background poll never shows the prompt. `Survey` is only called
+  when the user presses *Check channel*: it reads the connected BSSID and
+  the scan cache (no `WlanScan`), parses the AP's BSS Load element (ID 11:
+  station count, channel utilization /255, admission capacity) and counts
+  the other networks on its channel (and the overlapping ones on 2.4 GHz).
+  `Tune` sets `background_scan_enabled=FALSE` and
+  `media_streaming_mode=TRUE` on its own handle; the Wi-Fi service keeps a
+  setting while any client asks for it and resets both on a disconnect
+  (both documented), which is why `Refresh` sets them again; that it also
+  drops a client's request when the handle closes (so a crash reverts it)
+  is observed behaviour, not documented, and is part of the maintainer's
+  real Wi-Fi check. The structures are decoded from
+  copied bytes with every 64-bit SDK offset written out (`wifi_native.go`),
+  so their layouts are tested on every OS. Units the docs contradict are
+  decided by size: rates under 1000 are Mbit/s (no Wi-Fi rate is below 1
+  Mbit/s), frequencies over 100000 are kHz. Linux reads the signal from
+  `/proc/net/wireless` and `operstate` (band and rates need nl80211);
+  macOS has no reader yet. Errors: `ErrNoWiFi`, `ErrWiFiDisconnected`,
+  `ErrLocationDenied`, and one matching both `ErrUnsupported`s. SSIDs and
+  BSSIDs are never kept or shown: they can locate a home.
+- In the app (`internal/app/wifi.go`) every Wi-Fi call runs off the
+  request with a time limit (3 s, the survey 8 s; one read at a time), and
+  readings are shared for 2 s. A boost over Wi-Fi with Settings
+  `wifi_tuning` on (default) starts a tuner: `Tune` off the boost's path,
+  `Refresh` every 10 s, `Close` on stop (a `Tune` that answers after its
+  time limit is closed when it does; one that fails because the Wi-Fi is
+  reconnecting is tried again every 10 s). The AP's load joins the verdict
+  when its primary channel lies inside the link's channel (`OnChannel`:
+  the link may give the center of a 40 to 320 MHz channel). The verdict gets `Evidence.WiFi` from
+  a reading of the adapter that carries the default route (≤ 30 s old) and
+  the AP's channel load from a survey of the same channel (≤ 15 min old):
+  a channel the AP reports busy more than 60% of the time counts as weak,
+  like RSSI < −70 dBm or 2.4 GHz.
 
 ## App, desktop shell, build
 
@@ -901,8 +1072,9 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   engine.Send`, `engine.Deliver → capture.Inject`. Record primary servers per
   game every few seconds. Stop tears down capture first, then engine.
 - `build.ps1`: npm ci/build → go-winres → `dist\Lowpath.exe` (`-H windowsgui`),
-  `dist\lpcheck.exe`, `dist\relay-linux-amd64`, `dist\relay-linux-arm64`,
-  copy `deploy\`. Plus `go vet` + `go test`.
+  `dist\lowpathsvc.exe`, `dist\lowpath-linux-amd64` and `-arm64`,
+  `dist\Lowpath-macos.zip`, `dist\lpcheck.exe`, `dist\relay-linux-amd64`,
+  `dist\relay-linux-arm64`, copy `deploy\`. Plus `go vet` + `go test`.
 
 ### HTTP API
 
@@ -953,8 +1125,11 @@ polls while `state` is `loading` or `pinging` is true.
 | GET | /api/diag/gateway | | `GatewayView{state: "idle"\|"measuring"\|"on"\|"paused"\|"no_gateway"\|"offline"\|"no_reply"\|"no_permission"\|"cant_send"\|"unsupported", message, note, running, rate_hz, gateway, interface, link, since, stats: null \| {window_s, sent, lost, loss_pct, p50_ms, p95_ms, p99_ms, min_ms, max_ms, jitter_ms, spikes, max_loss_run, limited}, series: [{t, sent, lost, p50_ms, max_ms}]}`; asking keeps the pinger running for 15 s |
 | GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}], segments: [{id: "home"\|"isp"\|"lowpath"\|"server", name, status: "good"\|"warn"\|"bad"\|"unknown"\|"off", rtt_ms, loss_pct, source, summary, blamed}]}`; measures nothing, answers at once |
 | GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, routers' host names left out |
+| GET | /api/diag/wifi | | `{at, state: "ok"\|"no_wifi"\|"disconnected"\|"unsupported"\|"error", message, link: null \| WiFiLink{interface, adapter, rssi_dbm, quality_pct, band, channel, freq_mhz, width_mhz, standard, generation, tx_mbps, rx_mbps, mlo, links, source, notes}, in_use, route, survey: null \| {state, message, result: WiFiSurvey{load: null \| {stations, busy_pct, admission_capacity}, load_note, networks, same_channel, overlapping, loudest_neighbor_dbm, freq_mhz}, at}, tuning: null \| {state: "applying"\|"on"\|"partial"\|"failed"\|"off", scan_paused, streaming, message, notes}}`; never an SSID or BSSID |
+| POST | /api/diag/wifi/survey | | reads the scan cache now (may show Windows' location prompt; `survey.state` `location` when refused); the same view |
 
-Live adds `"capture": null | {"mode": "route", "captured", "passed",
+Live adds `"wifi": null | {state, scan_paused, streaming, message, notes}`
+(the boost's Wi-Fi scan pause), `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,
 during a session, `"line": PassiveState` (`{active, direction, since,
 watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
@@ -971,7 +1146,14 @@ New error kinds: `needs_admin` (409), `no_relays` (409), `conflict` (409, with
 `conflicts`: the programs to close first), `capture_failed` (500, with
 `conflicts` when one is running),
 `unsupported` (501: route mode, the process list or the restart on a system
-without that part yet), `unauthorized` (401).
+without that part yet), `unauthorized` (401), `service_unavailable` (503,
+from the window in front of the background service when the service
+doesn't answer, or isn't the installed one).
+
+The platform view adds `"service": {"state": "in_use" | "running" |
+"stopped" | "not_installed" | "unsupported" | "unknown", "message"?}`:
+`in_use` when this API is the background service's, the others from
+`ServiceManager.State` in a window that runs its own engine.
 
 **Session.** Every `/api` request except the two below needs the
 `lowpath_session` cookie (HttpOnly, SameSite=Strict, no expiry), a random
@@ -1007,7 +1189,14 @@ prints that URL to stderr only, never to the log.
 - No relays → game panel shows an onboarding card (add a relay / enable the
   loopback test relay) instead of a broken Apply.
 - Route mode without admin → banner with **Restart as administrator**
-  (`POST /api/elevate`).
+  (`POST /api/elevate`), and, when the service isn't installed, the
+  one-time `lowpathsvc install` instead.
+- Settings → Network: **Background service** row: In use, Not used
+  (`-demo`, or the window's own reason: `-no-service`, the service isn't
+  answering, isn't the installed process, or wouldn't start, from
+  `platform.service.message`), Stopped, Not installed (with the install
+  command) or "—" with the service manager's error; hidden where the OS has
+  no service yet.
 - `live.conflicts` → a banner above every page: running ones in red
   (`block`) or amber (`warn`), "<name> is running." + the action + a
   **Why?** that unfolds the explanation and the evidence; installed-only
@@ -1016,6 +1205,14 @@ prints that URL to stderr only, never to the log.
   once the program is closed. Settings → Network: **Other network
   software** lists everything found, what couldn't be checked, and
   **Check again**.
+- Settings → Diagnostics: **Wi-Fi link** (polled every 3 s): the RSSI in a
+  coloured box (≥ −70 dBm good, below weak, below −80 very weak), channel,
+  band and width, link rate, adapter, standard and frequency, each "—"
+  when not reported, with the reader's notes; **Check channel** reads the
+  AP's load and its neighbours (or says why not, e.g. location access);
+  the scan pause's state during a boost. Settings → Optimization: **Pause
+  Wi-Fi scans while boosting** (`wifi_tuning`). The boost's facts row
+  shows "Wi-Fi scans: Paused".
 - Optimizing in route mode: "Waiting for game traffic — launch the game now"
   until packets flow; then the **Game servers** list (addr, primary, up/down
   packets) and capture counters. Proxy mode keeps the existing
@@ -1059,6 +1256,13 @@ prints that URL to stderr only, never to the log.
 - Linux, as root (WSL2 works): `go test -run TestTUNRouting -v ./internal/capture`
   runs the TUN backend in network namespaces of its own; with
   `LOWPATH_LPCHECK=<linux lpcheck>` it also runs the lpcheck acceptance test.
+- Background service, once as administrator: `dist\lowpathsvc.exe install`
+  (one UAC prompt), reboot, open Lowpath: no prompt, Settings → Network
+  says the service is in use, Boost in route mode works. `taskkill /F /FI
+  "SERVICES eq LowpathSvc"` mid-boost: the game keeps playing direct, the
+  window shows the lost connection, the service is back within seconds and
+  the window says the boost was cut short. Unelevated, the end-to-end test
+  plays the same split with `lowpathsvc run` on a pipe of its own.
 
 ## Known limitations
 

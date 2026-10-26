@@ -52,6 +52,9 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
     }
   };
 
+  // The server words the restart for its OS (UAC, polkit, the macOS
+  // administrator dialog).
+  const elevateHint = platform.elevate_hint || "Restart Lowpath as administrator to fix this.";
   const reason = platform.capture.reason || (canElevate ? "administrator rights are needed" : "the capture driver isn't available");
 
   return (
@@ -60,7 +63,16 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       <span style={{ flex: 1 }}>
         <b>Route mode can't capture game traffic:</b> {reason}.{" "}
         {canElevate ? (
-          platform.elevate_hint || "Restart Lowpath as administrator to fix this."
+          platform.service?.state === "not_installed" ? (
+            // Only where `lowpathsvc install` works (Windows today): the
+            // other OSes report "unsupported".
+            <>
+              {elevateHint.replace(/\.$/, "")}, or install the background service once with{" "}
+              <code className="inline-code">lowpathsvc install</code> so it never asks again.
+            </>
+          ) : (
+            elevateHint
+          )
         ) : (
           <>
             Use{" "}

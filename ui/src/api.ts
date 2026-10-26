@@ -21,6 +21,7 @@ import type {
   Settings,
   TraceMode,
   TraceStatus,
+  WiFiView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -96,6 +97,8 @@ export const api = {
   stopTrace: () => call<TraceStatus>("DELETE", "/diag/trace"),
   verdict: () => call<Diagnosis>("GET", "/diag/verdict"),
   gateway: () => call<GatewayView>("GET", "/diag/gateway"),
+  wifi: () => call<WiFiView>("GET", "/diag/wifi"),
+  wifiSurvey: () => call<WiFiView>("POST", "/diag/wifi/survey"),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need

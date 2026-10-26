@@ -31,11 +31,11 @@ type windowKind struct {
 
 // Window timings: a window program that exits with an error within
 // startGrace didn't manage to open (no display, no toolkit) and the next
-// kind is tried; stopWait is how long a window may take to close when the
-// app quits before it is killed.
+// kind is tried; windowStopWait is how long a window may take to close
+// when the app quits before it is killed.
 const (
-	startGrace = 2500 * time.Millisecond
-	stopWait   = 3 * time.Second
+	startGrace     = 2500 * time.Millisecond
+	windowStopWait = 3 * time.Second
 )
 
 // AppWindows is the Linux and macOS desktop: the UI in app windows run as

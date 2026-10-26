@@ -68,6 +68,20 @@ func TestSocketInstance(t *testing.T) {
 }
 
 // A socket file left by a killed copy is replaced.
+// The single-instance socket and the background service's API socket
+// (DefaultSocketPath) never share a folder, even for root with
+// XDG_RUNTIME_DIR=/run.
+func TestSocketInstanceNotInServiceFolder(t *testing.T) {
+	svcDir := filepath.Dir(DefaultSocketPath)
+	s := newSocketInstance("127.0.0.1:7878", filepath.Dir(svcDir), os.TempDir(), 0)
+	if filepath.Dir(s.Path()) == svcDir {
+		t.Errorf("single-instance socket %s is in the service's folder", s.Path())
+	}
+	if s.Path() == DefaultSocketPath {
+		t.Error("single-instance socket is the service's socket")
+	}
+}
+
 func TestSocketInstanceStale(t *testing.T) {
 	dir := t.TempDir()
 	s := newSocketInstance("127.0.0.1:7878", dir, os.TempDir(), os.Getuid())

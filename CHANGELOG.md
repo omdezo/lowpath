@@ -14,14 +14,39 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   while the tab is open and during a boost, with loss, median, p99, spikes
   and a 60-second chart, and the verdict uses it; a router that stops
   answering counts as loss, not as one that ignores ping (#10).
+- Wi-Fi link in Settings → Diagnostics: signal strength, band, channel,
+  width, Wi-Fi generation and link rate from the Native Wifi API (no
+  location access needed), and with *Check channel* the router's own
+  channel load (BSS Load) and the other networks on its channel. While a
+  game is boosted over Wi-Fi, background scans are paused and streaming
+  mode is on (Settings → Optimization, on by default), applied again after
+  a reconnect and reverted when the boost ends or Lowpath closes. The
+  verdict counts a weak signal, 2.4 GHz or a busy channel against the Wi-Fi,
+  the route bar's Home part says *Watch* when the router pings are clean
+  but the signal is weak, and the report gains a Wi-Fi line. Linux shows
+  the signal strength (#11).
+- Dev-mode background service `LowpathSvc` (Windows): `lowpathsvc install`
+  asks for administrator rights once, and from then on the Lowpath window
+  runs unelevated and drives the service over the named pipe
+  `\\.\pipe\lowpath`, so Boost works after a reboot with no UAC prompt (#6).
+  The window starts a stopped service by itself, says "Lost connection to
+  the Lowpath service" while it restarts after a crash, and refuses a pipe
+  served by any other process; Settings → Network shows whether the service
+  is in use, or why this window doesn't use it. `lowpathsvc status` and
+  `uninstall` too; `-no-service` keeps the engine in the window. The
+  service's data folder is created admins-only in one step and secured
+  again at every start; a folder users could change is moved aside. On
+  macOS the socket is `/var/run/lowpath/api.sock`.
 - Desktop shell on Linux and macOS: the UI opens in an app window
   (WebKitGTK or a Chromium app window on Linux, WKWebView on macOS, the
   default browser otherwise), and closing it quits and stops the boost. A
   second start brings the running copy forward instead of starting another.
   On Linux route mode asks for your password once (polkit) to give the
   program file, made private to you, its two network capabilities, and
-  keeps running as you; the first start adds Lowpath to the app menu. The
-  build makes a universal `Lowpath.app` for macOS. Logs go to `~/.local/state/Lowpath` and
+  keeps running as you; the first start adds Lowpath to the app menu. A
+  background service started by hand (`lowpathsvc run` as root) is used
+  first, and then nothing is asked. The build makes a universal
+  `Lowpath.app` for macOS. Logs go to `~/.local/state/Lowpath` and
   `~/Library/Logs/Lowpath` (`-logs` to choose), and SIGHUP stops the app
   cleanly (#44).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I

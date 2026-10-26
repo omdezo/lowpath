@@ -19,6 +19,7 @@ import (
 	"lowpath/internal/capture"
 	"lowpath/internal/compat"
 	"lowpath/internal/detect"
+	"lowpath/internal/diag"
 	"lowpath/internal/owner"
 )
 
@@ -88,6 +89,10 @@ type FlowWatcher interface {
 // OS doesn't have reports errors.ErrUnsupported.
 type SystemInventory = compat.System
 
+// WiFi reads the Wi-Fi link (signal, band, rates, the access point's load)
+// and pauses the adapter's background scans during a boost (diag.WLAN).
+type WiFi = diag.WLAN
+
 // IconProvider reads a program's own icon.
 type IconProvider interface {
 	// ExeIcon renders the program's main icon at size×size.
@@ -109,6 +114,9 @@ type Paths interface {
 	// why a usual folder is missing. An elevated process only gets folders
 	// that ordinary users can't write to.
 	DriverDirs(elevated bool) ([]string, []error)
+	// ServiceDataDir holds the background service's settings, relays and
+	// log (machine-wide, administrators only).
+	ServiceDataDir() (string, error)
 }
 
 // Platform bundles one implementation of each interface.
@@ -122,6 +130,11 @@ type Platform struct {
 	Paths      Paths
 	Flows      FlowWatcher
 	Inventory  SystemInventory
+	// Service installs and starts the background service, and ServiceAPI
+	// is the channel the window and the service talk over.
+	Service    ServiceManager
+	ServiceAPI ServiceAPI
+	WiFi       WiFi
 }
 
 // Check reports a Platform with a missing part, which would otherwise fail
@@ -138,6 +151,8 @@ func (p *Platform) Check() error {
 		{"OS", p.OS == ""}, {"Capture", p.Capture == nil}, {"Owners", p.Owners == nil},
 		{"Privileges", p.Privileges == nil}, {"Games", p.Games == nil}, {"Icons", p.Icons == nil},
 		{"Paths", p.Paths == nil}, {"Flows", p.Flows == nil}, {"Inventory", p.Inventory == nil},
+		{"Service", p.Service == nil}, {"ServiceAPI", p.ServiceAPI == nil},
+		{"WiFi", p.WiFi == nil},
 	} {
 		if part.unset {
 			missing = append(missing, part.name)

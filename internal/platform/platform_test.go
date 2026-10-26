@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/diag"
 )
 
 func TestNativeIsComplete(t *testing.T) {
@@ -26,6 +27,16 @@ func TestNativeIsComplete(t *testing.T) {
 	}
 	if d, err := p.Paths.DataDir(); err == nil && filepath.Base(d) != appDir {
 		t.Errorf("DataDir = %q, want a %s folder", d, appDir)
+	}
+	// Wi-Fi: this machine may have no adapter, a disconnected one or a
+	// connected one; what matters is that a missing reading says why.
+	if _, err := p.WiFi.Link(0); err != nil && !errors.Is(err, diag.ErrNoWiFi) && !errors.Is(err, diag.ErrWiFiDisconnected) && !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Wi-Fi link: %v, want a reading or a known reason", err)
+	}
+	if runtime.GOOS == "darwin" {
+		if _, err := p.WiFi.Tune(0); !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("Wi-Fi tuning on darwin: %v, want errors.ErrUnsupported", err)
+		}
 	}
 	if runtime.GOOS == "windows" {
 		return
@@ -99,6 +110,7 @@ type fakePaths struct{ userDirs }
 
 func (fakePaths) DriverDirs(bool) ([]string, []error) { return nil, nil }
 func (fakePaths) LogDir() (string, error)             { return "", nil }
+func (fakePaths) ServiceDataDir() (string, error)     { return "", nil }
 
 func TestUserDirs(t *testing.T) {
 	u := userDirs{
@@ -179,5 +191,29 @@ func TestElevationHelps(t *testing.T) {
 		if got := p.ElevationHelps(); got != c.want {
 			t.Errorf("%s: ElevationHelps = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestNativeServiceParts(t *testing.T) {
+	p := Native()
+	want := DefaultSocketPath
+	switch runtime.GOOS {
+	case "windows":
+		want = `\\.\pipe\lowpath`
+	case "darwin":
+		// macOS has no /run.
+		if want != "/var/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on macOS", want)
+		}
+	case "linux":
+		if want != "/run/lowpath/api.sock" {
+			t.Errorf("DefaultSocketPath = %q on Linux", want)
+		}
+	}
+	if p.ServiceAPI.String() != want {
+		t.Errorf("service API %q, want %q", p.ServiceAPI.String(), want)
+	}
+	if d, err := p.Paths.ServiceDataDir(); err != nil || !strings.EqualFold(filepath.Base(d), appDir) && d != "/var/lib/lowpath" {
+		t.Errorf("ServiceDataDir = %q, %v", d, err)
 	}
 }

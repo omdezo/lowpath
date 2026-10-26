@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wrench, X } from "lucide-react";
+import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wifi, Wrench, X } from "lucide-react";
 import { api } from "../api";
 import type { CaptureMode, Platform, RelayView, Settings } from "../types";
 import { cap } from "../util";
@@ -7,6 +7,7 @@ import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
 import { OtherSoftware } from "./Conflicts";
 import { RelaysPane } from "./RelaysPane";
+import { ServiceRow } from "./ServiceRow";
 import { Diagnostics } from "./Diagnostics";
 
 export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
@@ -136,6 +137,7 @@ export function SettingsModal(props: Props) {
                   </div>
                 )}
               </div>
+              <ServiceRow platform={platform} demo={demo} />
               <Row t="Packet duplication" d="How many routes carry every packet. More copies = smoother, but uses more upload bandwidth. Auto picks 2–4 from measured loss.">
                 <div className="segmented">
                   {([0, 1, 2, 4] as const).map((v) => (
@@ -162,11 +164,18 @@ export function SettingsModal(props: Props) {
 
           {tab === "relays" && <RelaysPane relays={relays} settings={settings} onSettings={set} onRelaysChanged={onRelaysChanged} />}
 
-          {tab === "diagnostics" && <Diagnostics onError={onError} />}
+          {tab === "diagnostics" && <Diagnostics onError={onError} wifiTuning={settings.wifi_tuning ?? true} />}
 
           {tab === "optimization" && (
             <>
               <h3>Optimization</h3>
+              <Row
+                t="Pause Wi-Fi scans while boosting"
+                d="Wi-Fi adapters leave the channel every so often to look for other networks, which shows up as regular lag spikes. While a game is boosted over Wi-Fi, Lowpath pauses those scans and turns on the adapter's streaming mode; both go back to normal when the boost ends, the Wi-Fi reconnects or Lowpath closes."
+                icon={<Wifi size={18} />}
+              >
+                <Toggle label="Pause Wi-Fi scans while boosting" checked={settings.wifi_tuning ?? true} onChange={(v) => set({ wifi_tuning: v })} />
+              </Row>
               <Row t="Traffic Shaper" d="Prioritize game packets over downloads and streams on this PC." soon icon={<Gauge size={18} />}>
                 <Toggle label="Traffic Shaper" checked={false} disabled onChange={() => {}} />
               </Row>

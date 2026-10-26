@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"lowpath/internal/app"
+	"lowpath/internal/capture"
 	"lowpath/internal/platform"
 	"lowpath/internal/platform/fakeplatform"
 )
@@ -256,13 +260,13 @@ func TestNoWindowOpensTheBrowser(t *testing.T) {
 func TestShowAgainWithoutWindow(t *testing.T) {
 	fp := fakeplatform.New(t.TempDir())
 	desk := &fakeDesktop{showErr: platform.ErrNoWindow}
-	sh := &shell{o: options{}, desk: desk, url: "http://127.0.0.1:1", log: discardLog()}
+	sh := &uiShell{o: options{}, desk: desk, url: "http://127.0.0.1:1", log: discardLog()}
 	srv, err := buildServer(t.Context(), options{data: t.TempDir()}, fp.Platform(), discardLog(), func() {})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
-	sh.srv = srv
+	sh.front = srv
 	first := srv.LaunchPath()
 	sh.showAgain()
 	if b := desk.browsed(); len(b) != 1 || !strings.HasSuffix(b[0], first) {
@@ -272,7 +276,7 @@ func TestShowAgainWithoutWindow(t *testing.T) {
 
 func TestShowErrorWhenNothingOpens(t *testing.T) {
 	desk := &brokenBrowser{}
-	sh := &shell{o: options{open: true}, desk: desk, url: "http://127.0.0.1:7878", log: discardLog()}
+	sh := &uiShell{o: options{open: true}, desk: desk, url: "http://127.0.0.1:7878", log: discardLog()}
 	sh.browser("http://127.0.0.1:7878/api/session?t=secret")
 	if len(desk.errors) != 1 || strings.Contains(desk.errors[0], "secret") || !strings.Contains(desk.errors[0], "http://127.0.0.1:7878") {
 		t.Errorf("errors shown: %q, want one naming the UI address without the launch token", desk.errors)
@@ -284,3 +288,75 @@ type brokenBrowser struct{ fakeDesktop }
 func (*brokenBrowser) OpenBrowser(string) error { return errors.New("no xdg-open") }
 
 func discardLog() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+// With the background service answering, the desktop shell works the same
+// in front of it: no prompt for rights even when route mode lacks them, a
+// second start brings the window forward with a fresh launch link from the
+// window's own session, and closing the window stops the boost in the
+// service.
+func TestWindowInFrontOfTheService(t *testing.T) {
+	fp := fakeplatform.New(t.TempDir())
+	fp.Privileges.SetCanElevate(true)
+	fp.Capture.SetAvailable(capture.ErrNeedAdmin)
+	fp.Service.Set(platform.ServiceState{Installed: true, Running: true, PID: 7}, nil)
+	var mu sync.Mutex
+	var paths []string
+	ln, err := fp.ServiceAPI.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.Header.Get("Cookie") != "" {
+			t.Errorf("the session cookie reached the service on %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"version":%q}`, app.Version)
+	})}
+	go hs.Serve(ln)
+	t.Cleanup(func() { hs.Close() })
+
+	inst := &fakeInstance{}
+	addr := freeAddr(t)
+	o := options{addr: addr, data: t.TempDir(), logs: t.TempDir()}
+	second := &fakeDesktop{}
+	desk := &fakeDesktop{}
+	desk.window = func(ctx context.Context, launch string) error {
+		c := windowClient(t, launch)
+		if res, err := c.Get("http://" + addr + "/api/bootstrap"); err != nil || res.StatusCode != 200 {
+			t.Errorf("bootstrap through the service: %v", err)
+		} else {
+			res.Body.Close()
+		}
+		if err := run(context.Background(), o, fp.Platform(), second, inst); err != nil {
+			t.Errorf("second start: %v", err)
+		}
+		desk.mu.Lock()
+		shown := append([]string(nil), desk.shown...)
+		desk.mu.Unlock()
+		if len(shown) != 1 || !strings.Contains(shown[0], "/api/session?t=") {
+			t.Errorf("second start showed %q, want the window with a fresh launch link", shown)
+		} else {
+			windowClient(t, shown[0])
+		}
+		return nil // the user closes the window
+	}
+	if err := run(context.Background(), o, fp.Platform(), desk, inst); err != nil {
+		t.Fatal(err)
+	}
+	if runs := fp.Privileges.Relaunches(); len(runs) != 0 {
+		t.Errorf("asked for rights with the service in use: %q", runs)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(paths, "GET /api/bootstrap") || !slices.Contains(paths, "POST /api/stop") {
+		t.Errorf("the service saw %q, want the bootstrap and, on close, the stop", paths)
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(p, "GET /api/session") {
+			t.Error("the launch link went on to the service")
+		}
+	}
+}

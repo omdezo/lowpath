@@ -33,7 +33,7 @@ func newXDGDesktop(cfg DesktopConfig, x execer, getenv func(string) string, home
 		log = slog.New(slog.DiscardHandler)
 	}
 	w := &AppWindows{
-		x: x, grace: startGrace, stop: stopWait, log: log,
+		x: x, grace: startGrace, stop: windowStopWait, log: log,
 		browser: func(url string) command { return command{path: "xdg-open", args: []string{url}} },
 		dialog: func(title, msg string) []command {
 			return []command{

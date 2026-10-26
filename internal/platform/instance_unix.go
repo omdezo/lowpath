@@ -47,7 +47,11 @@ func newSocketInstance(addr, runtimeDir, tmp string, uid int) *SocketInstance {
 	}, addr) + ".sock"
 	dir := filepath.Join(tmp, "lowpath-"+strconv.Itoa(uid))
 	if filepath.IsAbs(runtimeDir) {
-		if d := filepath.Join(runtimeDir, "lowpath"); len(filepath.Join(d, name)) <= maxSocketPath {
+		// Never the background service's socket folder (root with
+		// XDG_RUNTIME_DIR=/run): Serve makes its folder 0700, which would
+		// shut every other user's window out of the service.
+		d := filepath.Join(runtimeDir, "lowpath")
+		if d != filepath.Dir(DefaultSocketPath) && len(filepath.Join(d, name)) <= maxSocketPath {
 			dir = d
 		}
 	}

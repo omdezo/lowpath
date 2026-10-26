@@ -11,12 +11,14 @@ import (
 // Native is the Windows platform: WinDivert capture, the IP Helper socket
 // table, UAC, Steam detection, icons read from the program files and flows
 // learned from ETW (Microsoft-Windows-Kernel-Network); other network software
-// is read from the service manager, the registry and the IP Helper API.
+// is read from the service manager, the registry and the IP Helper API, and
+// the Wi-Fi link from the Native Wifi API.
 func Native() *Platform {
 	owners := owner.New()
 	priv := NewUAC()
 	paths := NewWindowsPaths()
 	games := detect.New()
+	service := NewWindowsService()
 	return &Platform{
 		OS:         "windows",
 		Capture:    capture.NewWinDivert(owners, priv, paths),
@@ -27,5 +29,9 @@ func Native() *Platform {
 		Paths:      paths,
 		Flows:      detect.NewKernelNetwork(),
 		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
+		Service:    service,
+		// The window talks only to the installed service's process.
+		ServiceAPI: NewPipe(PipeName, service.PID),
+		WiFi:       diag.NewWLAN(),
 	}
 }

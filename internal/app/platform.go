@@ -26,6 +26,21 @@ type platformView struct {
 	ElevateAction string      `json:"elevate_action"`
 	ElevateHint   string      `json:"elevate_hint"`
 	Capture       captureInfo `json:"capture"`
+	// Service is the background service (LowpathSvc) as this server sees
+	// it.
+	Service serviceView `json:"service"`
+}
+
+// serviceView says whether the window goes through the background service.
+type serviceView struct {
+	// State: "in_use" (this server is the service), "running" (installed
+	// and running, but this window runs its own engine, as with -demo),
+	// "stopped", "not_installed", "unsupported" (none on this OS yet) or
+	// "unknown" (the service manager didn't answer; Message says why).
+	// For "running" and "stopped", Message says why this window doesn't
+	// use the service, when the window knows.
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
 }
 
 type captureInfo struct {
@@ -41,6 +56,7 @@ func (s *Server) platform() platformView {
 		OS: s.plat.OS, Admin: admin,
 		CanElevate: s.elevate != nil && !admin && platform.NeedsElevation(avail),
 		Capture:    captureInfo{Backend: s.plat.Capture.Name()},
+		Service:    s.serviceView(),
 	}
 	v.ElevateAction, v.ElevateHint = elevateWording(s.plat.OS)
 	if err := avail; err != nil {
@@ -62,6 +78,25 @@ func elevateWording(os string) (action, hint string) {
 		return "Restart with administrator rights", "Restart Lowpath with administrator rights to fix this."
 	default:
 		return "Restart as administrator", "Restart Lowpath as administrator to fix this."
+	}
+}
+
+func (s *Server) serviceView() serviceView {
+	if s.inService {
+		return serviceView{State: "in_use"}
+	}
+	st, err := s.plat.Service.State()
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		return serviceView{State: "unsupported"}
+	case err != nil:
+		return serviceView{State: "unknown", Message: err.Error()}
+	case !st.Installed:
+		return serviceView{State: "not_installed"}
+	case st.Running:
+		return serviceView{State: "running", Message: s.serviceNote}
+	default:
+		return serviceView{State: "stopped", Message: s.serviceNote}
 	}
 }
 

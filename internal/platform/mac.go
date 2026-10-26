@@ -29,7 +29,7 @@ func newMacDesktop(cfg DesktopConfig, x execer, home func() (string, error)) *Ap
 		log = slog.New(slog.DiscardHandler)
 	}
 	w := &AppWindows{
-		x: x, grace: startGrace, stop: stopWait, log: log,
+		x: x, grace: startGrace, stop: windowStopWait, log: log,
 		browser: func(url string) command { return command{path: "/usr/bin/open", args: []string{url}} },
 		dialog: func(title, msg string) []command {
 			return []command{{path: "/usr/bin/osascript", args: []string{

@@ -69,6 +69,43 @@ func TestSegmentsCleanRouterWithSpikes(t *testing.T) {
 	}
 }
 
+// Clean router pings over a weak or crowded Wi-Fi link: the check stays
+// clear (the radio loses nothing now), but the bar says "Watch", not "OK".
+func TestSegmentsCleanRouterOnWeakWiFi(t *testing.T) {
+	weak, strong, busy := -78, -55, 85.0
+	d := diagnose(Evidence{Link: wifiLink(), Gateway: livePings(wifiLink(), 0, 4), WiFi: &WiFiSignal{RSSI: &weak, Band: "5"}})
+	if c := check(t, d, ruleHome); c.Status != CheckClear || !strings.Contains(strings.Join(c.Facts, " "), "weak or crowded") {
+		t.Fatalf("home check %+v", c)
+	}
+	h := segment(t, d, SegmentHome)
+	if h.Status != SegmentWarn || h.Blamed || *h.LossPct != 0 ||
+		!strings.Contains(h.Summary, "without loss") || !strings.Contains(h.Summary, "-78 dBm on 5 GHz (weak or crowded)") {
+		t.Fatalf("home %+v", h)
+	}
+	// A busy channel on top of spikes: both said, once each.
+	g := livePings(wifiLink(), 0, 4)
+	g.Spikes = 2
+	d = diagnose(Evidence{Link: wifiLink(), Gateway: g, WiFi: &WiFiSignal{RSSI: &strong, Band: "5", BusyPct: &busy}})
+	h = segment(t, d, SegmentHome)
+	if h.Status != SegmentWarn || !strings.Contains(h.Summary, "2 replies took 100 ms") || strings.Count(h.Summary, "channel 85% busy") != 1 {
+		t.Fatalf("home with spikes on a busy channel %+v", h)
+	}
+	// A strong signal stays OK.
+	if h := segment(t, diagnose(Evidence{Link: wifiLink(), Gateway: livePings(wifiLink(), 0, 4), WiFi: &WiFiSignal{RSSI: &strong, Band: "5"}}), SegmentHome); h.Status != SegmentGood {
+		t.Errorf("strong signal: %+v", h)
+	}
+	// Lossy pings over the weak link stay the verdict, not a warning.
+	d = diagnose(Evidence{Link: wifiLink(), Gateway: livePings(wifiLink(), 36, 9), WiFi: &WiFiSignal{RSSI: &weak, Band: "5"}})
+	wantVerdict(t, d, VerdictWiFi, ConfidenceHigh)
+	if h := segment(t, d, SegmentHome); h.Status != SegmentBad || !h.Blamed {
+		t.Errorf("lossy weak link: %+v", h)
+	}
+	// Not measured stays "not measured": the signal alone says nothing about loss.
+	if h := segment(t, diagnose(Evidence{Link: wifiLink(), WiFi: &WiFiSignal{RSSI: &weak, Band: "5"}}), SegmentHome); h.Status != SegmentUnknown {
+		t.Errorf("no router pings: %+v", h)
+	}
+}
+
 func TestSegmentsRateLimitedRouterIsNotLoss(t *testing.T) {
 	g := livePings(wifiLink(), 600, 5)
 	g.Limited = true

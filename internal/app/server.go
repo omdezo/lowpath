@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -98,6 +97,13 @@ type Config struct {
 	// end-to-end run); zero: 200 probes per hop, one per second.
 	TraceCount    int
 	TraceInterval time.Duration
+	// InService: this server runs inside the background service
+	// (cmd/lowpathsvc) and the window reaches it through a Frontend.
+	InService bool
+	// ServiceNote says why this window runs its own engine although the
+	// background service is installed (it wouldn't start, didn't answer,
+	// or -no-service); the Settings row shows it instead of guessing.
+	ServiceNote string
 	// GatewayInterval is the router pinger's interval; zero: 50 ms (20 Hz).
 	GatewayInterval time.Duration
 }
@@ -133,8 +139,12 @@ type Server struct {
 	// full-tunnel VPNs (internal/compat).
 	conflicts *conflictWatch
 	verdict   *verdicts
+	wifi      *wifiWatch
 	gateway   *diag.GatewayPinger // router pings for Diagnostics and the verdict
 	marker    SessionMarker       // nil: none
+	inService bool
+	// serviceNote: see Config.ServiceNote.
+	serviceNote string
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -237,9 +247,12 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:    newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
-		verdict: newVerdicts(cfg.NetStats),
-		marker:  cfg.Marker,
+		line:        newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		verdict:     newVerdicts(cfg.NetStats),
+		wifi:        newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
+		marker:      cfg.Marker,
+		inService:   cfg.InService,
+		serviceNote: cfg.ServiceNote,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -394,7 +407,24 @@ func (s *Server) scanRunning() {
 	}
 }
 
+// Handler serves the UI and the API to the app's window over loopback HTTP,
+// behind the per-launch session (see auth.go).
 func (s *Server) Handler() http.Handler {
+	mux := s.routes()
+	mux.HandleFunc("GET "+pathSession, s.auth.handleSession)
+	if s.ui != nil {
+		mux.Handle("/", spa(s.ui))
+	}
+	return s.auth.guard(mux)
+}
+
+// ServiceHandler serves the API alone, without the session check, for the
+// background service's pipe: the pipe's access list already limits it to
+// users signed in at this PC, and the window in front of it (Frontend)
+// keeps its own session for the browser side.
+func (s *Server) ServiceHandler() http.Handler { return s.routes() }
+
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /api/mapping", s.handleMapping)
@@ -431,43 +461,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/diag/gateway", s.handleGateway)
 	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
 	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
+	mux.HandleFunc("GET /api/diag/wifi", s.handleWiFi)
+	mux.HandleFunc("POST /api/diag/wifi/survey", s.handleWiFiSurvey)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
-	mux.HandleFunc("GET "+pathSession, s.handleSession)
-	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
-	if s.ui != nil {
-		mux.Handle("/", spa(s.ui))
-	}
-	return s.guard(mux)
-}
-
-// guard keeps the API to the app's own window: requests must target a
-// loopback Host (blocks DNS rebinding), mutating calls must carry a custom
-// header, which a cross-origin page cannot send without a CORS preflight we
-// never answer, and /api needs the session cookie (see auth.go). The UI's
-// static files are served to anyone; they hold nothing secret.
-func (s *Server) guard(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.Host)
-		if err != nil {
-			host = r.Host
-		}
-		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-			http.Error(w, "forbidden host", http.StatusForbidden)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if r.Method != http.MethodGet && r.Header.Get("X-Lowpath") != "1" {
-				http.Error(w, "missing X-Lowpath header", http.StatusForbidden)
-				return
-			}
-			if r.URL.Path != pathSession && r.URL.Path != pathVersion && !s.auth.ok(r) {
-				writeErr(w, http.StatusUnauthorized, "unauthorized",
-					errors.New("this page is not signed in to Lowpath: use the Lowpath window, or close Lowpath and start it again"))
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
+	mux.HandleFunc("GET "+pathVersion, handleVersion)
+	return mux
 }
 
 // spa serves the built UI and falls back to index.html for client routes.
@@ -691,6 +689,9 @@ type liveView struct {
 	// Conflicts is the last scan for other boosters, packet filter drivers
 	// and full-tunnel VPNs (nil until the first scan ends).
 	Conflicts *compat.Report `json:"conflicts"`
+	// WiFi is the boost's Wi-Fi scan pause (nil: no boost, not on Wi-Fi,
+	// or turned off in Settings).
+	WiFi *wifiTuneView `json:"wifi"`
 }
 
 func (s *Server) live() liveView {
@@ -708,6 +709,7 @@ func (s *Server) live() liveView {
 			v.Capture = &captureView{Mode: CaptureRoute, Stats: sess.capt.Stats()}
 		}
 		v.Line = s.line.view()
+		v.WiFi = sess.wifi.current()
 	}
 	return v
 }
@@ -787,6 +789,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"conflicts":    s.conflicts.current().Redacted(), // user folder names cut out
 		"verdict":      s.diagnosis(),
 		"gateway":      s.gateway.View().Redacted(),
+		"wifi":         s.wifiView(), // no network name or access point address
 		"live":         live,
 	})
 }

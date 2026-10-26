@@ -6,6 +6,7 @@
 .DESCRIPTION
     Output in dist\:
       Lowpath.exe              the desktop app (GUI subsystem, UI embedded)
+      lowpathsvc.exe           the background service (lowpathsvc install, once)
       lowpath-linux-amd64/arm64 the desktop app for Linux
       Lowpath-macos.zip        Lowpath.app for macOS 12+ (Apple silicon and Intel)
       lpcheck.exe              STUN check that shows which public IP the internet sees
@@ -104,6 +105,8 @@ try {
     New-Item -ItemType Directory -Force (Join-Path $root 'bin') | Out-Null
     Invoke-WithEnv @{ GOOS = 'windows'; GOARCH = 'amd64' } {
         Invoke-Native 'dist\Lowpath.exe' { go build -trimpath -ldflags '-H windowsgui -s -w' -o (Join-Path $dist 'Lowpath.exe') ./cmd/lowpath }
+        Invoke-Native 'dist\lowpathsvc.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lowpathsvc.exe') ./cmd/lowpathsvc }
+        Invoke-Native 'bin\lowpathsvc.exe (for the end-to-end test)' { go build -o (Join-Path $root 'bin\lowpathsvc.exe') ./cmd/lowpathsvc }
         Invoke-Native 'dist\lpcheck.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lpcheck.exe') ./cmd/lpcheck }
         Invoke-Native 'bin\lowpath.exe (console, for debugging)' { go build -o (Join-Path $root 'bin\lowpath.exe') ./cmd/lowpath }
     }
