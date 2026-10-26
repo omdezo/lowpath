@@ -30,7 +30,7 @@ type session struct {
 
 	sawGame bool
 	eng     *engine.Engine
-	capt    CaptureSession     // route mode only
+	capt    capture.Session    // route mode only
 	cancel  context.CancelFunc // demo traffic, server recorder
 }
 
@@ -95,7 +95,7 @@ func (s *Server) apply(req applyReq) error {
 	var target, direct netip.AddrPort
 	switch mode {
 	case CaptureRoute:
-		if err := s.capt.Available(); err != nil {
+		if err := s.plat.Capture.Available(); err != nil {
 			return captureErr(err)
 		}
 		if len(g.Processes) == 0 {
@@ -188,7 +188,7 @@ func captureErr(err error) *apiError {
 // capHolder lets the engine's Deliver callback see the capture through an
 // atomic pointer: the engine starts first, and an interface can't be stored
 // atomically by itself.
-type capHolder struct{ c CaptureSession }
+type capHolder struct{ c capture.Session }
 
 // startRoute runs the engine in capture mode and points WinDivert at the
 // game's processes: outbound game packets go to engine.Send, the relays'
@@ -204,7 +204,7 @@ func (s *Server) startRoute(sess *session, g Game, cfg engine.Config) error {
 	if err != nil {
 		return fmt.Errorf("start engine: %w", err)
 	}
-	c, err := s.capt.Start(capture.Config{
+	c, err := s.plat.Capture.Start(capture.Config{
 		Processes: g.Processes,
 		// Relay endpoints must never be captured: a tunnel packet that got
 		// tunneled again would loop.

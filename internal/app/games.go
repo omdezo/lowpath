@@ -5,8 +5,6 @@ import (
 	"hash/fnv"
 	"net/http"
 	"strings"
-
-	"lowpath/internal/detect"
 )
 
 // customColors are the library tile colors handed out to custom games, picked
@@ -28,7 +26,7 @@ func (s *Server) handleAddCustomGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Remember where the program lives, so its icon can be shown after it exits.
-	g.Exe = detect.RunningExe(g.Processes)
+	g.Exe = s.plat.Games.RunningExe(g.Processes)
 	if err := s.store.AddCustomGame(g); err != nil {
 		if errors.Is(err, ErrGameExists) {
 			writeErr(w, 409, "game_exists", err)

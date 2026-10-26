@@ -105,6 +105,7 @@ func newHarness(t *testing.T) *harness {
 	h.consume.Store(true)
 	cfg := Config{
 		Processes: []string{"game.exe"},
+		Owners:    h.os,
 		OnPacket: func(local, remote netip.AddrPort, payload []byte) bool {
 			h.mu.Lock()
 			h.calls = append(h.calls, call{local, remote, string(payload)})
@@ -218,7 +219,7 @@ func TestOtherTrafficPassedUnchanged(t *testing.T) {
 func TestFirstPacketOfNewGameSocketCaptured(t *testing.T) {
 	h := newHarness(t)
 	local := netip.MustParseAddrPort("192.168.1.10:7000")
-	h.os.add(socket{local, 500}, "game.exe") // game launched after Start
+	h.os.add(socket{Local: local, PID: 500}, "game.exe") // game launched after Start
 	addr := outboundOn(7, 3)
 	h.c.handle(udp(t, local, gameServer, "first"), &addr)
 	if calls := h.onPacketCalls(); len(calls) != 1 || calls[0].payload != "first" {
@@ -353,6 +354,9 @@ func TestConfigCheck(t *testing.T) {
 	}
 	if err := (&Config{OnPacket: func(_, _ netip.AddrPort, _ []byte) bool { return true }}).check(); err == nil {
 		t.Error("nothing to capture accepted")
+	}
+	if err := (&Config{Processes: []string{"a.exe"}, OnPacket: func(_, _ netip.AddrPort, _ []byte) bool { return true }}).check(); err == nil {
+		t.Error("missing socket-owner resolver accepted")
 	}
 }
 

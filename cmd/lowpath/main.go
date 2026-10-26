@@ -1,7 +1,9 @@
 // Lowpath is the desktop app: it serves the UI and API on 127.0.0.1:7878,
 // runs the optimization engine, and (in route mode) captures the selected
-// game's UDP traffic with WinDivert. On Windows it shows the UI in its own
-// WebView2 window and restarts itself as administrator when needed.
+// game's UDP traffic through the platform's capture backend (WinDivert on
+// Windows). On Windows it shows the UI in its own WebView2 window and
+// restarts itself as administrator when needed. Everything OS-specific
+// comes from internal/platform.
 //
 //	Lowpath.exe                       window; asks for admin rights (UAC)
 //	Lowpath.exe -no-elevate           window, without admin (route mode then says so)
@@ -34,8 +36,8 @@ import (
 	"time"
 
 	"lowpath/internal/app"
-	"lowpath/internal/capture"
 	"lowpath/internal/demo"
+	"lowpath/internal/platform"
 	"lowpath/ui"
 )
 
@@ -47,9 +49,10 @@ type options struct {
 }
 
 func main() {
+	plat := platform.Native()
 	var o options
 	flag.StringVar(&o.addr, "addr", "127.0.0.1:7878", "UI/API listen address (loopback only)")
-	flag.StringVar(&o.data, "data", defaultDataDir(), "directory for settings, relays and the log")
+	flag.StringVar(&o.data, "data", defaultDataDir(plat.Paths), "directory for settings, relays and the log")
 	flag.StringVar(&o.relays, "relays", "", "optional read-only relay list (JSON) to use alongside the relays added in the app")
 	flag.BoolVar(&o.demo, "demo", false, "run against a simulated network instead of real relays")
 	flag.BoolVar(&o.headless, "headless", false, "no window; stop with Ctrl+C")
@@ -59,7 +62,7 @@ func main() {
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
 
-	if err := run(o); err != nil {
+	if err := run(o, plat); err != nil {
 		slog.Error("fatal", "err", err)
 		if !o.headless {
 			showError("Lowpath", err.Error())
@@ -68,7 +71,7 @@ func main() {
 	}
 }
 
-func run(o options) error {
+func run(o options, plat *platform.Platform) error {
 	if err := checkLoopback(o.addr); err != nil {
 		return err
 	}
@@ -97,13 +100,14 @@ func run(o options) error {
 		}
 		return err
 	}
-	if o.waitPID == 0 && !o.noElevate && !o.demo && elevationSupported && !capture.IsAdmin() {
-		switch err := relaunchElevated(childArgs(o)); {
+	priv := plat.Privileges
+	if o.waitPID == 0 && !o.noElevate && !o.demo && priv.CanElevate() && !priv.Elevated() {
+		switch err := priv.Relaunch(childArgs(o)); {
 		case err == nil:
 			logger.Info("restarting as administrator")
 			ln.Close() // the elevated copy waits for this process to exit, then binds
 			return nil
-		case errors.Is(err, app.ErrElevateCancelled):
+		case errors.Is(err, platform.ErrElevateCancelled):
 			logger.Warn("administrator prompt cancelled; running without admin rights (route mode needs them)")
 		default:
 			logger.Warn("could not restart as administrator", "err", err)
@@ -112,7 +116,7 @@ func run(o options) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	srv, err := newServer(ctx, o, logger, cancel)
+	srv, err := newServer(ctx, o, plat, logger, cancel)
 	if err != nil {
 		ln.Close()
 		return err
@@ -122,7 +126,8 @@ func run(o options) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 	url := "http://" + ln.Addr().String()
-	logger.Info("Lowpath is running", "ui", url, "version", app.Version, "demo", o.demo, "admin", capture.IsAdmin(), "data", o.data)
+	logger.Info("Lowpath is running", "ui", url, "version", app.Version, "demo", o.demo, "os", plat.OS,
+		"capture", plat.Capture.Name(), "admin", priv.Elevated(), "data", o.data)
 	// The launch link (see app.Server.LaunchPath) goes straight to the
 	// window or browser, never to the log file.
 	launch := url + srv.LaunchPath()
@@ -134,7 +139,7 @@ func run(o options) error {
 		openBrowser(launch)
 	default:
 		// The window owns the main thread until it closes; closing it quits.
-		if err := runWindow(ctx, launch, logger); err != nil {
+		if err := runWindow(ctx, launch, webViewDir(plat), logger); err != nil {
 			logger.Warn("no app window; opening the browser instead", "err", err)
 			openBrowser(launch)
 		} else {
@@ -163,7 +168,19 @@ func run(o options) error {
 
 // newServer builds the API server: real relays by default, the simulated
 // network with -demo.
-func newServer(ctx context.Context, o options, logger *slog.Logger, quit func()) (*app.Server, error) {
+func newServer(ctx context.Context, o options, plat *platform.Platform, logger *slog.Logger, quit func()) (*app.Server, error) {
+	srv, err := buildServer(ctx, o, plat, logger, quit)
+	if err != nil {
+		return nil, err
+	}
+	srv.Run(ctx)
+	return srv, nil
+}
+
+// buildServer wires the API server to the store, catalog, relays and the
+// platform layer without starting background work, so tests can run it on
+// a fake platform.
+func buildServer(ctx context.Context, o options, plat *platform.Platform, logger *slog.Logger, quit func()) (*app.Server, error) {
 	store, err := app.OpenStore(filepath.Join(o.data, "state.json"))
 	if err != nil {
 		return nil, err
@@ -187,13 +204,14 @@ func newServer(ctx context.Context, o options, logger *slog.Logger, quit func())
 	if err != nil {
 		return nil, err
 	}
-	cfg := app.Config{Store: store, Games: games, Relays: relays, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
-	if elevationSupported {
-		cfg.Elevate = func() error { return relaunchElevated(childArgs(o)) }
+	cfg := app.Config{Store: store, Games: games, Relays: relays, Platform: plat, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
+	if plat.Privileges.CanElevate() {
+		cfg.Elevate = func() error { return plat.Privileges.Relaunch(childArgs(o)) }
 	}
 	if o.demo {
 		sim, err := demo.Start(ctx, demo.DefaultPaths(), demo.DirectProfile(), logger.With("component", "relay"))
 		if err != nil {
+			relays.Close()
 			return nil, err
 		}
 		cfg.Network, cfg.Sim = app.DemoNetwork{N: sim}, sim
@@ -204,7 +222,6 @@ func newServer(ctx context.Context, o options, logger *slog.Logger, quit func())
 		relays.Close()
 		return nil, err
 	}
-	srv.Run(ctx)
 	return srv, nil
 }
 
@@ -280,11 +297,30 @@ func childArgs(o options) []string {
 	return append(args, "-wait-pid", strconv.Itoa(os.Getpid()))
 }
 
-func defaultDataDir() string {
-	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "Lowpath")
+// defaultDataDir is the platform's per-user folder (%APPDATA%\Lowpath on
+// Windows), or .lowpath in the working directory when the OS has none.
+func defaultDataDir(paths platform.Paths) string {
+	if d, err := paths.DataDir(); err == nil {
+		return d
 	}
 	return ".lowpath"
+}
+
+// webViewDir is the app window's browser profile. An elevated run gets its
+// own: WebView2 fails to start (and go-webview2 then exits the process) on a
+// folder that browser processes of the other elevation level still use, as
+// the old window's do for a moment after "Restart as administrator". The UI
+// keeps no state in the browser, so nothing is lost by not sharing it.
+func webViewDir(plat *platform.Platform) string {
+	base, err := plat.Paths.CacheDir()
+	if err != nil {
+		base = filepath.Join(os.TempDir(), "Lowpath")
+	}
+	name := "WebView2"
+	if plat.Privileges.Elevated() {
+		name = "WebView2-admin"
+	}
+	return filepath.Join(base, name)
 }
 
 // maxLogSize is when the log starts over (checked at start only).

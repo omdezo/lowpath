@@ -7,8 +7,9 @@
       format    gofmt finds nothing to change
       vet       go vet ./...
       test      go test ./...
-      cross     relay + lpcheck build for linux/amd64, linux/arm64, darwin/arm64,
-                darwin/amd64; the whole module vets for linux and darwin
+      cross     app + relay + lpcheck build for linux/amd64, linux/arm64,
+                darwin/arm64, darwin/amd64 and windows/arm64; the whole module
+                (tests included) vets for linux and darwin
       ui        npm ci (when needed) + typecheck + production build
       build     dist\Lowpath.exe and dist\lpcheck.exe
       e2e       end-to-end UI test (only with -E2E)
@@ -90,13 +91,14 @@ try {
     Invoke-Stage 'cross' {
         $targets = @(
             @{ GOOS = 'linux'; GOARCH = 'amd64' }, @{ GOOS = 'linux'; GOARCH = 'arm64' },
-            @{ GOOS = 'darwin'; GOARCH = 'arm64' }, @{ GOOS = 'darwin'; GOARCH = 'amd64' }
+            @{ GOOS = 'darwin'; GOARCH = 'arm64' }, @{ GOOS = 'darwin'; GOARCH = 'amd64' },
+            @{ GOOS = 'windows'; GOARCH = 'arm64' }
         )
         foreach ($t in $targets) {
             $out = Join-Path $root "dist\cross\$($t.GOOS)-$($t.GOARCH)\"
             New-Item -ItemType Directory -Force $out | Out-Null
             Invoke-WithEnv @{ GOOS = $t.GOOS; GOARCH = $t.GOARCH; CGO_ENABLED = '0' } {
-                go build -trimpath -o $out ./cmd/relay ./cmd/lpcheck
+                go build -trimpath -o $out ./cmd/lowpath ./cmd/relay ./cmd/lpcheck
                 if ($LASTEXITCODE -ne 0) { throw "build failed for $($t.GOOS)/$($t.GOARCH)" }
             }
         }

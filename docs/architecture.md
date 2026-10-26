@@ -53,6 +53,70 @@ next is in the [roadmap](roadmap.md).
   new sender (relay restart, egress failover) and starts over instead of
   rejecting it as too old.
 
+## Platform layer — `internal/platform`, `internal/owner`
+
+Everything OS-specific sits behind small interfaces in `internal/platform`,
+so the engine, the app and the UI are the same on every OS. `platform.Native()`
+returns the implementation chosen at build time (`native_windows.go`,
+`native_other.go`); `app.Config.Platform` takes it (nil = `Native()`), and
+tests pass `internal/platform/fakeplatform` instead, which runs the whole app,
+route mode included, without admin rights, a driver or a particular OS.
+
+```go
+type Platform struct {
+    OS         string          // runtime.GOOS of the implementation
+    Capture    CaptureBackend  // = capture.Backend
+    Owners     OwnerResolver   // = owner.Resolver
+    Privileges Privileges
+    Games      GameDetector
+    Icons      IconProvider
+    Paths      Paths
+}
+type Privileges interface {
+    Elevated() bool                // administrator (Windows) or root
+    CanElevate() bool              // Relaunch can show a prompt
+    Relaunch(args []string) error  // ErrElevateCancelled when declined
+}
+type GameDetector interface {
+    Running() map[string]bool          // lower-case image names
+    RunningExe(names []string) string  // "" = none, or the OS won't tell
+    SteamLibraries() []string
+    SteamRoots() []string
+}
+type IconProvider interface{ ExeIcon(path string, size int) (image.Image, error) }
+type Paths interface {
+    DataDir() (string, error)   // settings, relays, log
+    CacheDir() (string, error)  // rebuildable (window profile)
+    DriverDirs(elevated bool) ([]string, []error) // elevated: protected folders only
+}
+```
+
+| Part | Windows | Linux, macOS (today) |
+|---|---|---|
+| Capture | `capture.WinDivert` (64-bit only; `ErrNoDriver` on arm64) | `capture.Unavailable`: route mode says "packet capture isn't available on this system yet" (TUN backends: #41, #42) |
+| Owners | `owner.Windows`: `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` + Toolhelp32 | `owner.Unsupported` (`/proc`, libproc: #43) |
+| Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | `platform.Root`: euid 0; no prompt yet (#44) |
+| Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `/proc/*/comm` on Linux; no Steam folders or icons yet (#43) |
+| Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
+
+Rules: a part not built for an OS fails with an error matching
+`errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
+turns that into an explanation (501 `unsupported`, or the capture reason),
+never an empty list presented as real. No package-level mutable state: each
+implementation is a type with a constructor, and its dependencies (owner
+resolver, privilege check, driver folders) are passed in.
+
+`internal/owner` is the socket-owner resolver:
+
+```go
+type Socket struct{ Local netip.AddrPort; PID uint32 }
+type Resolver interface {
+    UDPSockets() ([]Socket, error)            // IPv4 and IPv6, no admin rights
+    ProcessNames() (map[uint32]string, error) // PID -> image name
+}
+func ListProcesses(r Resolver, self uint32) ([]Process, error) // "Add game" list; portable
+```
+
 ## Capture — `internal/divert`, `internal/capture`
 
 `internal/divert`: pure-Go (no cgo) bindings to WinDivert 2.2.2 via
@@ -78,19 +142,29 @@ Non-Windows: stub file returning `ErrUnsupported`.
 `internal/capture`:
 
 ```go
+// backend.go: the contract the app uses
+type Backend interface {
+    Name() string                      // "divert", "none"
+    Available() error                  // cheap; ErrNeedAdmin / ErrNoDriver / errors.ErrUnsupported
+    Start(cfg Config) (Session, error) // fills in DriverDir and Owners itself
+}
+type Session interface { Inject(...) error; Stats() Stats; Close() error }
+func NewWinDivert(owners owner.Resolver, priv Elevation, dirs DriverLocations) *WinDivert
+func NewUnavailable(err error) *Unavailable
+
 type Config struct {
     DriverDir string               // where divert.Install put the files
     Processes []string             // image names to capture, case-insensitive ("cs2.exe")
     PIDs      []uint32             // extra exact PIDs to capture (optional)
     Exclude   []netip.AddrPort     // relay endpoints: never captured
+    Owners    owner.Resolver       // who owns each local UDP socket (required)
     OnPacket  func(local, remote netip.AddrPort, payload []byte) bool
         // called for every captured game packet; payload is only valid during
         // the call. true = consumed (tunneled or dropped by kill switch);
         // false = reinject the original packet unchanged (goes out directly).
     Log *slog.Logger
 }
-func Available() error   // nil, or ErrNeedAdmin / ErrNoDriver / ErrUnsupported (non-Windows)
-func Start(cfg Config) (*Capture, error)
+func Start(cfg Config) (*Capture, error) // the WinDivert loop; used by WinDivert.Start
 func (c *Capture) Inject(local, remote netip.AddrPort, payload []byte) error
     // deliver a reply to the game: builds IPv4+UDP src=remote dst=local,
     // inbound, on the interface the flow's outbound packets used. Goroutine-safe.
@@ -107,8 +181,8 @@ How it works:
   written as `(ip.DstAddr < lo or ip.DstAddr > hi)` and
   `(ip.DstAddr != X or udp.DstPort != P)`; at most 64 relay endpoints go in.
 - Per packet: parse IPv4 + UDP (skip fragments, options OK). Owner lookup by
-  local UDP port → PID via `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)`, PID →
-  image name via a Toolhelp32 snapshot. Cache port→verdict; refresh the game's
+  local UDP port → PID through `Config.Owners` (on Windows
+  `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` and a Toolhelp32 snapshot). Cache port→verdict; refresh the game's
   ports in the background every second so game packets hit the cache; on a
   miss, query synchronously (the very first packet of a game must not leak).
   Never capture our own PID.
@@ -222,8 +296,9 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `-data`, `-demo`, `-relays file.json` (optional import), `-headless` (no
   window), `-open` (browser instead of window), `-no-elevate`.
 - Elevation: bind the port first (if another copy serves it, focus that one
-  and exit, no UAC prompt); then, if not admin and not `-no-elevate`,
-  relaunch with `runas` (ShellExecuteW) passing `-wait-pid <self>`; on UAC
+  and exit, no UAC prompt); then, if `Privileges.CanElevate()`, not elevated
+  and not `-no-elevate`, `Privileges.Relaunch` (on Windows `runas` through
+  ShellExecuteW) passing `-wait-pid <self>`; on UAC
   cancel keep running unelevated (route mode shows "needs admin").
   `POST /api/elevate` does the same on demand; the child waits for the parent
   to exit before binding.
@@ -233,8 +308,8 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `<data>\lowpath.log` and stderr.
 - Resources: app icon + manifest (asInvoker, DPI aware) via `go-winres` →
   `cmd/lowpath/rsrc_windows_amd64.syso`.
-- WinDivert files extracted to `<Program Files>\Lowpath\driver`, the folder
-  resolved with `KnownFolderPath(FOLDERID_ProgramFiles)` (not the
+- WinDivert files extracted to the first of `Paths.DriverDirs` that works:
+  `<Program Files>\Lowpath\driver`, the folder resolved with `KnownFolderPath(FOLDERID_ProgramFiles)` (not the
   environment). Fallback `<exe dir>\driver` only when not elevated: an
   elevated process never loads the DLL from a user-writable folder.
 - Store additions (state.json): relays, custom games, per-game last servers,
@@ -252,8 +327,8 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
 
 Bootstrap adds:
 ```json
-"platform": {"os": "windows", "admin": true,
-             "capture": {"available": true, "reason": ""}},
+"platform": {"os": "windows", "admin": true, "can_elevate": false,
+             "capture": {"backend": "divert", "available": true, "reason": ""}},
 "relays": [RelayView]
 ```
 `RelayView = {id, label, region, continent, addr, egress, has_key, builtin}`
