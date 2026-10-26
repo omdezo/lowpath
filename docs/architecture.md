@@ -331,10 +331,12 @@ relay reply ──Inject──▶ write IPv4+UDP into lowpathN ──▶ kernel 
   dies in any way, the kernel deletes the TUN and its route; the rule then
   finds an empty table and the kernel moves on to the next rule, so marked
   packets take the normal route. The table is created with
-  `NFT_TABLE_F_OWNER` (Linux 5.12+) and goes with the netlink socket;
-  older kernels keep it, inert. `Recover` (and every Start) removes the
-  rule and the table; without the rights it reports success only when no
-  `lowpath` device is left. The watchdog works as on Windows.
+  `NFT_TABLE_F_OWNER` (Linux 5.12+): it goes with the netlink socket and
+  survives a firewall's `nft flush ruleset`. Older kernels refuse the flag
+  (EINVAL) and get a plain table, which outlives a killed run, inert.
+  `Recover` (and every Start) removes the rule and the table; without the
+  rights it reports success only when no `lowpath` device is left. The
+  watchdog works as on Windows.
 
 `internal/capture/tun_linux_test.go` checks all of it as root, without
 touching the machine's network: the test re-runs itself in a new network
@@ -343,8 +345,11 @@ relay server (documentation addresses only). It checks that the game's
 packets are captured and the injected replies reach its socket, that other
 programs' packets go direct (through user space first, then the kernel's
 fast path), Stop, a stuck handler (direct again in about 0.7 s), `kill -9`
-of the capturing process as root and as an ordinary user with only the two
-capabilities (direct again within 60 ms), `Recover`, a user without rights,
+of the capturing process as root, as an ordinary user with only the two
+capabilities and with an unowned table as kernels before 5.12 make it
+(direct again within 60 ms each time; the owned table is gone with the
+process, the unowned one stays and diverts nothing), `Recover`, a user
+without rights,
 and the acceptance test: the real `lpcheck` (found by name through `/proc`)
 routed by the engine through the relay reports the relay's address, while a
 copy under another name reports the client's.

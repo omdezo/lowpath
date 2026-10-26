@@ -43,6 +43,7 @@ import (
 const (
 	tunRoleEnv    = "LOWPATH_TUN_ROLE"
 	tunPortEnv    = "LOWPATH_TUN_GAME_PORT"
+	tunUnownedEnv = "LOWPATH_TUN_UNOWNED"
 	serverAddr    = "198.51.100.7:3478"
 	clientIP      = "203.0.113.2"
 	serverLinkIP  = "203.0.113.1"
@@ -198,7 +199,11 @@ func tunCapturer(t *testing.T) {
 	res := newFakeOS()
 	res.socks = []socket{{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(port)), PID: pidGame}}
 	res.procs = map[uint32]string{pidGame: "game"}
-	s, err := NewTUN(res).Start(Config{Processes: []string{"game"}, OnPacket: func(_, _ netip.AddrPort, _ []byte) bool { return true }})
+	b := NewTUN(res)
+	if os.Getenv(tunUnownedEnv) == "1" {
+		b.sys = &linuxTUN{status: "/proc/self/status", dev: "/dev/net/tun", unowned: true}
+	}
+	s, err := b.Start(Config{Processes: []string{"game"}, OnPacket: func(_, _ netip.AddrPort, _ []byte) bool { return true }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,6 +246,7 @@ func tunClient(t *testing.T) {
 	t.Run("StuckHandler", tunStuckHandler)
 	t.Run("Killed", tunKilled)
 	t.Run("KilledWithCapabilities", tunKilledWithCapabilities)
+	t.Run("KilledOldKernel", tunKilledOldKernel)
 	t.Run("NoRights", tunNoRightsCheck)
 	t.Run("Lpcheck", tunLpcheck)
 }
@@ -529,15 +535,41 @@ func tunStuckHandler(t *testing.T) {
 	assertRestored(t, game, "after-stuck")
 }
 
-func tunKilled(t *testing.T) { tunKill(t, false) }
+func tunKilled(t *testing.T) { tunKill(t, false, false) }
 
 // tunKilledWithCapabilities is the same as an ordinary user with only
 // CAP_NET_ADMIN and CAP_NET_RAW.
-func tunKilledWithCapabilities(t *testing.T) { tunKill(t, true) }
+func tunKilledWithCapabilities(t *testing.T) { tunKill(t, true, false) }
 
-func tunKill(t *testing.T, nobody bool) {
+// tunKilledOldKernel is the same with the table made as on kernels before
+// 5.12, where it outlives the process: it must still divert nothing.
+func tunKilledOldKernel(t *testing.T) { tunKill(t, false, true) }
+
+// tableExists asks the kernel for the nftables table.
+func tableExists(t *testing.T) bool {
+	t.Helper()
+	nf, err := netlink.Dial(netlink.Netfilter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nf.Close()
+	var a netlink.Attrs
+	a.String(1, tunNftTable) // NFTA_TABLE_NAME
+	get := netlink.Message{Type: 10<<8 | 1, Flags: netlink.FlagAck, Op: "get table", Data: append([]byte{byte(nft.IPv4), 0, 0, 0}, a.Bytes()...)}
+	err = nf.Do(get)
+	if err != nil && !errors.Is(err, syscall.ENOENT) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+func tunKill(t *testing.T, nobody, unowned bool) {
 	game := newPeer(t)
-	cmd := tunRole(t, "capturer", false, []string{fmt.Sprintf("%s=%d", tunPortEnv, game.port())})
+	env := []string{fmt.Sprintf("%s=%d", tunPortEnv, game.port())}
+	if unowned {
+		env = append(env, tunUnownedEnv+"=1")
+	}
+	cmd := tunRole(t, "capturer", false, env)
 	if nobody {
 		asNobody(cmd, capNetAdmin, capNetRaw)
 	}
@@ -579,6 +611,11 @@ func tunKill(t *testing.T, nobody bool) {
 	}
 	if d := tunDevices(t); len(d) != 0 {
 		t.Errorf("TUN device outlived its process: %v", d)
+	}
+	// An owned table goes with the process's netlink socket; an unowned one
+	// stays (and marks packets that the rule's empty table lets pass).
+	if exists := tableExists(t); exists != unowned {
+		t.Errorf("nftables table there after the kill: %v, want %v", exists, unowned)
 	}
 	if err := NewTUN(nil).Recover(Marker{Backend: "tun", PID: uint32(cmd.Process.Pid)}); err != nil {
 		t.Fatalf("Recover: %v", err)

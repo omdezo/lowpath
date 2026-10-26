@@ -27,6 +27,9 @@ const drainWait = 50 * time.Millisecond
 type linuxTUN struct {
 	status string // /proc/self/status
 	dev    string // /dev/net/tun
+	// unowned makes the nftables table without the owner flag, as on
+	// kernels before 5.12 (tests).
+	unowned bool
 }
 
 func newTUNSystem() tunSystem { return &linuxTUN{status: "/proc/self/status", dev: "/dev/net/tun"} }
@@ -51,7 +54,7 @@ func (l *linuxTUN) check() error {
 
 func (l *linuxTUN) open(r tunRoute) (tunDevice, error) {
 	d := &tunLink{direct: map[uint16]bool{}}
-	if err := d.setUp(l.dev, r); err != nil {
+	if err := d.setUp(l.dev, r, !l.unowned); err != nil {
 		d.Close()
 		return nil, err
 	}
@@ -135,7 +138,7 @@ type tunLink struct {
 	closeErr            error
 }
 
-func (d *tunLink) setUp(dev string, r tunRoute) error {
+func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 	fd, err := unix.Open(dev, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return d.rightsOr(fmt.Errorf("capture: open %s: %w", dev, err), err)
@@ -196,10 +199,13 @@ func (d *tunLink) setUp(dev string, r tunRoute) error {
 	if d.nf, err = netlink.Dial(netlink.Netfilter); err != nil {
 		return err
 	}
-	err = d.nf.Do(tunRuleset(r, true)...)
-	if errors.Is(err, syscall.EOPNOTSUPP) {
-		// Before Linux 5.12 a table can't belong to a socket; Close and
-		// Recover delete it instead.
+	err = d.nf.Do(tunRuleset(r, own)...)
+	if own && (errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL)) {
+		// Before Linux 5.12 a table can't belong to a socket, and the
+		// unknown flag is refused with EINVAL (EOPNOTSUPP since); Close
+		// and Recover delete the table instead. (An owned table also
+		// survives `nft flush ruleset` from a firewall reload; an unowned
+		// one doesn't, and its packets then simply go direct.)
 		err = d.nf.Do(tunRuleset(r, false)...)
 	}
 	if err != nil {
