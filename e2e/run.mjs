@@ -350,7 +350,8 @@ async function main() {
     await page.getByRole("tab", { name: "Network" }).click();
     const conn = page.getByTestId("connection");
     await page
-      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 20000 })
+      // A slow registry can take a 15 s lookup plus one automatic retry.
+      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 40000 })
       .catch(() => {});
     const where = (await api(page, "GET", "/location")).body;
     const v4 = where?.ipv4;

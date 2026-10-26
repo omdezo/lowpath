@@ -24,7 +24,7 @@ func TestInternetLocate(t *testing.T) {
 	internet(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	loc, err := NewInternetLocator().Locate(ctx, true)
+	loc, err := NewInternetLocator(nil).Locate(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,8 @@ package diag
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,10 +30,19 @@ import (
 //
 // It is also an AddrFinder: PublicAddr asks whats-my-ip over a connection
 // pinned to the requested family.
+//
+// RIPEstat's proxy sometimes holds a request for 5 to 20 s and then answers
+// 502, while the same query sent again answers in 0.4 s (its process_time
+// is ~10 ms either way, so the stall is not the lookup). Registry lookups
+// are therefore hedged: a second copy goes out on a fresh connection when
+// the first has no reply after HedgeAfter, and the first good reply wins.
 type RIPEstat struct {
-	base      string
-	sourceApp string
-	clients   map[Family]*http.Client
+	base       string
+	sourceApp  string
+	clients    map[Family]*http.Client
+	hedge      *http.Client // its own connections: a stalled one is not reused
+	hedgeAfter time.Duration
+	slots      slots
 }
 
 // RIPEstatOptions tune RIPEstat; zero fields take the defaults.
@@ -41,6 +52,15 @@ type RIPEstatOptions struct {
 	// regular users. Default "lowpath".
 	SourceApp string
 	Timeout   time.Duration // per request, default 6 s
+	// HedgeAfter is how long a registry lookup waits for its first reply
+	// before a second copy is sent (default 2.5 s, well above the usual
+	// 0.4 to 2 s; negative: never). A copy is also sent at once when the
+	// first fails with a timeout, a reset or HTTP 500/502/503/504. Each
+	// lookup sends at most two copies.
+	HedgeAfter time.Duration
+	// MaxInFlight caps concurrent requests (default 6; RIPEstat allows 8
+	// per address). A hedge is skipped when no slot is free.
+	MaxInFlight int
 	// Dial opens TCP connections (default a *net.Dialer). network is
 	// "tcp4" or "tcp6" when PublicAddr asks for one family, else "tcp".
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -60,8 +80,21 @@ func NewRIPEstat(o RIPEstatOptions) *RIPEstat {
 		d := &net.Dialer{Timeout: 4 * time.Second}
 		o.Dial = d.DialContext
 	}
-	r := &RIPEstat{base: strings.TrimRight(o.BaseURL, "/"), sourceApp: o.SourceApp, clients: map[Family]*http.Client{}}
-	for f, network := range map[Family]string{IPv4: "tcp4", IPv6: "tcp6", anyFamily: "tcp"} {
+	if o.HedgeAfter == 0 {
+		o.HedgeAfter = 2500 * time.Millisecond
+	}
+	if o.MaxInFlight <= 0 {
+		o.MaxInFlight = 6
+	}
+	r := &RIPEstat{
+		base:       strings.TrimRight(o.BaseURL, "/"),
+		sourceApp:  o.SourceApp,
+		clients:    map[Family]*http.Client{},
+		hedgeAfter: o.HedgeAfter,
+		slots:      make(slots, o.MaxInFlight),
+	}
+	newClient := func(f Family) *http.Client {
+		network := map[Family]string{IPv4: "tcp4", IPv6: "tcp6", anyFamily: "tcp"}[f]
 		dial := o.Dial
 		// whats-my-ip (the family clients) must go direct: through an
 		// HTTP(S)_PROXY it would report the proxy's address, which is not
@@ -82,9 +115,69 @@ func NewRIPEstat(o RIPEstatOptions) *RIPEstat {
 			MaxIdleConnsPerHost:   2,
 			ForceAttemptHTTP2:     true,
 		}
-		r.clients[f] = &http.Client{Transport: t, Timeout: o.Timeout}
+		return &http.Client{Transport: t, Timeout: o.Timeout}
 	}
+	for _, f := range []Family{IPv4, IPv6, anyFamily} {
+		r.clients[f] = newClient(f)
+	}
+	// HTTP/2 would put the hedge on the stalled connection; a transport of
+	// its own makes it a new connection, possibly to another front end.
+	r.hedge = newClient(anyFamily)
 	return r
+}
+
+// slots is a counting semaphore for requests in flight.
+type slots chan struct{}
+
+func (s slots) acquire(ctx context.Context) error {
+	select {
+	case s <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s slots) tryAcquire() bool {
+	select {
+	case s <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s slots) release() { <-s }
+
+// transientError is a failure that says nothing about the address looked
+// up: a stalled or reset connection, or a busy server. Sending the same
+// request again may well work.
+type transientError struct{ error }
+
+func (e transientError) Unwrap() error { return e.error }
+
+// transient reports whether err is a timeout or a transientError.
+func transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var te transientError
+	var ne net.Error
+	return errors.As(err, &te) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
+}
+
+// permanent reports transport failures that a second copy a moment later
+// cannot fix: a certificate that does not verify (an intercepting proxy or
+// antivirus, a wrong clock) or a host name that does not exist. A DNS
+// timeout or temporary failure is not one of them.
+func permanent(err error) bool {
+	var cv *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	var he x509.HostnameError
+	var ci x509.CertificateInvalidError
+	var dns *net.DNSError
+	return errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) ||
+		(errors.As(err, &dns) && dns.IsNotFound)
 }
 
 // anyFamily lets a request use whichever family reaches RIPEstat.
@@ -97,9 +190,100 @@ type ripeResponse[T any] struct {
 	Data     T               `json:"data"`
 }
 
-// call fetches /data/<name>/data.json?resource=<resource> over family f.
+// call fetches /data/<name>/data.json?resource=<resource> over family f
+// and decodes its data object. Registry lookups (anyFamily) are hedged;
+// whats-my-ip is not: a slow reply there only delays a fallback finder.
 func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource string) (T, error) {
 	var zero T
+	var data json.RawMessage
+	var err error
+	if f == anyFamily {
+		data, err = r.hedged(ctx, name, resource)
+	} else {
+		data, err = r.attempt(ctx, r.clients[f], name, resource, true)
+	}
+	if err != nil {
+		return zero, err
+	}
+	var out T
+	if err := json.Unmarshal(data, &out); err != nil {
+		return zero, fmt.Errorf("RIPEstat %s: unreadable reply: %w", name, err)
+	}
+	return out, nil
+}
+
+// hedged sends one request and, when it has no reply after hedgeAfter or
+// fails transiently, a second copy on the hedge client. The first good
+// reply wins and cancels the other. When both fail, the first error is
+// returned. Answers that are not transient (a 429, an error status) are
+// never sent again.
+func (r *RIPEstat) hedged(ctx context.Context, name, resource string) (json.RawMessage, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		data json.RawMessage
+		err  error
+	}
+	results := make(chan result, 2)
+	send := func(c *http.Client, wait bool) {
+		go func() {
+			d, err := r.attempt(ctx, c, name, resource, wait)
+			results <- result{d, err}
+		}()
+	}
+	send(r.clients[anyFamily], true)
+	pending, hedgedYet := 1, r.hedgeAfter < 0
+	hedge := func() {
+		hedgedYet = true
+		if ctx.Err() == nil && r.slots.tryAcquire() {
+			pending++
+			send(r.hedge, false)
+		}
+	}
+	var timer <-chan time.Time
+	if !hedgedYet {
+		t := time.NewTimer(r.hedgeAfter)
+		defer t.Stop()
+		timer = t.C
+	}
+	var firstErr error
+	for {
+		select {
+		case <-timer:
+			timer = nil
+			if !hedgedYet {
+				hedge()
+			}
+		case got := <-results:
+			pending--
+			if got.err == nil {
+				return got.data, nil
+			}
+			if firstErr == nil {
+				firstErr = got.err
+			}
+			if !hedgedYet && transient(got.err) {
+				hedge()
+			}
+			if pending == 0 {
+				return nil, firstErr
+			}
+		}
+	}
+}
+
+// attempt does one GET of /data/<name>/data.json and returns the reply's
+// data object. With wait it queues for a request slot; without, the caller
+// already holds one. Transport failures and HTTP 500/502/503/504 come back
+// as a transientError, unless ctx ended (that is the caller's doing) or the
+// failure is permanent.
+func (r *RIPEstat) attempt(ctx context.Context, c *http.Client, name, resource string, wait bool) (json.RawMessage, error) {
+	if wait {
+		if err := r.slots.acquire(ctx); err != nil {
+			return nil, fmt.Errorf("RIPEstat %s: %w", name, err)
+		}
+	}
+	defer r.slots.release()
 	q := url.Values{"sourceapp": {r.sourceApp}}
 	if resource != "" {
 		q.Set("resource", resource)
@@ -107,10 +291,17 @@ func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource stri
 	u := r.base + "/data/" + name + "/data.json?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := r.clients[f].Do(req)
+	fail := func(err error) error {
+		wrapped := fmt.Errorf("RIPEstat %s: %w", name, err)
+		if ctx.Err() == nil && !permanent(err) {
+			return transientError{wrapped}
+		}
+		return wrapped
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		// A *url.Error repeats the URL, whose query holds the address being
 		// looked up; that text reaches the UI and the diagnostics report.
@@ -118,19 +309,23 @@ func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource stri
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return zero, fmt.Errorf("RIPEstat %s: %w", name, err)
+		return nil, fail(err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return zero, fmt.Errorf("RIPEstat %s: %w", name, err)
+		return nil, fail(err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return zero, fmt.Errorf("RIPEstat %s: HTTP %d", name, resp.StatusCode)
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return nil, fail(fmt.Errorf("HTTP %d", resp.StatusCode))
+	default:
+		return nil, fmt.Errorf("RIPEstat %s: HTTP %d", name, resp.StatusCode)
 	}
-	var out ripeResponse[T]
+	var out ripeResponse[json.RawMessage]
 	if err := json.Unmarshal(body, &out); err != nil {
-		return zero, fmt.Errorf("RIPEstat %s: unreadable reply: %w", name, err)
+		return nil, fmt.Errorf("RIPEstat %s: unreadable reply: %w", name, err)
 	}
 	if out.Status != "ok" {
 		msg := out.Status
@@ -141,7 +336,7 @@ func call[T any](ctx context.Context, r *RIPEstat, f Family, name, resource stri
 				msg = clip(m[1], 200)
 			}
 		}
-		return zero, fmt.Errorf("RIPEstat %s: %s", name, msg)
+		return nil, fmt.Errorf("RIPEstat %s: %s", name, msg)
 	}
 	return out.Data, nil
 }
@@ -221,12 +416,13 @@ func (r *RIPEstat) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo
 	}
 	var partial []string
 	if asErr != nil {
-		partial = append(partial, "ISP name unknown ("+asErr.Error()+")")
+		partial = append(partial, "ISP name unknown ("+describe(asErr)+")")
 	}
 	if geoErr != nil {
-		partial = append(partial, "city unknown ("+geoErr.Error()+")")
+		partial = append(partial, "city unknown ("+describe(geoErr)+")")
 	}
 	info.Partial = strings.Join(partial, "; ")
+	info.transient = transient(asErr) || transient(geoErr)
 	return info, nil
 }
 
