@@ -1,13 +1,14 @@
 // Package netsim is a bidirectional UDP forwarder with optional impairment
-// (delay, jitter, loss, periodic lag spikes). With a zero Profile it is a plain
-// relay hop (ingress / transit); with a non-zero one it simulates an ISP or
-// carrier path so the whole system can be exercised on one machine.
+// (delay, jitter, loss, Gilbert-Elliott loss bursts, periodic lag spikes).
+// With a zero Profile it is a plain relay hop (ingress / transit); with a
+// non-zero one it simulates an ISP or carrier path so the whole system can
+// be exercised on one machine. Links can sit behind a shared Segment, such
+// as the player's Wi-Fi, whose losses hit all of them at once.
 package netsim
 
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 	"net"
 	"net/netip"
 	"sync"
@@ -26,13 +27,22 @@ type Profile struct {
 	SpikeLen   time.Duration `json:"spikeLen"`
 	SpikeExtra time.Duration `json:"spikeExtra"`
 	SpikeLoss  float64       `json:"spikeLoss"`
+
+	// Burst adds Gilbert-Elliott burst loss on top of Loss; zero is off.
+	Burst GilbertElliott `json:"burst,omitzero"`
+
+	// Seed makes the random choices (loss, bursts, jitter) repeat exactly
+	// from run to run, for tests; 0 picks a random one.
+	Seed uint64 `json:"seed,omitempty"`
 }
 
 type Link struct {
 	listen  *net.UDPConn
 	target  *net.UDPAddr
 	profile atomic.Pointer[Profile]
-	born    time.Time
+	segment atomic.Pointer[Segment]
+	clock   func() time.Duration // time since the link started; tests set their own
+	imp     *impairer
 
 	mu    sync.Mutex
 	peers map[netip.AddrPort]*net.UDPConn
@@ -48,7 +58,7 @@ func Listen(addr string, target netip.AddrPort, p Profile) (*Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Link{listen: c, target: net.UDPAddrFromAddrPort(target), born: time.Now(), peers: map[netip.AddrPort]*net.UDPConn{}}
+	l := &Link{listen: c, target: net.UDPAddrFromAddrPort(target), clock: sinceNow(), imp: newImpairer(p.Seed), peers: map[netip.AddrPort]*net.UDPConn{}}
 	l.profile.Store(&p)
 	return l, nil
 }
@@ -59,6 +69,12 @@ func (l *Link) Profile() Profile { return *l.profile.Load() }
 
 // SetProfile changes impairment at runtime (used to simulate a degrading route).
 func (l *Link) SetProfile(p Profile) { l.profile.Store(&p) }
+
+// SetSegment puts the link behind a shared hop, or takes it out with nil.
+// Packets in both directions then cross the segment as well as the link.
+func (l *Link) SetSegment(s *Segment) { l.segment.Store(s) }
+
+func (l *Link) Segment() *Segment { return l.segment.Load() }
 
 func (l *Link) Serve(ctx context.Context) error {
 	go func() {
@@ -114,25 +130,26 @@ func (l *Link) peer(src netip.AddrPort) *net.UDPConn {
 }
 
 func (l *Link) send(pkt []byte, write func([]byte)) {
-	p := l.profile.Load()
-	loss := p.Loss
-	delay := p.Delay
-	if p.SpikeEvery > 0 && p.SpikeLen > 0 {
-		phase := time.Since(l.born) % p.SpikeEvery
-		if phase < p.SpikeLen {
-			delay += p.SpikeExtra
-			loss += p.SpikeLoss
-		}
+	drop, delay := l.imp.decide(l.profile.Load(), l.clock())
+	if s := l.segment.Load(); s != nil {
+		// Decided even when the link already drops the packet, so the
+		// segment's state moves the same way whatever the link does.
+		segDrop, segDelay := s.decide()
+		drop = drop || segDrop
+		delay += segDelay
 	}
-	if loss > 0 && rand.Float64() < loss {
+	if drop {
 		return
-	}
-	if p.Jitter > 0 {
-		delay += time.Duration(rand.NormFloat64() * float64(p.Jitter))
 	}
 	if delay <= 0 {
 		write(pkt)
 		return
 	}
 	time.AfterFunc(delay, func() { write(pkt) })
+}
+
+// sinceNow is a clock that starts now (monotonic).
+func sinceNow() func() time.Duration {
+	born := time.Now()
+	return func() time.Duration { return time.Since(born) }
 }
