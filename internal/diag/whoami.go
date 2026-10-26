@@ -52,8 +52,8 @@ type NetworkInfo struct {
 	ASN     uint32       `json:"asn,omitempty"`
 	ASNs    []uint32     `json:"asns,omitempty"` // every origin AS (a prefix can have several)
 	Holder  string       `json:"holder,omitempty"`
-	ASName  string       `json:"as_name,omitempty"` // the AS handle, e.g. "OMANTEL-NAP-AS"
-	ISP     string       `json:"isp,omitempty"`     // the holder's name, e.g. "Oman Telecommunications Company (S.A.O.G)"
+	ASName  string       `json:"as_name,omitempty"` // the AS handle, e.g. "EXAMPLEBB-AS"
+	ISP     string       `json:"isp,omitempty"`     // the holder's name, e.g. "Example Broadband"
 	Prefix  netip.Prefix `json:"prefix,omitzero"`
 	Country string       `json:"country,omitempty"` // ISO 3166 alpha-2
 	City    string       `json:"city,omitempty"`
@@ -199,6 +199,10 @@ type Locator struct {
 	retryMaxAge time.Duration
 	timeout     time.Duration
 	now         func() time.Time
+	// public says whether an address is worth a registry lookup: isPublic,
+	// except in tests, whose fixtures use documentation ranges that
+	// isPublic rightly rejects.
+	public func(netip.Addr) bool
 
 	mu       sync.Mutex
 	last     *Location
@@ -206,7 +210,7 @@ type Locator struct {
 }
 
 func NewLocator(cfg LocatorConfig) *Locator {
-	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, failMaxAge: cfg.FailMaxAge, retryMaxAge: cfg.RetryMaxAge, timeout: cfg.Timeout, now: cfg.Now}
+	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, failMaxAge: cfg.FailMaxAge, retryMaxAge: cfg.RetryMaxAge, timeout: cfg.Timeout, now: cfg.Now, public: isPublic}
 	if l.maxAge <= 0 {
 		l.maxAge = 2 * time.Minute
 	}
@@ -353,7 +357,7 @@ func (l *Locator) endpoint(ctx context.Context, f Family) (*Endpoint, error) {
 	}
 	e := &Endpoint{IP: pa.Addr.Unmap(), Source: pa.Source}
 	switch {
-	case !isPublic(e.IP):
+	case !l.public(e.IP):
 		// A STUN server on the LAN, or an unusual NAT: nothing to look up.
 		e.LookupError = "the address the server saw (" + e.IP.String() + ") is not a public internet address"
 	case l.lookup == nil:

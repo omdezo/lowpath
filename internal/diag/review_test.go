@@ -13,24 +13,26 @@ import (
 
 func TestIsPublic(t *testing.T) {
 	for a, want := range map[string]bool{
-		"5.37.1.2":         true,
-		"8.8.8.8":          true,
-		"::ffff:5.37.1.2":  true,
-		"2a02:2c8::1":      true,
-		"192.168.1.20":     false,
-		"100.72.1.1":       false, // CGNAT
-		"198.18.0.5":       false, // benchmarking; "fake IP" VPN/proxy tools
-		"192.0.2.1":        false, // documentation
-		"203.0.113.9":      false,
-		"240.0.0.1":        false, // reserved
-		"0.1.2.3":          false,
-		"2001:db8::1":      false,
-		"fd00::1":          false,
-		"fe80::1":          false,
-		"::ffff:10.0.0.1":  false,
-		"::1":              false,
-		"255.255.255.255":  false,
-		"64:ff9b:1::1:2:3": false,
+		// Public addresses can't come from the documentation ranges
+		// (isPublic rejects those, below), so these are public resolvers.
+		"1.1.1.1":              true,
+		"8.8.8.8":              true,
+		"::ffff:1.1.1.1":       true,
+		"2606:4700:4700::1111": true,
+		"192.168.1.20":         false,
+		"100.72.1.1":           false, // CGNAT
+		"198.18.0.5":           false, // benchmarking; "fake IP" VPN/proxy tools
+		"192.0.2.1":            false, // documentation
+		"203.0.113.9":          false,
+		"240.0.0.1":            false, // reserved
+		"0.1.2.3":              false,
+		"2001:db8::1":          false,
+		"fd00::1":              false,
+		"fe80::1":              false,
+		"::ffff:10.0.0.1":      false,
+		"::1":                  false,
+		"255.255.255.255":      false,
+		"64:ff9b:1::1:2:3":     false,
 	} {
 		if got := isPublic(netip.MustParseAddr(a)); got != want {
 			t.Errorf("isPublic(%s) = %v, want %v", a, got, want)
@@ -41,27 +43,27 @@ func TestIsPublic(t *testing.T) {
 func TestRedactedScrubsAddressesInText(t *testing.T) {
 	loc := Location{
 		State:    StatePartial,
-		Message:  "Your ISP couldn't be looked up: RIPEstat: 5.37.1.2 is not announced on the internet (no origin AS)",
-		IPv6Note: "No public IPv6 address found: read udp6 [2a02:2c8:1:2::5]:50123->[2001:4860:4860::8888]:19302: wsarecv: refused.",
+		Message:  "Your ISP couldn't be looked up: RIPEstat: 198.51.100.2 is not announced on the internet (no origin AS)",
+		IPv6Note: "No public IPv6 address found: read udp6 [2001:db8:1:2::5]:50123->[2001:4860:4860::8888]:19302: wsarecv: refused.",
 		IPv4: &Endpoint{
 			IP:          pub4,
-			LookupError: "RIPEstat: 5.37.1.2 is not announced",
-			NetworkInfo: NetworkInfo{Partial: "city unknown (dial tcp 5.37.1.2:443: i/o timeout)"},
+			LookupError: "RIPEstat: 198.51.100.2 is not announced",
+			NetworkInfo: NetworkInfo{Partial: "city unknown (dial tcp 198.51.100.2:443: i/o timeout)"},
 		},
 	}
 	r := loc.Redacted()
 	all := strings.Join([]string{r.Message, r.IPv6Note, r.IPv4.LookupError, r.IPv4.Partial}, "\n")
-	for _, leak := range []string{"5.37.1.2", "2a02:2c8:1:2::5"} {
+	for _, leak := range []string{"198.51.100.2", "2001:db8:1:2::5"} {
 		if strings.Contains(all, leak) {
 			t.Fatalf("redacted text still holds %s:\n%s", leak, all)
 		}
 	}
-	for _, want := range []string{"RIPEstat: 5.37.1.0 is not", "[2a02:2c8:1::]:50123", "5.37.1.0:443", "refused."} {
+	for _, want := range []string{"RIPEstat: 198.51.100.0 is not", "[2001:db8:1::]:50123", "198.51.100.0:443", "refused."} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("redacted text lacks %q:\n%s", want, all)
 		}
 	}
-	if !strings.Contains(loc.Message, "5.37.1.2") {
+	if !strings.Contains(loc.Message, "198.51.100.2") {
 		t.Fatal("Redacted changed the original")
 	}
 }
@@ -113,7 +115,7 @@ func TestClip(t *testing.T) {
 func TestLocateRetriesFailuresSooner(t *testing.T) {
 	clk := newClock()
 	f := &fakeFinder{errs: map[Family]error{IPv4: errors.New("offline"), IPv6: errors.New("offline")}}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: omt}, MaxAge: 2 * time.Minute, Now: clk.Now})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: example}, MaxAge: 2 * time.Minute, Now: clk.Now})
 	ctx := context.Background()
 	if loc, _ := l.Locate(ctx, false); loc.State != StateOffline {
 		t.Fatalf("state %s", loc.State)

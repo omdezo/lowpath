@@ -4,7 +4,7 @@ import { api } from "../api";
 import type { Endpoint, NetLocation } from "../types";
 import { cap } from "../util";
 
-// Country name from an ISO code ("OM" → "Oman"); the code itself when the
+// Country name from an ISO code ("NL" → "Netherlands"); the code itself when the
 // runtime has no display names.
 function countryName(code?: string): string {
   if (!code) return "";

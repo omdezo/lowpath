@@ -57,16 +57,16 @@ func probeAll(t *testing.T, p *POPProber, pops []POP) map[string]POPPing {
 
 func TestProbePOPs(t *testing.T) {
 	f := newFakePinger()
-	f.rtt[netip.MustParseAddr("185.25.183.163")] = 17 * time.Millisecond
-	f.rtt[netip.MustParseAddr("185.25.183.179")] = 19 * time.Millisecond
-	f.rtt[netip.MustParseAddr("155.133.226.68")] = 112 * time.Millisecond // second fra relay never answers
+	f.rtt[netip.MustParseAddr("192.0.2.163")] = 17 * time.Millisecond
+	f.rtt[netip.MustParseAddr("192.0.2.179")] = 19 * time.Millisecond
+	f.rtt[netip.MustParseAddr("192.0.2.68")] = 112 * time.Millisecond // second fra relay never answers
 	f.err[netip.MustParseAddr("203.0.113.9")] = errors.New("access denied")
 	pops := []POP{
-		{ID: "dxb", Relays: relaysOf("185.25.183.163", "185.25.183.179")},
-		{ID: "fra", Relays: relaysOf("155.133.226.68", "155.133.226.70")},
+		{ID: "dxb", Relays: relaysOf("192.0.2.163", "192.0.2.179")},
+		{ID: "fra", Relays: relaysOf("192.0.2.68", "192.0.2.70")},
 		{ID: "dead", Relays: relaysOf("198.51.100.1")},
 		{ID: "denied", Relays: relaysOf("203.0.113.9")},
-		{ID: "v6", Relays: relaysOf("2606:4700::1111")},
+		{ID: "v6", Relays: relaysOf("2001:db8::1111")},
 		{ID: "partner"}, // no relays: not pinged, not reported
 	}
 	got := probeAll(t, NewPOPProber(f, nil), pops)
@@ -93,9 +93,9 @@ func TestProbePOPs(t *testing.T) {
 }
 
 func TestPickRelaysSpreads(t *testing.T) {
-	rs := relaysOf("1.1.1.1", "1.1.1.2", "1.1.1.3", "1.1.1.4", "2606:4700::1")
+	rs := relaysOf("192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "2001:db8::1")
 	got := pickRelays(rs, 2)
-	if len(got) != 2 || got[0].String() != "1.1.1.1" || got[1].String() != "1.1.1.3" {
+	if len(got) != 2 || got[0].String() != "192.0.2.1" || got[1].String() != "192.0.2.3" {
 		t.Fatalf("picked %v", got)
 	}
 	if got := pickRelays(rs[:1], 2); len(got) != 1 {
@@ -109,7 +109,7 @@ func TestProbeStopsOnCancel(t *testing.T) {
 	n := 0
 	pops := make([]POP, 50)
 	for i := range pops {
-		pops[i] = POP{ID: "p", Relays: relaysOf("8.8.8.8")}
+		pops[i] = POP{ID: "p", Relays: relaysOf("192.0.2.8")}
 	}
 	NewPOPProber(newFakePinger(), nil).Probe(ctx, pops, func(string, POPPing) { n++ })
 	if n != 0 {

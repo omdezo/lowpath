@@ -255,16 +255,16 @@ func TestBloatStartRacingABoost(t *testing.T) {
 
 func TestFirstPerFamily(t *testing.T) {
 	addrs := []netip.Addr{
-		netip.MustParseAddr("2606:4700::6810:84e5"),
-		netip.MustParseAddr("::ffff:104.16.132.229"),
-		netip.MustParseAddr("2606:4700::6810:85e5"),
-		netip.MustParseAddr("104.16.133.229"),
+		netip.MustParseAddr("2001:db8::6810:84e5"),
+		netip.MustParseAddr("::ffff:198.51.100.29"),
+		netip.MustParseAddr("2001:db8::6810:85e5"),
+		netip.MustParseAddr("198.51.100.30"),
 	}
 	got := firstPerFamily(addrs, 443)
-	if len(got) != 2 || got[0].String() != "104.16.132.229:443" || got[1].String() != "[2606:4700::6810:84e5]:443" {
+	if len(got) != 2 || got[0].String() != "198.51.100.29:443" || got[1].String() != "[2001:db8::6810:84e5]:443" {
 		t.Fatalf("got %v, want the first IPv4 then the first IPv6", got)
 	}
-	if got := firstPerFamily([]netip.Addr{netip.MustParseAddr("2001:db8::1")}, 443); len(got) != 1 || !got[0].Addr().Is6() {
+	if got := firstPerFamily([]netip.Addr{netip.MustParseAddr("2001:db8::2")}, 443); len(got) != 1 || !got[0].Addr().Is6() {
 		t.Fatalf("IPv6 only: %v", got)
 	}
 	if got := resolveEndpoint(context.Background(), "[::ffff:192.0.2.1]:9"); len(got) != 1 || got[0].String() != "192.0.2.1:9" {
