@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"lowpath/internal/catalog"
+	"lowpath/internal/compat"
 	"lowpath/internal/demo"
 	"lowpath/internal/detect"
 	"lowpath/internal/diag"
@@ -126,7 +127,11 @@ type Server struct {
 	trace   *traceRunner
 	line    *lineWatch
 	current *currentServers
-	marker  SessionMarker // nil: none
+	// conflicts names other boosters, packet filter drivers and
+	// full-tunnel VPNs (internal/compat).
+	conflicts *conflictWatch
+	verdict   *verdicts
+	marker    SessionMarker // nil: none
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -206,11 +211,18 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 		cfg.BloatLoader = l
 	}
+	// One RIPEstat client for the Network card and the Current server card,
+	// so its cap on requests in flight holds for the whole app (RIPEstat
+	// allows 8 at once per address).
+	var ripe *diag.RIPEstat
+	if cfg.Locator == nil || cfg.ServerLookup == nil {
+		ripe = diag.NewRIPEstat(diag.RIPEstatOptions{})
+	}
 	if cfg.Locator == nil {
-		cfg.Locator = diag.NewInternetLocator()
+		cfg.Locator = diag.NewInternetLocator(ripe)
 	}
 	if cfg.ServerLookup == nil {
-		cfg.ServerLookup = diag.NewCachedLookup(diag.NewRIPEstat(diag.RIPEstatOptions{}), diag.CacheOptions{Max: 256})
+		cfg.ServerLookup = diag.NewCachedLookup(ripe, diag.CacheOptions{Max: 256})
 	}
 	life, endLife := context.WithCancel(context.Background())
 	s := &Server{
@@ -222,8 +234,9 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:   newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
-		marker: cfg.Marker,
+		line:    newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		verdict: newVerdicts(cfg.NetStats),
+		marker:  cfg.Marker,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -232,9 +245,10 @@ func NewServer(cfg Config) (*Server, error) {
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
 	}
 	s.trace = &traceRunner{
-		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
+		ping: cfg.PingTTL, names: cfg.Names, net: cfg.NetStats, store: cfg.Store, log: cfg.Log.With("component", "trace"),
 		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
+	s.conflicts = newConflictWatch(cfg.Platform, life, cfg.Log.With("component", "conflicts"))
 	s.recoverLeftover()
 	s.current = newCurrentServers(cfg.Platform.Flows, cfg.Platform.Owners, cfg.ServerLookup, cfg.Locator, cfg.Ping, cfg.Store, life, cfg.Log.With("component", "current-server"))
 	return s, nil
@@ -248,6 +262,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.art.warm(ctx, s.allGames())
 	go s.scanInstalled()
 	go s.line.run(s.lifetime, s.lineInput)
+	go s.conflicts.run(s.lifetime)
 	go func() {
 		// The current server card's flow learning: once a second, so the
 		// primary-server window counts seconds like a session's does.
@@ -398,6 +413,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /api/location", s.handleLocation)
+	mux.HandleFunc("GET /api/conflicts", s.handleConflicts)
 	mux.HandleFunc("GET /api/diag/bloat", s.handleBloat)
 	mux.HandleFunc("POST /api/diag/bloat", s.handleStartBloat)
 	mux.HandleFunc("DELETE /api/diag/bloat", s.handleStopBloat)
@@ -405,6 +421,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/diag/trace", s.handleStartTrace)
 	mux.HandleFunc("DELETE /api/diag/trace", s.handleStopTrace)
 	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
+	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
+	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -662,11 +680,14 @@ type liveView struct {
 	// Failsafe is the last boost that ended without the user asking (nil:
 	// none since the last Boost).
 	Failsafe *failsafeView `json:"failsafe"`
+	// Conflicts is the last scan for other boosters, packet filter drivers
+	// and full-tunnel VPNs (nil until the first scan ends).
+	Conflicts *compat.Report `json:"conflicts"`
 }
 
 func (s *Server) live() liveView {
 	s.mu.Lock()
-	v := liveView{Status: s.status, Session: s.sess, Failsafe: s.failsafe}
+	v := liveView{Status: s.status, Session: s.sess, Failsafe: s.failsafe, Conflicts: s.conflicts.view()}
 	for id := range s.running {
 		v.Running = append(v.Running, id)
 	}
@@ -738,6 +759,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		analysis[k] = v
 	}
 	s.mu.Unlock()
+	live := s.live()
+	if live.Conflicts != nil {
+		r := live.Conflicts.Redacted()
+		live.Conflicts = &r
+	}
 	w.Header().Set("Content-Disposition", `attachment; filename="lowpath-report.json"`)
 	writeJSON(w, 200, map[string]any{
 		"generated_at": time.Now(),
@@ -749,8 +775,10 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"analysis":     analysis,
 		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"bufferbloat":  s.store.Bloat(),
-		"route_trace":  s.lastTrace(), // addresses cut to /24 and /48
-		"live":         s.live(),
+		"route_trace":  s.lastTrace(),                    // addresses cut to /24 and /48
+		"conflicts":    s.conflicts.current().Redacted(), // user folder names cut out
+		"verdict":      s.diagnosis(),
+		"live":         live,
 	})
 }
 

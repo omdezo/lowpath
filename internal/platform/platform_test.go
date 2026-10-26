@@ -64,6 +64,14 @@ func TestNativeIsComplete(t *testing.T) {
 	if _, err := p.Flows.Watch(nil); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("flow watch on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
 	}
+	// No Windows services or program list to look through for boosters;
+	// adapters (for full-tunnel VPNs) are read.
+	if _, err := p.Inventory.Services(); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("services on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
+	}
+	if _, err := p.Inventory.Adapters(); err != nil {
+		t.Errorf("adapters on %s: %v", runtime.GOOS, err)
+	}
 }
 
 func TestCheckNamesMissingParts(t *testing.T) {

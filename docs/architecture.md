@@ -72,6 +72,7 @@ type Platform struct {
     Icons      IconProvider
     Paths      Paths
     Flows      FlowWatcher
+    Inventory  SystemInventory // = compat.System
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -107,6 +108,7 @@ type Paths interface {
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
+| Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -365,6 +367,47 @@ and the acceptance test: the real `lpcheck` (found by name through `/proc`)
 routed by the engine through the relay reports the relay's address, while a
 copy under another name reports the client's.
 
+### Conflicts with other boosters and VPNs (C7) — `internal/compat`
+
+Two programs rerouting the same packets fight over them, and a silent
+capture failure next to ExitLag looks like Lowpath's fault. Lowpath never
+fights another driver for the game's packets: it names what is in the way
+and says what to do.
+
+`compat.Detector.Scan(ctx)` reads a `compat.System` (the platform's
+`Inventory`) part by part and returns a `Report{at, conflicts, unchecked}`:
+
+| What | Found from | Level |
+|---|---|---|
+| Game boosters: ExitLag, NoPing, WTFast, Mudfish, LagoFast, GearUP, Haste, Pingzapper, Battleping, Kill Ping, Outfox | process name (normalized: "ExitLag.exe" contains "exitlag"; short names such as `haste` match whole names only), service name or display name, Uninstall `DisplayName` | process running: `block`; only its service running: `warn`; installed: `info` |
+| WinDivert tools: clumsy | process | `block` (it degrades packets on purpose) |
+| WinDivert tools: GoodbyeDPI, zapret (`winws.exe`) | process, service | `warn` (they change web traffic, not usually game UDP) |
+| Windows Packet Filter (WinpkFilter), the NDIS filter ExitLag and NoPing install | service `ndisrd`, Uninstall entry | loaded: `warn`; installed: `info`, with how to uninstall it |
+| WinDivert loaded by another program | a running service named `WinDivert*` whose `ImagePath` is outside Lowpath's driver folders (`Paths.DriverDirs`) | `warn` |
+| A VPN carrying all traffic | the adapter that carries traffic to a public address (Windows: `GetBestInterfaceEx` through `diag.NetStats`; Linux and macOS: `compat.EgressRoute`, the interface owning the source address the kernel picks for a connected UDP socket, which sends nothing, falling back to the `0/0` route) is a VPN; this catches `0/0`, OpenVPN/WireGuard `0/1`+`128/1` and wg-quick's policy routing alike is a VPN: brand words in its name or description (NordLynx → NordVPN, TAP-Windows → OpenVPN, WireGuard, AnyConnect, ...), IANA type PPP/virtual/tunnel, or `tun*`/`wg*`/`utun*` on Linux and macOS; PPPoE, Teredo and ISATAP are not VPNs | `warn`; a split tunnel or a VPN that isn't up is no conflict |
+
+Each conflict carries `found` (the evidence), `action` (one sentence) and
+`why` (the "Why?" text). A part that can't be read goes to `unchecked` with
+the reason; a part the OS doesn't have (`errors.ErrUnsupported`) is skipped
+quietly; offline is no failure.
+
+In the app (`internal/app/conflicts.go`) a `conflictWatch` scans every 15 s
+and on demand, one scan at a time; callers wait at most 3 s and otherwise
+get the last report with a note, and a panic in an OS call becomes an
+`unchecked` line. A missing or stale report never blocks anything (fail
+open): Boost is refused only on a scan that finished while it waited. An OS
+call that never returns can't be ended; the 30 s limit only cuts the
+remaining steps short, and the next scan starts once the call returns.
+`POST /api/apply` in route mode checks first, before the rights check,
+since restarting as administrator wouldn't help, and answers 409
+`conflict` with the blocking conflicts unless `ignore_conflicts` is set
+(the UI's "Boost anyway"). Warnings and proxy mode never block. A capture
+that fails to start names the running conflicts in its message.
+
+`lowpath -compat-inventory file.json` reads a `compat.Inventory` from a
+file instead of the system (read again at every scan, missing file = empty
+and offline), so the end-to-end test plays "ExitLag is running" on any PC.
+
 ## Engine — capture mode
 
 Keep proxy mode and every existing test passing. Additions:
@@ -479,20 +522,37 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `network-info` (prefix, origin ASNs), then `as-overview` (holder, split
   into handle and ISP name) and `maxmind-geo-lite` (country, city) in
   parallel; those two may fail alone (`partial`). `CachedLookup` keeps an
-  answer per address for 24 h, a partial one 10 min, a failure 30 s.
+  answer per address for 24 h, a partial one 10 min, a failure 30 s, and a
+  failure or missing part caused by a timeout or a busy server 3 s.
   Private, CGNAT and loopback answers are never sent to the registry.
-- One lookup runs at a time, with a 12 s budget that does not depend on a
+- RIPEstat's proxy sometimes holds a request for 5 to 20 s and then
+  answers 502, while the same query sent again answers in 0.4 s (its
+  `process_time` is about 10 ms either way). So each registry call is
+  hedged ("The Tail at Scale"; gRPC's `hedgingDelay`): a second copy goes
+  out on a fresh connection after 2.5 s without a reply, or at once after a
+  timeout, reset or HTTP 500/502/503/504, and the first good reply wins.
+  At most two copies; a 429, an error status, a certificate that does not
+  verify or a DNS "no such host" is never repeated; at most 6 requests in
+  flight (RIPEstat allows 8 per address) for the whole app, since the
+  Network card and the Current server card share one client, and a hedge
+  is skipped when none is free. `whats-my-ip` is not hedged.
+- One lookup runs at a time, with a 15 s budget that does not depend on a
   caller who gives up; a result is reused for 2 min (an offline or partial
-  one for 15 s) unless `refresh=1`.
+  one for 15 s, one spoiled by a slow or busy registry 4 s) unless
+  `refresh=1`.
   States: `ok`; `partial` (IP known, ISP not: `message` says why);
   `offline` (no IP: `message` says why). No IPv6 is normal and only sets
-  `ipv6_note`.
+  `ipv6_note`. `retry_after_s` is set when the ISP is unknown only because
+  the registry was slow or busy; the Network pane then asks once more by
+  itself after that wait (without `refresh`), and says "Trying again…".
 - Lowpath never captures its own process, so this is the user's own line
   even while a game is routed through a relay.
 - `/api/diagnostics` includes the last location with addresses cut to /24
   (IPv4) and /48 (IPv6), also inside the error texts; it never starts a
   lookup. Lookup errors never repeat the request URL (its query holds the
   address).
+- `/api/diagnostics` also carries the current `verdict` (a `Diagnosis`,
+  built from the redacted trace).
 
 ## Server catalog — `internal/catalog`
 
@@ -609,6 +669,8 @@ func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDete
 type TTLPingFunc func(dst netip.Addr, ttl int, timeout time.Duration) (icmp.Reply, error) // icmp.PingTTL
 func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, error)
 func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
+func NewVerdictEngine(VerdictConfig) *VerdictEngine; (*VerdictEngine).Diagnose(Evidence) Diagnosis
+func (DiagnosisReport) Text() string
 ```
 
 - **NetStats.** Windows: `GetBestInterfaceEx` (toward 1.1.1.1, else
@@ -677,6 +739,47 @@ func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
   the bufferbloat test and the other way round (409 `bloat_running`,
   `trace_running`), allows it during a boost (about 2 kB/s of probes), and
   puts it in the diagnostics report with addresses cut to /24 and /48.
+- **Verdict engine** (`verdict*.go`, roadmap §3.6): `Diagnose` turns
+  `Evidence` (connection in use, Wi-Fi signal, gateway pings, the last
+  bufferbloat test and trace, the passive detector, a running boost and
+  the last route analysis; every field optional) into a `Diagnosis`: one
+  `Check` per rule (`found` / `clear` / `unknown` with a summary and the
+  measured facts) and the `Verdict` of the first rule that found its
+  problem, with a confidence (high / medium / low), the segment it blames
+  and whether a relay can help. Rules, in order:
+  1. *Home / Wi-Fi*: router loss > 0.5% (at least 2 pings) or p99 > 15 ms
+     (a p95 above 15 ms implies it), or a trace whose persisting loss starts
+     at hop 1 or a private hop 2 (not one in 100.64.0.0/10: that is the
+     ISP's carrier-grade NAT, RFC 6598). On Wi-Fi, RSSI < −70 dBm or 2.4 GHz makes
+     it `wifi` (high); a strong 5/6 GHz signal makes it `home`; no signal
+     reading caps it at medium. Slow replies with no loss drop a step
+     (routers answer ping at low priority). A router that answers no ping
+     at all is not loss.
+  2. *Overloaded line*: grade C or worse, or the passive flag (high).
+  3. *ISP route*: a reached trace whose persisting loss starts past the
+     home network (destination-only loss is not the route's); or, from a
+     boost, direct loss ≥ 2% while the relay leg loses < 1% and the relay
+     reaches the server and its leg to the server isn't lossy. During a
+     boost the advice is to keep it on. A UDP trace losing only at the relay's port gives
+     `relay` (segment `lowpath`).
+  4. *Game server*: the relay leg is clean (< 1% loss, < 10 ms jitter) and
+     the relay's leg to the server loses ≥ 2% or jitters ≥ 10 ms (relays
+     don't report that leg's loss yet), or, low confidence, during a boost
+     direct loses ≥ 2% and the relay reports no time to the server (a hint:
+     the relay may not be able to ping, and an ISP problem looks the same).
+  5. *Already optimal*: direct RTT ≤ relay route + 2 ms and no lossier
+     (≥ 20 samples each); medium while the two are measured differently
+     (ICMP vs UDP probes), high once they are the same method.
+  No rule found anything: `clean` (high with all four problem checks
+  clear, medium with two or three, low with one) or `unknown`, plus `next`
+  steps for the unmeasured checks. Evidence older than 1 h drops a step and
+  older than 24 h is ignored; a bufferbloat test or route trace from another
+  adapter or link kind is ignored (traces record the connection they ran
+  on). With no default route at all (`ErrNoRoute`) the verdict is
+  `offline` (high), ahead of every rule. The app builds the evidence from what it stored
+  (the trace already redacted) and measures nothing itself, so
+  `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
+  is `DiagnosisReport.Text()` with the redacted location, for sharing.
 
 ## App, desktop shell, build
 
@@ -741,7 +844,8 @@ Game view adds `"custom": bool` and keeps `"processes": string[]`.
 | POST | /api/games/custom | `{name, process}` | `Game` (id `custom-<slug>`) |
 | DELETE | /api/games/custom/{id} | | `{ok: true}` |
 | POST | /api/elevate | | `{ok: true}` then the app restarts elevated |
-| GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
+| GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note, retry_after_s}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
+| GET | /api/conflicts[?fresh=1] | | `{at, conflicts: [{id, name, kind: "booster"\|"packet_tool"\|"packet_filter"\|"vpn", level: "block"\|"warn"\|"info", found, action, why}], unchecked}`, worst first; `fresh=1` scans again (waits at most 3 s) |
 | GET | /api/games/{id}/servers | | `ServerList` (below); starts a download/ping round when due |
 | POST | /api/games/{id}/servers/ping | | `ServerList`; pings every POP again now |
 
@@ -758,6 +862,8 @@ polls while `state` is `loading` or `pinging` is true.
 | POST | /api/diag/trace | `{target_id}` or `{host}`, `mode: "icmp"\|"udp"` | 202 + the same; 400 `bad_target`; 409 `trace_running` or `bloat_running` |
 | DELETE | /api/diag/trace | | stops a running trace and keeps what it measured; the same view |
 | GET | /api/diag/trace/report | | the last trace as a text table (`lowpath-route-trace.txt`); 404 `no_trace` |
+| GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}]}`; measures nothing, answers at once |
+| GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, routers' host names left out |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,
@@ -768,9 +874,13 @@ line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
 "stopped"|"recovered", game_id, game, message, detail}` is the last boost
 that ended without the user asking (see Capture → Fail-open), until the
 next Boost or `DELETE /api/failsafe` (Dismiss), which returns the live view.
-Session adds `"capture_mode"`.
+`"conflicts": null | Report` is the last conflict scan (as `GET
+/api/conflicts`). Session adds `"capture_mode"`. Apply takes
+`"ignore_conflicts": bool`.
 
-New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
+New error kinds: `needs_admin` (409), `no_relays` (409), `conflict` (409, with
+`conflicts`: the programs to close first), `capture_failed` (500, with
+`conflicts` when one is running),
 `unsupported` (501: route mode, the process list or the restart on a system
 without that part yet), `unauthorized` (401).
 
@@ -800,6 +910,14 @@ prints that URL to stderr only, never to the log.
   loopback test relay) instead of a broken Apply.
 - Route mode without admin → banner with **Restart as administrator**
   (`POST /api/elevate`).
+- `live.conflicts` → a banner above every page: running ones in red
+  (`block`) or amber (`warn`), "<name> is running." + the action + a
+  **Why?** that unfolds the explanation and the evidence; installed-only
+  ones as a quiet note that can be dismissed until the list changes. A
+  refused Boost says so under the button with **Boost anyway**; it goes
+  once the program is closed. Settings → Network: **Other network
+  software** lists everything found, what couldn't be checked, and
+  **Check again**.
 - Optimizing in route mode: "Waiting for game traffic — launch the game now"
   until packets flow; then the **Game servers** list (addr, primary, up/down
   packets) and capture counters. Proxy mode keeps the existing
@@ -849,7 +967,9 @@ prints that URL to stderr only, never to the log.
 UDP over IPv4 only (TCP/IPv6 go direct), on Windows and Linux. On Linux,
 another program's socket that reuses a port the game just closed can go
 through Lowpath for up to a second, and the reverse (a new game socket on a
-port another program just closed) goes direct for as long. Some anti-cheats (Vanguard, FACEIT)
+port another program just closed) goes direct for as long. The conflict detector knows the
+boosters by name: a renamed or new one is missed until it is added to
+`internal/compat/products.go`. Some anti-cheats (Vanguard, FACEIT)
 may refuse to run alongside the WinDivert driver. Unsigned exe → SmartScreen
 warning. Real benefit needs relays on well-peered servers near the game's
 datacenter; the loopback relay only proves the pipeline.

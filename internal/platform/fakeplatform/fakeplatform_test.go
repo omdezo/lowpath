@@ -6,18 +6,21 @@ import (
 	"testing"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/compat"
+	"lowpath/internal/diag"
 	"lowpath/internal/owner"
 	"lowpath/internal/platform"
 )
 
 var (
-	_ platform.CaptureBackend = (*Capture)(nil)
-	_ platform.CaptureSession = (*Session)(nil)
-	_ platform.OwnerResolver  = (*Owners)(nil)
-	_ platform.Privileges     = (*Privileges)(nil)
-	_ platform.GameDetector   = (*Games)(nil)
-	_ platform.IconProvider   = (*Icons)(nil)
-	_ platform.Paths          = (*Paths)(nil)
+	_ platform.CaptureBackend  = (*Capture)(nil)
+	_ platform.CaptureSession  = (*Session)(nil)
+	_ platform.OwnerResolver   = (*Owners)(nil)
+	_ platform.Privileges      = (*Privileges)(nil)
+	_ platform.GameDetector    = (*Games)(nil)
+	_ platform.IconProvider    = (*Icons)(nil)
+	_ platform.Paths           = (*Paths)(nil)
+	_ platform.SystemInventory = (*Inventory)(nil)
 )
 
 func TestFakeRoundTrip(t *testing.T) {
@@ -75,5 +78,24 @@ func TestFakeParts(t *testing.T) {
 	f.Privileges.SetRelaunchErr(platform.ErrElevateCancelled)
 	if err := f.Privileges.Relaunch([]string{"-x"}); !errors.Is(err, platform.ErrElevateCancelled) || len(f.Privileges.Relaunches()) != 1 {
 		t.Fatalf("declined prompt: %v", err)
+	}
+}
+
+func TestFakeInventory(t *testing.T) {
+	inv := New(t.TempDir()).Inventory
+	if _, err := inv.DefaultRoute(); !errors.Is(err, diag.ErrNoRoute) {
+		t.Errorf("empty inventory: route %v, want offline", err)
+	}
+	inv.Set(compat.Inventory{Processes: []string{"exitlag.exe"}, DefaultRoute: 3})
+	denied := errors.New("access denied")
+	inv.SetErr("programs", denied)
+	if p, err := inv.Processes(); err != nil || len(p) != 1 {
+		t.Errorf("Processes = %q, %v", p, err)
+	}
+	if _, err := inv.Programs(); err != denied {
+		t.Errorf("Programs: %v", err)
+	}
+	if i, err := inv.DefaultRoute(); i != 3 || err != nil {
+		t.Errorf("DefaultRoute = %d, %v", i, err)
 	}
 }

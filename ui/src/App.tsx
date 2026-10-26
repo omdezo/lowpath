@@ -13,6 +13,7 @@ import { AddGameModal } from "./components/AddGame";
 import { CaptureBanner } from "./components/CaptureBanner";
 import { LineBanner } from "./components/LineBanner";
 import { FailsafeBanner } from "./components/FailsafeBanner";
+import { ConflictBanner } from "./components/Conflicts";
 import { Toasts, type Toast } from "./components/Toasts";
 import type { Point } from "./components/LiveGraph";
 
@@ -325,6 +326,11 @@ export function App() {
         {live?.failsafe && live.failsafe.at !== failsafeSeen && !live.session && (
           <div className="main-banner">
             <FailsafeBanner failsafe={live.failsafe} onDismiss={() => dismissFailsafe(live.failsafe?.at ?? "")} />
+          </div>
+        )}
+        {live?.conflicts && !boot.demo && (
+          <div className="main-banner">
+            <ConflictBanner report={live.conflicts} />
           </div>
         )}
         {live?.line?.active && (

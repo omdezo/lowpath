@@ -6,15 +6,18 @@ import (
 	"os"
 	"runtime"
 
+	"lowpath/internal/compat"
 	"lowpath/internal/detect"
+	"lowpath/internal/diag"
 	"lowpath/internal/owner"
 )
 
 // Native is the Linux and macOS platform. Proxy mode, relays, measurements
 // and the UI work as on Windows; the socket owners and running programs
 // come from /proc (Linux) or libproc (macOS), and games are found in Steam
-// libraries, Wine and Proton prefixes and Heroic's installs. Route mode
-// captures through a TUN device on Linux (nativeCapture); on macOS it
+// libraries, Wine and Proton prefixes and Heroic's installs. The conflict
+// detector sees processes, network adapters and the internet route. Route
+// mode captures through a TUN device on Linux (nativeCapture); on macOS it
 // reports that capture isn't available yet (issue #42).
 func Native() *Platform {
 	owners := owner.NewTable()
@@ -29,5 +32,6 @@ func Native() *Platform {
 		Icons:      games,
 		Paths:      NewUnixPaths(),
 		Flows:      detect.NewKernelNetwork(),
+		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
 	}
 }

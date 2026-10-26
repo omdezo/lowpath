@@ -13,14 +13,15 @@ import (
 // hotspot changes it), so this keeps repeat lookups off the network and
 // within RIPEstat's fair-use guidance.
 type CachedLookup struct {
-	next       NetworkLookup
-	ttl        time.Duration
-	errTTL     time.Duration
-	partialTTL time.Duration
-	max        int
-	now        func() time.Time
-	mu         sync.Mutex
-	entries    map[netip.Addr]cacheEntry
+	next         NetworkLookup
+	ttl          time.Duration
+	errTTL       time.Duration
+	partialTTL   time.Duration
+	transientTTL time.Duration
+	max          int
+	now          func() time.Time
+	mu           sync.Mutex
+	entries      map[netip.Addr]cacheEntry
 }
 
 type cacheEntry struct {
@@ -39,8 +40,13 @@ type CacheOptions struct {
 	// PartialTTL is how long a result with a missing part is kept, so the
 	// missing part is tried again later (default 10 min).
 	PartialTTL time.Duration
-	Max        int // entries, default 64; the oldest goes first
-	Now        func() time.Time
+	// TransientTTL is how long a failure (or missing part) caused by a
+	// timeout or a busy registry is kept (default 3 s, never more than
+	// ErrTTL): it says nothing about the address, and the next lookup
+	// usually works. The Locator asks again after 4 s.
+	TransientTTL time.Duration
+	Max          int // entries, default 64; the oldest goes first
+	Now          func() time.Time
 }
 
 func NewCachedLookup(next NetworkLookup, o CacheOptions) *CachedLookup {
@@ -59,7 +65,11 @@ func NewCachedLookup(next NetworkLookup, o CacheOptions) *CachedLookup {
 	if o.PartialTTL <= 0 {
 		o.PartialTTL = 10 * time.Minute
 	}
-	return &CachedLookup{next: next, ttl: o.TTL, errTTL: o.ErrTTL, partialTTL: o.PartialTTL, max: o.Max, now: o.Now, entries: map[netip.Addr]cacheEntry{}}
+	if o.TransientTTL <= 0 {
+		o.TransientTTL = 3 * time.Second
+	}
+	o.TransientTTL = min(o.TransientTTL, o.ErrTTL)
+	return &CachedLookup{next: next, ttl: o.TTL, errTTL: o.ErrTTL, partialTTL: o.PartialTTL, transientTTL: o.TransientTTL, max: o.Max, now: o.Now, entries: map[netip.Addr]cacheEntry{}}
 }
 
 func (c *CachedLookup) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo, error) {
@@ -77,6 +87,8 @@ func (c *CachedLookup) LookupNetwork(ctx context.Context, a netip.Addr) (Network
 	}
 	ttl := c.ttl
 	switch {
+	case err != nil && transient(err), err == nil && info.transient:
+		ttl = c.transientTTL
 	case err != nil:
 		ttl = c.errTTL
 	case info.Partial != "":

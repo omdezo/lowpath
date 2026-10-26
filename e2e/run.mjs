@@ -115,9 +115,16 @@ function speedServer() {
   return new Promise((resolve) => srv.listen(0, "127.0.0.1", () => resolve(srv)));
 }
 
-function startApp(data, importFile, bloatServer) {
+// inventory is the file the app reads the "other network software" from
+// (-compat-inventory): the test writes "ExitLag is running" into it, and the
+// PC's real boosters and VPNs never change the results.
+function startApp(data, importFile, bloatServer, inventory) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
-  const app = spawn(APP, ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms"], { windowsHide: true });
+  const app = spawn(
+    APP,
+    ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory],
+    { windowsHide: true },
+  );
   app.stdout.pipe(log);
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -174,6 +181,8 @@ const scrollPanel = (page, text) =>
 
 // scrollTop brings the main panel back to the top (banners live there).
 const scrollTop = (page) => page.evaluate(() => document.querySelector(".main")?.scrollTo(0, 0));
+// scrollToStart brings the top of the first element matching sel to the top of its scroller.
+const scrollToStart = (page, sel) => page.locator(sel).first().evaluate((el) => el.scrollIntoView({ block: "start" })).catch(() => {});
 
 const closeSettings = (page) => page.getByRole("button", { name: "Close settings" }).click();
 
@@ -263,7 +272,8 @@ async function main() {
   );
 
   const speed = await speedServer();
-  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`);
+  const inventory = path.join(data, "inventory.json");
+  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`, inventory);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1100, height: 720 } })).newPage();
   let helper;
@@ -348,7 +358,8 @@ async function main() {
     await page.getByRole("tab", { name: "Network" }).click();
     const conn = page.getByTestId("connection");
     await page
-      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 20000 })
+      // A slow registry can take a 15 s lookup plus one automatic retry.
+      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 40000 })
       .catch(() => {});
     const where = (await api(page, "GET", "/location")).body;
     const v4 = where?.ipv4;
@@ -360,6 +371,9 @@ async function main() {
       v4 ? `${headline}; ${v4.ip} via ${v4.source}` : `${where?.state}: ${where?.message ?? "no answer"}`,
     );
     check("STUN and lpcheck see the same public IP", !base.public || !v4 || base.public.startsWith(v4.ip + ":"), `${v4?.ip} vs ${base.public}`);
+    const other = page.getByTestId("other-software");
+    await other.locator(".conn-headline", { hasText: "None found" }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("Other network software: none on a clean system", ((await other.locator(".conn-headline").textContent().catch(() => "")) ?? "") === "None found");
     await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
@@ -367,10 +381,11 @@ async function main() {
     // 4b. Diagnostics: the bufferbloat test, against the local load server.
     await page.getByRole("tab", { name: "Diagnostics" }).click();
     await page.getByRole("button", { name: "Run test" }).waitFor();
-    await shot(page, "diagnostics", "Settings → Diagnostics: bufferbloat test, not run yet");
+    await shot(page, "diagnostics", "Settings → Diagnostics: the verdict with nothing measured yet");
     await page.getByRole("button", { name: "Run test" }).click();
     await page.locator(".bloat-live", { hasText: "Downloading" }).waitFor({ timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1500);
+    await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-running", "Bufferbloat test running: download phase, live ping and load");
     let bloat;
     for (let i = 0; i < 80; i++) {
@@ -387,6 +402,7 @@ async function main() {
     check("Bufferbloat test loaded the line both ways", br && br.phases?.[1]?.load_mbps > 0 && br.phases?.[2]?.load_mbps > 0, br && `${br.phases?.[1]?.load_mbps?.toFixed?.(0)} / ${br.phases?.[2]?.load_mbps?.toFixed?.(0)} Mbit/s`);
     check("A grade comes with a measured idle ping", br && (!br.grade || br.idle_ms > 0), br && `grade ${br.grade || "none"}`);
     await page.getByRole("button", { name: "Run again" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-result", `Bufferbloat result: grade ${br?.grade || "none (see note)"}`);
 
     // 4c. Diagnostics: route trace (MTR), shortened to 15 rounds by the
@@ -433,6 +449,30 @@ async function main() {
     await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
     await page.locator(".trace-foot").scrollIntoViewIfNeeded();
     await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
+
+    // 4d. The verdict reads the tests above (it refreshes every 4 s).
+    await page.waitForTimeout(4500);
+    await scrollToStart(page, ".verdict");
+    const vd = (await api(page, "GET", "/diag/verdict")).body;
+    const vchk = (rule) => vd?.checks?.find((c) => c.rule === rule);
+    const shown = (await page.locator(".verdict-main .t").textContent().catch(() => "")) ?? "";
+    check(
+      "Verdict reads the bufferbloat test and the route trace",
+      vd?.checks?.length === 5 && vchk("home")?.status !== "unknown" && vchk("isp")?.summary && shown === vd.verdict.title,
+      vd ? `${vd.verdict.id} (${vd.verdict.confidence}): ${vd.verdict.title}; ${vd.checks.map((c) => `${c.rule} ${c.status}`).join(", ")}` : "no answer",
+    );
+    const diagText = await page.evaluate(async () => (await fetch("/api/diag/verdict/report")).text());
+    // Shared reports keep only the network part of public addresses.
+    const privateV4 = (a) => /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a);
+    const fullAddrs = (diagText.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) ?? []).filter((a) => !a.endsWith(".0") && !privateV4(a));
+    check(
+      "Diagnosis report exports as text without full public addresses",
+      diagText.startsWith("Lowpath diagnosis") && diagText.includes("VERDICT: ") && diagText.includes("CHECKS") && fullAddrs.length === 0,
+      `${diagText.split("\n").length} lines${fullAddrs.length ? `; full addresses: ${fullAddrs.length}` : ""}`,
+    );
+    await page.getByRole("button", { name: /Show the measurements/ }).click().catch(() => {});
+    await scrollToStart(page, ".verdict");
+    await shot(page, "verdict", `Diagnostics verdict with the measurements open: ${vd?.verdict?.title ?? "—"}`);
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.
@@ -506,6 +546,58 @@ async function main() {
     await page.waitForTimeout(500);
     await closeSettings(page);
     await selectGame(page, "lpcheck");
+
+    // 7b. Another booster: with ExitLag running, Boost names it instead of
+    // starting a capture that fights ExitLag's driver.
+    const setInventory = async (inv) => {
+      if (inv) fs.writeFileSync(inventory, JSON.stringify(inv));
+      else fs.rmSync(inventory, { force: true });
+      await api(page, "GET", "/conflicts?fresh=1");
+      await page.waitForTimeout(1200); // the 2 Hz live feed carries it to the banner
+    };
+    await setInventory({
+      processes: ["ExitLag.exe"],
+      programs: ["ExitLag"],
+      services: [{ name: "ndisrd", display: "WinpkFilter LWF", driver: true, running: true }],
+    });
+    const cres = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart" });
+    check(
+      "Boost next to a running ExitLag is refused and names it",
+      cres.status === 409 && cres.body?.error === "conflict" && /^ExitLag is running/.test(cres.body?.message) && cres.body?.conflicts?.[0]?.id === "exitlag",
+      `${cres.status} ${cres.body?.error}: ${cres.body?.message}`,
+    );
+    await boostBtn(page, "lpcheck").click();
+    const refusal = page.locator(".boost-refused");
+    await refusal.waitFor({ timeout: 5000 }).catch(() => {});
+    check("The Boost button says to close ExitLag first", /ExitLag is running.*close it first/.test((await refusal.textContent().catch(() => "")) ?? ""));
+    check("…and offers Boost anyway", await refusal.getByRole("button", { name: "Boost anyway" }).isVisible().catch(() => false));
+    const cbanner = page.getByRole("alert", { name: "Other network software" });
+    check("The banner names ExitLag and the leftover driver", (await cbanner.textContent().catch(() => ""))?.includes("ExitLag is running.") && (await cbanner.textContent())?.includes("Windows Packet Filter is loaded."));
+    await cbanner.getByRole("button", { name: "Why?" }).first().click();
+    check("Why? explains the conflict", await cbanner.getByText(/Two programs rerouting the same packets/).isVisible().catch(() => false));
+    await scrollTop(page);
+    await shot(page, "conflict-exitlag", "ExitLag running: the banner names it and says what to do, with a one-click explanation");
+    await refusal.scrollIntoViewIfNeeded().catch(() => {});
+    await shot(page, "conflict-boost", "ExitLag running: Boost says to close it first, or Boost anyway");
+    if (!admin) {
+      const anyway = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart", ignore_conflicts: true });
+      check("Boost anyway skips the conflict check", anyway.body?.error === "needs_admin", `${anyway.status} ${anyway.body?.error}`);
+    }
+    await openSettings(page, "Network");
+    await page.getByTestId("other-software").getByRole("button", { name: "Check again" }).click();
+    await page.getByTestId("other-software").locator(".conn-headline", { hasText: "2 found" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await page.getByTestId("other-software").scrollIntoViewIfNeeded();
+    check("Settings lists the other network software", ((await page.getByTestId("other-software").textContent()) ?? "").includes("ExitLag is running."));
+    await shot(page, "settings-other-software", "Settings → Network: other network software found, with what to do about each");
+    await closeSettings(page);
+    // Closed but still installed: named quietly, Boost is free again.
+    await setInventory({ programs: ["ExitLag"] });
+    const idle = page.getByLabel("Installed network software");
+    check("An installed ExitLag is named", ((await idle.textContent().catch(() => "")) ?? "").includes("ExitLag is installed."));
+    check("The refusal goes once ExitLag is closed", !(await refusal.isVisible().catch(() => false)));
+    await scrollTop(page);
+    await shot(page, "conflict-installed", "ExitLag installed but closed: a quiet note, Boost works");
+    await setInventory(null);
     if (!admin) {
       const res = await api(page, "POST", "/apply", { game_id: GAME_ID, mode: "smart" });
       check("Route mode without admin asks for administrator rights", res.status === 409 && res.body?.error === "needs_admin", `${res.status} ${res.body?.error}`);

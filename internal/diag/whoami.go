@@ -64,6 +64,9 @@ type NetworkInfo struct {
 	// Partial says that part of the lookup failed (say, the city); what is
 	// filled in is still right.
 	Partial string `json:"partial,omitempty"`
+	// transient: the part that failed timed out or met a busy server, so
+	// asking again soon may fill it in.
+	transient bool
 }
 
 // NetworkLookup maps a public address to its network.
@@ -78,6 +81,9 @@ type Endpoint struct {
 	NetworkInfo
 	// LookupError says why the network is unknown; "" when it is known.
 	LookupError string `json:"lookup_error,omitempty"`
+	// transient: the lookup (or a part of it) failed for want of time or
+	// because the registry was busy, not because of the address.
+	transient bool
 }
 
 // Location states.
@@ -98,6 +104,11 @@ type Location struct {
 	// IPv6Note says why there is no IPv6 address (usually: the connection
 	// has none, which is common and fine).
 	IPv6Note string `json:"ipv6_note,omitempty"`
+	// RetryAfterS is set when the main address's network is (partly)
+	// unknown only because the registry was slow or busy: asking again
+	// (without refresh) after this many seconds starts a new lookup, which
+	// usually gets the answer. 0 when asking again would not help.
+	RetryAfterS int `json:"retry_after_s,omitempty"`
 }
 
 // Redacted is the location with the host part of each address cleared
@@ -166,8 +177,13 @@ type LocatorConfig struct {
 	// (default 15 s, never more than MaxAge), so coming back online shows
 	// up the next time the pane opens instead of minutes later.
 	FailMaxAge time.Duration
-	// Timeout bounds one whole lookup (default 12 s): addresses, then the
-	// network of each.
+	// RetryMaxAge is how long a result spoiled by a slow or busy registry
+	// is reused (default 4 s, never more than FailMaxAge); Location's
+	// RetryAfterS tells the UI when that is over.
+	RetryMaxAge time.Duration
+	// Timeout bounds one whole lookup (default 15 s): addresses (STUN may
+	// use 5 s when UDP is blocked), then the network of each (a hedged
+	// RIPEstat network-info may use 8.5 s).
 	Timeout time.Duration
 	Now     func() time.Time
 }
@@ -176,12 +192,13 @@ type LocatorConfig struct {
 // share one lookup at a time, and a fresh result is reused, so the UI can
 // ask as often as it likes.
 type Locator struct {
-	finders    []AddrFinder
-	lookup     NetworkLookup
-	maxAge     time.Duration
-	failMaxAge time.Duration
-	timeout    time.Duration
-	now        func() time.Time
+	finders     []AddrFinder
+	lookup      NetworkLookup
+	maxAge      time.Duration
+	failMaxAge  time.Duration
+	retryMaxAge time.Duration
+	timeout     time.Duration
+	now         func() time.Time
 
 	mu       sync.Mutex
 	last     *Location
@@ -189,7 +206,7 @@ type Locator struct {
 }
 
 func NewLocator(cfg LocatorConfig) *Locator {
-	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, failMaxAge: cfg.FailMaxAge, timeout: cfg.Timeout, now: cfg.Now}
+	l := &Locator{finders: cfg.Finders, lookup: cfg.Lookup, maxAge: cfg.MaxAge, failMaxAge: cfg.FailMaxAge, retryMaxAge: cfg.RetryMaxAge, timeout: cfg.Timeout, now: cfg.Now}
 	if l.maxAge <= 0 {
 		l.maxAge = 2 * time.Minute
 	}
@@ -197,8 +214,12 @@ func NewLocator(cfg LocatorConfig) *Locator {
 		l.failMaxAge = 15 * time.Second
 	}
 	l.failMaxAge = min(l.failMaxAge, l.maxAge)
+	if l.retryMaxAge <= 0 {
+		l.retryMaxAge = 4 * time.Second
+	}
+	l.retryMaxAge = min(l.retryMaxAge, l.failMaxAge)
 	if l.timeout <= 0 {
-		l.timeout = 12 * time.Second
+		l.timeout = 15 * time.Second
 	}
 	if l.now == nil {
 		l.now = time.Now
@@ -245,7 +266,10 @@ func (l *Locator) Locate(ctx context.Context, refresh bool) (Location, error) {
 
 // reuseFor is how long loc may be handed out again without a new lookup.
 func (l *Locator) reuseFor(loc *Location) time.Duration {
-	if loc.State == StateOK {
+	switch {
+	case loc.RetryAfterS > 0:
+		return l.retryMaxAge
+	case loc.State == StateOK:
 		return l.maxAge
 	}
 	return l.failMaxAge
@@ -295,6 +319,11 @@ func (l *Locator) locate(ctx context.Context) Location {
 		loc.State = StatePartial
 		loc.Message = "Your ISP couldn't be looked up: " + main.LookupError
 	}
+	if main != nil && main.transient {
+		// Whole seconds, rounded up, so a caller that waits this long finds
+		// the result expired.
+		loc.RetryAfterS = int((l.retryMaxAge + time.Second - 1) / time.Second)
+	}
 	return loc
 }
 
@@ -333,8 +362,10 @@ func (l *Locator) endpoint(ctx context.Context, f Family) (*Endpoint, error) {
 		ni, err := l.lookup.LookupNetwork(ctx, e.IP)
 		if err != nil {
 			e.LookupError = describe(err)
+			e.transient = transient(err)
 		} else {
 			e.NetworkInfo = ni
+			e.transient = ni.transient
 		}
 	}
 	return e, nil
@@ -491,9 +522,13 @@ func isLeafNoRoute(err error) bool {
 
 // NewInternetLocator is the Locator the app uses: STUN first (what a game's
 // UDP traffic would see), RIPEstat's whats-my-ip over HTTPS when UDP is
-// blocked, and RIPEstat for the network, cached.
-func NewInternetLocator() *Locator {
-	ripe := NewRIPEstat(RIPEstatOptions{})
+// blocked, and RIPEstat for the network, cached. Pass the app's one
+// RIPEstat client so its cap on requests in flight covers every caller
+// (nil: a client of its own).
+func NewInternetLocator(ripe *RIPEstat) *Locator {
+	if ripe == nil {
+		ripe = NewRIPEstat(RIPEstatOptions{})
+	}
 	return NewLocator(LocatorConfig{
 		Finders: []AddrFinder{NewSTUNFinder(stun.NewClient(stun.ClientOptions{}), DefaultSTUNServers(), 0), ripe},
 		Lookup:  NewCachedLookup(ripe, CacheOptions{}),

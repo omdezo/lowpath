@@ -5,9 +5,11 @@ import type { CaptureMode, Platform, RelayView, Settings } from "../types";
 import { cap } from "../util";
 import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
+import { OtherSoftware } from "./Conflicts";
 import { RelaysPane } from "./RelaysPane";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
+import { Verdict } from "./Verdict";
 
 export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
 
@@ -104,6 +106,7 @@ export function SettingsModal(props: Props) {
             <>
               <h3>Network</h3>
               <Connection />
+              {!demo && <OtherSoftware />}
               <div className="muted" style={{ fontSize: 12.5, marginTop: 10, marginBottom: 6 }}>
                 Changes take effect the next time you press Apply Routes.
               </div>
@@ -167,6 +170,7 @@ export function SettingsModal(props: Props) {
               <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
                 Is the lag on your side of the connection? Run the tests on Wi-Fi and again on a cable to compare.
               </div>
+              <Verdict />
               <BloatTest onError={onError} />
               <RouteTrace onError={onError} />
             </>
