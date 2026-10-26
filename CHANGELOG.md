@@ -137,6 +137,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- The service's Unix socket now reads a refused account's request before
+  answering 403, so that window always learns it isn't served ("only
+  serves accounts signed in at this computer") and runs the engine itself,
+  instead of sometimes getting an "unsolicited response" transport error
+  because the answer arrived before its request was sent (#197).
 - Route mode on Linux notices when another program removes its routing
   rule (systemd-networkd does this to rules its `.network` files don't
   declare) or, on kernels before 5.12, its nftables table (a firewall's
@@ -193,6 +198,14 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   scan pause tests no longer fail on a machine too busy to run the test
   for a couple of seconds: they wait for the refresh and for the revert
   to finish instead of giving them 2 s and 300 ms (#190).
+- The end-to-end test waits for the state each check reads instead of a
+  fixed time: the bufferbloat test and each route trace wait for their
+  own click's start and a newer result (no more reading the previous UDP
+  trace as the ICMP one), the verdict waits until the page shows the
+  title the API gives, and "Session ends when the game exits" waits for
+  the session to end in the API, then in the window. The log now says
+  when the game was first seen during a session, so the check can say
+  which half missed (#177, #201).
 
 ## [0.2.0] - 2026-10-26
 

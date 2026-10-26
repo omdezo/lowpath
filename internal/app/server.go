@@ -421,15 +421,22 @@ func (s *Server) scanRunning() {
 	s.mu.Lock()
 	s.running = run
 	sess := s.sess
-	stop := false
+	stop, seen := false, false
 	if sess != nil && !s.net.Demo() {
 		if run[sess.GameID] {
+			seen = !sess.sawGame
 			sess.sawGame = true
 		} else if sess.sawGame && s.store.Settings().StopOnGameExit {
 			stop = true
 		}
 	}
 	s.mu.Unlock()
+	// Stop on game exit needs both halves: the game seen while the session
+	// is on, then gone. Logging the first lets a session that never ended
+	// say which half was missing.
+	if seen {
+		s.log.Info("game seen during the session", "game", sess.GameID)
+	}
 	if stop {
 		s.log.Info("game exited, stopping optimization", "game", sess.GameID)
 		s.stopSession()
