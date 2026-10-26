@@ -52,33 +52,63 @@ func (t tableLookup) LookupNetwork(_ context.Context, a netip.Addr) (NetworkInfo
 	return NetworkInfo{}, errors.New("RIPEstat network-info: HTTP 503")
 }
 
+// The fixtures use documentation addresses (RFC 5737, RFC 3849) and AS
+// numbers (RFC 5398). isPublic rightly rejects those ranges, so tests build
+// their Locator with newTestLocator, which lets them through.
 var (
-	pub4 = netip.MustParseAddr("5.37.1.2")
-	pub6 = netip.MustParseAddr("2a02:2c8::1")
-	omt  = NetworkInfo{ASN: 28885, ISP: "Oman Telecommunications Company (S.A.O.G)", Country: "OM", City: "Muscat"}
+	pub4    = netip.MustParseAddr("198.51.100.2")
+	pub6    = netip.MustParseAddr("2001:db8::1")
+	example = NetworkInfo{ASN: 64500, ISP: "Example Broadband", Country: "NL", City: "Amsterdam"}
 )
 
+// docRanges are the documentation blocks the fixtures use.
+var docRanges = []netip.Prefix{
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("2001:db8::/32"),
+}
+
+// publicOrDoc is isPublic that also accepts the documentation ranges, so a
+// fixture address takes the path a real public one does. Private, loopback
+// and CGNAT addresses are still rejected.
+func publicOrDoc(a netip.Addr) bool {
+	for _, p := range docRanges {
+		if p.Contains(a.Unmap()) {
+			return true
+		}
+	}
+	return isPublic(a)
+}
+
+// newTestLocator is NewLocator for fixtures on documentation addresses.
+func newTestLocator(cfg LocatorConfig) *Locator {
+	l := NewLocator(cfg)
+	l.public = publicOrDoc
+	return l
+}
+
 func TestLocateBothFamilies(t *testing.T) {
-	l := NewLocator(LocatorConfig{
+	l := newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4, IPv6: pub6}}},
-		Lookup:  tableLookup{pub4: omt, pub6: omt},
+		Lookup:  tableLookup{pub4: example, pub6: example},
 	})
 	loc, err := l.Locate(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loc.State != StateOK || loc.IPv4 == nil || loc.IPv4.IP != pub4 || loc.IPv4.City != "Muscat" || loc.IPv6 == nil || loc.IPv6.ASN != 28885 || loc.IPv6Note != "" {
+	if loc.State != StateOK || loc.IPv4 == nil || loc.IPv4.IP != pub4 || loc.IPv4.City != "Amsterdam" || loc.IPv6 == nil || loc.IPv6.ASN != 64500 || loc.IPv6Note != "" {
 		t.Fatalf("got %+v", loc)
 	}
 }
 
 func TestLocateNoIPv6IsFine(t *testing.T) {
-	l := NewLocator(LocatorConfig{
+	l := newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{
 			addrs: map[Family]netip.Addr{IPv4: pub4},
 			errs:  map[Family]error{IPv6: &net.OpError{Op: "dial", Net: "udp6", Err: errors.New("network is unreachable")}},
 		}},
-		Lookup: tableLookup{pub4: omt},
+		Lookup: tableLookup{pub4: example},
 	})
 	loc, _ := l.Locate(context.Background(), false)
 	if loc.State != StateOK || loc.IPv6 != nil || !strings.Contains(loc.IPv6Note, "no public IPv6") {
@@ -89,7 +119,7 @@ func TestLocateNoIPv6IsFine(t *testing.T) {
 func TestLocateFallsBackToNextFinder(t *testing.T) {
 	blocked := &fakeFinder{errs: map[Family]error{IPv4: stun.ErrTimeout, IPv6: stun.ErrTimeout}}
 	https := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{blocked, https}, Lookup: tableLookup{pub4: omt}})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{blocked, https}, Lookup: tableLookup{pub4: example}})
 	loc, _ := l.Locate(context.Background(), false)
 	if loc.State != StateOK || loc.IPv4 == nil || loc.IPv4.IP != pub4 {
 		t.Fatalf("got %+v", loc)
@@ -103,7 +133,7 @@ func TestLocateIgnoresWrongFamilyAnswer(t *testing.T) {
 	// An HTTPS fallback asked for IPv6 that came back over IPv4 must not
 	// fill the IPv6 slot.
 	f := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4, IPv6: pub4}}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: omt}})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: example}})
 	loc, _ := l.Locate(context.Background(), false)
 	if loc.IPv6 != nil {
 		t.Fatalf("IPv6 slot holds %v", loc.IPv6.IP)
@@ -112,7 +142,7 @@ func TestLocateIgnoresWrongFamilyAnswer(t *testing.T) {
 
 func TestLocateOffline(t *testing.T) {
 	dnsErr := &net.DNSError{Err: "no such host", Name: "stun.l.google.com", IsNotFound: true}
-	l := NewLocator(LocatorConfig{
+	l := newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{errs: map[Family]error{IPv4: dnsErr, IPv6: dnsErr}}},
 		Lookup:  tableLookup{},
 	})
@@ -126,7 +156,7 @@ func TestLocateOffline(t *testing.T) {
 }
 
 func TestLocateLookupFailureIsPartial(t *testing.T) {
-	l := NewLocator(LocatorConfig{
+	l := newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}}},
 		Lookup:  tableLookup{},
 	})
@@ -139,8 +169,8 @@ func TestLocateLookupFailureIsPartial(t *testing.T) {
 func TestLocateNonPublicAddress(t *testing.T) {
 	for _, a := range []string{"192.168.1.20", "100.72.1.1", "127.0.0.1"} {
 		ip := netip.MustParseAddr(a)
-		lookup := &countingLookup{info: omt}
-		l := NewLocator(LocatorConfig{Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv4: ip}}}, Lookup: lookup})
+		lookup := &countingLookup{info: example}
+		l := newTestLocator(LocatorConfig{Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv4: ip}}}, Lookup: lookup})
 		loc, _ := l.Locate(context.Background(), false)
 		if loc.State != StatePartial || loc.IPv4 == nil || !strings.Contains(loc.IPv4.LookupError, "not a public") {
 			t.Fatalf("%s: got %+v", a, loc)
@@ -154,7 +184,7 @@ func TestLocateNonPublicAddress(t *testing.T) {
 func TestLocateCachesAndRefreshes(t *testing.T) {
 	clk := newClock()
 	f := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: omt}, MaxAge: time.Minute, Now: clk.Now})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: example}, MaxAge: time.Minute, Now: clk.Now})
 	ctx := context.Background()
 	if _, ok := l.Last(); ok {
 		t.Fatal("result before any lookup")
@@ -180,7 +210,7 @@ func TestLocateCachesAndRefreshes(t *testing.T) {
 
 func TestLocateSharesOneLookup(t *testing.T) {
 	f := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}, delay: 50 * time.Millisecond}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: omt}})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: example}})
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -197,7 +227,7 @@ func TestLocateSharesOneLookup(t *testing.T) {
 
 func TestLocateCallerCancelKeepsLookup(t *testing.T) {
 	f := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}, delay: 80 * time.Millisecond}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: omt}})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: tableLookup{pub4: example}})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	if _, err := l.Locate(ctx, false); !errors.Is(err, context.DeadlineExceeded) {
@@ -211,7 +241,7 @@ func TestLocateCallerCancelKeepsLookup(t *testing.T) {
 
 func TestLocateTimeout(t *testing.T) {
 	f := &fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4}, delay: time.Hour}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Timeout: 50 * time.Millisecond})
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Timeout: 50 * time.Millisecond})
 	start := time.Now()
 	loc, err := l.Locate(context.Background(), false)
 	if err != nil || loc.State != StateOffline || !strings.Contains(loc.Message, "no reply in time") {
@@ -223,9 +253,9 @@ func TestLocateTimeout(t *testing.T) {
 }
 
 func TestRedacted(t *testing.T) {
-	loc := Location{IPv4: &Endpoint{IP: netip.MustParseAddr("5.37.1.2"), NetworkInfo: omt}, IPv6: &Endpoint{IP: netip.MustParseAddr("2a02:2c8:1:2:3:4:5:6")}}
+	loc := Location{IPv4: &Endpoint{IP: pub4, NetworkInfo: example}, IPv6: &Endpoint{IP: netip.MustParseAddr("2001:db8:1:2:3:4:5:6")}}
 	r := loc.Redacted()
-	if r.IPv4.IP.String() != "5.37.1.0" || r.IPv6.IP.String() != "2a02:2c8:1::" || r.IPv4.ASN != 28885 {
+	if r.IPv4.IP.String() != "198.51.100.0" || r.IPv6.IP.String() != "2001:db8:1::" || r.IPv4.ASN != 64500 {
 		t.Fatalf("redacted %+v %+v", r.IPv4, r.IPv6)
 	}
 	if loc.IPv4.IP != pub4 {
@@ -302,8 +332,8 @@ func TestSTUNFinderFirstAnswerWins(t *testing.T) {
 	}
 
 	// The loopback answer is not looked up anywhere.
-	lookup := &countingLookup{info: omt}
-	l := NewLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: lookup})
+	lookup := &countingLookup{info: example}
+	l := newTestLocator(LocatorConfig{Finders: []AddrFinder{f}, Lookup: lookup})
 	loc, _ := l.Locate(context.Background(), false)
 	if loc.IPv4 == nil || loc.IPv4.LookupError == "" || lookup.count(loc.IPv4.IP) != 0 {
 		t.Fatalf("got %+v", loc.IPv4)
@@ -334,21 +364,21 @@ func TestSTUNFinderAllFail(t *testing.T) {
 func TestLocateStateFollowsIPv4(t *testing.T) {
 	// The IPv6 network lookup fails but IPv4's works: the line is fine,
 	// and the IPv6 entry says what went wrong.
-	l := NewLocator(LocatorConfig{
+	l := newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv4: pub4, IPv6: pub6}}},
-		Lookup:  tableLookup{pub4: omt},
+		Lookup:  tableLookup{pub4: example},
 	})
 	loc, _ := l.Locate(context.Background(), false)
 	if loc.State != StateOK || loc.Message != "" || loc.IPv6 == nil || loc.IPv6.LookupError == "" {
 		t.Fatalf("got %+v / %+v", loc, loc.IPv6)
 	}
 	// IPv6-only line: IPv6 decides.
-	l = NewLocator(LocatorConfig{
+	l = newTestLocator(LocatorConfig{
 		Finders: []AddrFinder{&fakeFinder{addrs: map[Family]netip.Addr{IPv6: pub6}}},
-		Lookup:  tableLookup{pub6: omt},
+		Lookup:  tableLookup{pub6: example},
 	})
 	loc, _ = l.Locate(context.Background(), false)
-	if loc.State != StateOK || loc.IPv4 != nil || loc.IPv6.ASN != 28885 {
+	if loc.State != StateOK || loc.IPv4 != nil || loc.IPv6.ASN != 64500 {
 		t.Fatalf("IPv6 only: %+v", loc)
 	}
 }

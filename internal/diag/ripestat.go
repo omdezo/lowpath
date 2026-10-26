@@ -468,7 +468,7 @@ func (r *RIPEstat) geo(ctx context.Context, f Family, a netip.Addr) (geoPlace, e
 }
 
 // splitHolder splits an AS holder string into its handle and name. RIPEstat
-// gives "OMANTEL-NAP-AS Oman Telecommunications Company (S.A.O.G)" for RIPE
+// gives "EXAMPLEBB-AS Example Broadband" for RIPE
 // and APNIC networks, "GOOGLE - Google LLC" for ARIN ones, and sometimes the
 // handle alone.
 func splitHolder(h string) (handle, name string) {
@@ -489,7 +489,7 @@ func splitHolder(h string) (handle, name string) {
 }
 
 // isHandle: an AS handle is one word of letters, digits, '-', '_' and '.'
-// in a single case ("OMANTEL-NAP-AS", and the odd lowercase "examplenet"); a capitalised
+// in a single case ("EXAMPLEBB-AS", and the odd lowercase "examplenet"); a capitalised
 // word such as "Some" starts a name instead.
 func isHandle(s string) bool {
 	if s == "" {

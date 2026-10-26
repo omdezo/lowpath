@@ -13,7 +13,7 @@ func TestLastAddr(t *testing.T) {
 		"100.64.0.0/10":  "100.127.255.255",
 		"172.16.0.0/12":  "172.31.255.255",
 		"192.168.0.0/16": "192.168.255.255",
-		"1.2.3.4/32":     "1.2.3.4",
+		"192.0.2.4/32":   "192.0.2.4",
 	} {
 		if got := lastAddr(netip.MustParsePrefix(p)).String(); got != want {
 			t.Errorf("lastAddr(%s) = %s, want %s", p, got, want)
