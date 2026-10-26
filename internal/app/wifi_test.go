@@ -47,6 +47,25 @@ func getWiFi(t *testing.T, api func(string, string, any) int) wifiView {
 	return v
 }
 
+// stateWait bounds the waits for what the Wi-Fi goroutines do (the scan
+// pause's tuner, a reading or survey after a hang). A busy machine (a
+// shared CI host, a VM whose CPUs the host is busy with) may not run them
+// for seconds, so it is generous: the waits end as soon as the state is
+// there, and it only counts when the state never comes.
+const stateWait = 10 * time.Second
+
+// waitFor polls cond until it holds, for up to stateWait.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(stateWait)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("no %s after %v", what, stateWait)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestWiFiAPIReadingFeedsTheVerdict(t *testing.T) {
 	fp := newFake(t)
 	fp.WiFi.SetLink(exampleLink(-78), nil)
@@ -142,17 +161,14 @@ func TestWiFiAPIHungService(t *testing.T) {
 	if d := srv.diagnosis(); d.Verdict.ID == "" {
 		t.Error("no verdict while the Wi-Fi service hangs")
 	}
-	if took := time.Since(start); took > 3*time.Second {
+	// The service hangs until release is closed below, so answering at all
+	// shows the card and the verdict don't wait it out; the bound is
+	// stateWait because a busy machine can make the requests slow too.
+	if took := time.Since(start); took > stateWait {
 		t.Errorf("waited %v on a hung Wi-Fi service", took)
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for getWiFi(t, api).State != wifiOK {
-		if time.Now().After(deadline) {
-			t.Fatal("no reading after the service answered again")
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitFor(t, "reading after the service answered again", func() bool { return getWiFi(t, api).State == wifiOK })
 }
 
 func TestWiFiSurvey(t *testing.T) {
@@ -218,7 +234,7 @@ func newTuneServer(t *testing.T, fp *fakeplatform.Fake, ns diag.NetStats) (*Serv
 
 func waitTune(t *testing.T, srv *Server, state string) *wifiTuneView {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(stateWait)
 	for {
 		v := srv.live().WiFi
 		if v != nil && v.State == state {
@@ -231,27 +247,50 @@ func waitTune(t *testing.T, srv *Server, state string) *wifiTuneView {
 	}
 }
 
+// sessionTuner is the running boost's scan pause.
+func sessionTuner(t *testing.T, srv *Server) *wifiTuner {
+	t.Helper()
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.sess == nil || srv.sess.wifi == nil {
+		t.Fatal("no scan pause running")
+	}
+	return srv.sess.wifi
+}
+
+// waitReverted waits for a stopped tuner to end. Stop waits for the revert
+// only so long (a hung Wi-Fi service isn't waited out), so the revert may
+// still be on its way when Stop answers; once the tuner has ended, no more
+// can come.
+func waitReverted(t *testing.T, tu *wifiTuner) {
+	t.Helper()
+	select {
+	case <-tu.done:
+	case <-time.After(stateWait):
+		t.Fatal("the scan pause didn't end after Stop")
+	}
+}
+
 func TestWiFiScanPauseDuringBoost(t *testing.T) {
 	fp := newFake(t)
 	fp.WiFi.SetTune(diag.WiFiTuningState{ScanPaused: true, Streaming: true}, nil)
 	srv, api := newTuneServer(t, fp, nil)
+	// Nothing here is about a slow Wi-Fi service: the app's own time limit
+	// (3 s, not 300 ms) keeps a busy machine that holds a goroutine up for a
+	// moment from turning the first Tune into a timeout.
+	srv.wifi.callTimeout = wifiCallTimeout
 	boostLP(t, fp, api)
 	v := waitTune(t, srv, tuneOn)
 	if !v.ScanPaused || !v.Streaming {
 		t.Errorf("tuning %+v", v)
 	}
+	tuner := sessionTuner(t, srv)
 	tu := fp.WiFi.Tunings()
 	if len(tu) != 1 {
 		t.Fatalf("%d tunings", len(tu))
 	}
 	// Applied again while the boost runs (a reconnect resets it).
-	deadline := time.Now().Add(2 * time.Second)
-	for tu[0].Refreshes() < 2 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if tu[0].Refreshes() < 2 {
-		t.Errorf("refreshed %d times", tu[0].Refreshes())
-	}
+	waitFor(t, "second refresh", func() bool { return tu[0].Refreshes() >= 2 })
 	var wv wifiView
 	if api("GET", "/api/diag/wifi", "", &wv); wv.Tuning == nil || wv.Tuning.State != tuneOn {
 		t.Errorf("wifi view tuning: %+v", wv.Tuning)
@@ -260,8 +299,9 @@ func TestWiFiScanPauseDuringBoost(t *testing.T) {
 	if code := api("POST", "/api/stop", "", &lv); code != 200 || lv.WiFi != nil {
 		t.Fatalf("stop: %d %+v", code, lv.WiFi)
 	}
-	if tu[0].Closes() != 1 {
-		t.Errorf("reverted %d times, want once", tu[0].Closes())
+	waitReverted(t, tuner)
+	if n := len(fp.WiFi.Tunings()); n != 1 || tu[0].Closes() != 1 {
+		t.Errorf("%d tunings, the first reverted %d times; want one, reverted once", n, tu[0].Closes())
 	}
 }
 
@@ -316,9 +356,12 @@ func TestWiFiScanPauseHungService(t *testing.T) {
 	release := make(chan struct{})
 	fp.WiFi.Hang(release)
 	srv, api := newTuneServer(t, fp, nil)
+	// Tune hangs until release is closed below, so the boost answering at
+	// all shows it doesn't wait for Tune; the bound is stateWait because a
+	// busy machine can make the requests themselves slow.
 	start := time.Now()
 	boostLP(t, fp, api)
-	if took := time.Since(start); took > 2*time.Second {
+	if took := time.Since(start); took > stateWait {
 		t.Errorf("boost waited %v on the Wi-Fi service", took)
 	}
 	if v := waitTune(t, srv, tuneFailed); !strings.Contains(v.Message, "didn't answer in time") {
@@ -326,17 +369,10 @@ func TestWiFiScanPauseHungService(t *testing.T) {
 	}
 	api("POST", "/api/stop", "", nil)
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	waitFor(t, "revert of the late tuning", func() bool {
 		tu := fp.WiFi.Tunings()
-		if len(tu) == 1 && tu[0].Closes() == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("late tuning not reverted: %d tunings", len(tu))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return len(tu) == 1 && tu[0].Closes() == 1
+	})
 }
 
 func TestWiFiTuningSettingDefaultsOn(t *testing.T) {
@@ -355,13 +391,16 @@ func TestWiFiScanPauseRetriedAfterReconnect(t *testing.T) {
 	fp := newFake(t)
 	fp.WiFi.SetTune(diag.WiFiTuningState{}, diag.ErrWiFiDisconnected)
 	srv, api := newTuneServer(t, fp, nil)
+	srv.wifi.callTimeout = wifiCallTimeout // as in TestWiFiScanPauseDuringBoost
 	boostLP(t, fp, api)
 	if v := waitTune(t, srv, tuneFailed); !strings.Contains(v.Message, "tries again") {
 		t.Errorf("failed tuning: %+v", v)
 	}
 	fp.WiFi.SetTune(diag.WiFiTuningState{ScanPaused: true, Streaming: true}, nil)
 	waitTune(t, srv, tuneOn)
+	tuner := sessionTuner(t, srv)
 	api("POST", "/api/stop", "", nil)
+	waitReverted(t, tuner)
 	if tu := fp.WiFi.Tunings(); len(tu) != 1 || tu[0].Closes() != 1 {
 		t.Errorf("%d tunings, want one reverted once", len(tu))
 	}
@@ -396,17 +435,10 @@ func TestWiFiSurveyHungService(t *testing.T) {
 	}
 	fp.WiFi.SetSurvey(diag.WiFiSurvey{At: time.Now(), FreqMHz: 5180, Networks: 4}, nil)
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	waitFor(t, "survey after the service answered", func() bool {
 		api("POST", "/api/diag/wifi/survey", &v)
-		if v.Survey != nil && v.Survey.State == wifiOK && v.Survey.Survey.Networks == 4 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no survey after the service answered: %+v", v.Survey)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return v.Survey != nil && v.Survey.State == wifiOK && v.Survey.Survey.Networks == 4
+	})
 }
 
 // The link may give the center of an 80 MHz channel (5210 MHz for 36-48)

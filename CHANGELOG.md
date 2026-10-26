@@ -189,7 +189,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   a released handle that Windows may have reused (#128).
 - The app tests no longer fail when the test binary itself gets a small
   PID, as in a fresh container or WSL's `docker-desktop`: their fake
-  processes take PIDs that can't be the binary's own (#189).
+  processes take PIDs that can't be the binary's own (#189). The Wi-Fi
+  scan pause tests no longer fail on a machine too busy to run the test
+  for a couple of seconds: they wait for the refresh and for the revert
+  to finish instead of giving them 2 s and 300 ms (#190).
 
 ## [0.2.0] - 2026-10-26
 
