@@ -9,6 +9,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Valve server list: Counter-Strike 2, Dota 2 and Deadlock show their Steam
+  Datagram Relay data centers with live ping and loss on the game page,
+  refreshed in the background and cached for offline starts (#16).
 - "Your connection" in Settings → Network: public IPv4/IPv6 address (via
   STUN, as game servers see it), network prefix, ISP, AS and city, with a
   clear reason whenever something can't be found (#15).
@@ -20,6 +23,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   requests (`scripts/ci.ps1 -Report`).
 - CODEOWNERS, this changelog, and the pull request process in
   `CONTRIBUTING.md`.
+
+### Fixed
+- `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
+  the generated `ui/dist` output doesn't count as an uncommitted change.
 
 ## [0.2.0] - 2026-10-26
 

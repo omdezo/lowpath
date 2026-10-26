@@ -11,6 +11,7 @@ import type {
   RelayView,
   Route,
   RouteMode,
+  ServerList,
   Settings,
 } from "./types";
 
@@ -53,6 +54,8 @@ export const api = {
   mapping: () => call<Mapping>("POST", "/mapping"),
   routes: (id: string) => call<{ routes: Route[] | null; analysis?: Analysis }>("GET", `/games/${enc(id)}/routes`),
   analyze: (id: string) => call<Analysis>("POST", `/games/${enc(id)}/analyze`),
+  servers: (id: string) => call<ServerList>("GET", `/games/${enc(id)}/servers`),
+  pingServers: (id: string) => call<ServerList>("POST", `/games/${enc(id)}/servers/ping`),
   favorite: (id: string) => call<{ favorites: string[] | null }>("POST", `/games/${enc(id)}/favorite`),
   apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string) =>
     call<Live>("POST", "/apply", { game_id, mode, region, route_id }),
