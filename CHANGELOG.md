@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Dev-mode background service `LowpathSvc` (Windows): `lowpathsvc install`
+  asks for administrator rights once, and from then on the Lowpath window
+  runs unelevated and drives the service over the named pipe
+  `\\.\pipe\lowpath`, so Boost works after a reboot with no UAC prompt (#6).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements
