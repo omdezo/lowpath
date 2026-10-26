@@ -111,7 +111,9 @@ func TestKernelNetworkReset(t *testing.T) {
 		return
 	}
 
-	// No session: nothing to stop.
+	// No session: nothing to stop. An earlier run killed before its
+	// deferred stop leaves its session behind, so clear that first.
+	k.stop(0)
 	if stopped, err := k.Reset(); stopped || err != nil {
 		t.Fatalf("Reset without a session = %v, %v", stopped, err)
 	}
