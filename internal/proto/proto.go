@@ -4,7 +4,7 @@
 // Wire layout (big endian):
 //
 //	magic   u8   0xA7
-//	type    u8   Data / Probe / ProbeReply
+//	type    u8   Data / Probe / ProbeReply / Stats
 //	token   u64  relay access token (TokenFromKey); 0 when the relay is open
 //	flow    u64  random per game flow, chosen by the client
 //	seq     u32  per-flow, per-direction sequence number (dedup key)
@@ -17,6 +17,12 @@
 // A Probe may carry the game server address; the egress relay then answers
 // with a ProbeReply whose payload is a ServerRTT block (see AppendServerRTT),
 // so the client can add the relay->server leg to the path RTT.
+//
+// About once a second the egress relay sends each of a flow's return
+// addresses a Stats packet (flow = the data flow, seq = a per-flow report
+// counter, ts = the relay's clock, addr = the game server) whose payload
+// is the flow's upstream lane statistics, encoded by package tstats.
+// Clients that predate it ignore the type.
 package proto
 
 import (
@@ -35,6 +41,7 @@ const (
 	TData       Type = 1
 	TProbe      Type = 2
 	TProbeReply Type = 3
+	TStats      Type = 4 // egress -> client: per-lane delivery statistics (tstats.Parse)
 )
 
 // FixedLen is the header size before the address block.

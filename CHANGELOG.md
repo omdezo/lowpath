@@ -9,6 +9,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Relay lane statistics: the egress relay records which path delivered
+  each copy of the game's packets and once a second sends the client a
+  TStats report per flow: each path's loss, the loss two paths share and
+  how far it is from independent (ρ), how bursty each path's loss is
+  (Gilbert p01/p10) and RFC 3550 jitter per path; the relay's stats log
+  adds the packets no path delivered. Older clients ignore the report
+  (#48).
 - Network simulator: Gilbert-Elliott burst loss (`p`, `r`, `1-k`, `1-h`,
   stepped per packet or in time) and shared segments, so lanes behind one
   bursty hop such as home Wi-Fi lose packets together; seeded random
