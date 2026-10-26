@@ -115,7 +115,8 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   spoiled by a timeout is kept for 3 s instead of 30 s, and the pane asks
   once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
-  the generated `ui/dist` output doesn't count as an uncommitted change.
+  the UI build goes to the ignored `ui/dist/app`, so it is never an
+  uncommitted change.
 - Building the UI leaves `git status` clean: `npm run build` writes to the
   ignored `ui/dist/app`, and a tracked placeholder page lets a fresh clone
   pass `go vet` and `go test` before the UI is built. A program built
