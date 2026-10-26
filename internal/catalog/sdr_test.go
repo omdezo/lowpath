@@ -121,9 +121,9 @@ func TestFixGeoWithoutReference(t *testing.T) {
 
 func TestDistanceKM(t *testing.T) {
 	dubai := Geo{Lat: 25.20, Lon: 55.27, Known: true}
-	muscat := Geo{Lat: 23.59, Lon: 58.41, Known: true}
-	if d := DistanceKM(dubai, muscat); d < 330 || d > 370 {
-		t.Fatalf("Dubai-Muscat = %.0f km, want about 350", d)
+	doha := Geo{Lat: 25.29, Lon: 51.53, Known: true}
+	if d := DistanceKM(dubai, doha); d < 350 || d > 400 {
+		t.Fatalf("Dubai-Doha = %.0f km, want about 380", d)
 	}
 	if d := DistanceKM(dubai, dubai); d != 0 {
 		t.Fatalf("distance to itself = %v", d)
