@@ -23,7 +23,7 @@ func TestCheckGeo(t *testing.T) {
 	}
 	// "Sydney" at 8 ms from Amsterdam is impossible: the database is wrong.
 	c = CheckGeo(amsterdam, sydney, 8*time.Millisecond)
-	if c.State != GeoCheckTooFar || !strings.Contains(c.Note, "within 820 km") {
+	if c.State != GeoCheckTooFar || !strings.Contains(c.Note, "within 820 km") || !strings.Contains(c.Note, "where the IP database puts you") {
 		t.Fatalf("far city: %+v", c)
 	}
 	// Just beyond the light limit, inside the geolocation slack: allowed.
@@ -31,8 +31,11 @@ func TestCheckGeo(t *testing.T) {
 	if c.State != GeoCheckOK {
 		t.Fatalf("within slack: %+v", c)
 	}
-	// No ping: nothing to check against.
-	if c := CheckGeo(amsterdam, frankfurt, 0); c.State != GeoCheckUnknown || c.MaxKM != nil || c.DistanceKM == nil {
+	// No ping: nothing to check against. No reply yet, IPv6 and "can't
+	// send" look the same here, so the note must not claim the server
+	// ignores pings (the ping note says why).
+	if c := CheckGeo(amsterdam, frankfurt, 0); c.State != GeoCheckUnknown || c.MaxKM != nil || c.DistanceKM == nil ||
+		strings.Contains(c.Note, "doesn't answer") || c.Note == "" {
 		t.Fatalf("no ping: %+v", c)
 	}
 	// No city for this PC: the ping still bounds the distance.

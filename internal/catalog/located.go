@@ -51,12 +51,14 @@ func CheckGeo(you, server Geo, minRTT time.Duration) GeoCheck {
 	}
 	switch {
 	case c.MaxKM == nil:
-		c.State, c.Note = GeoCheckUnknown, "Not checked against the ping: the server doesn't answer pings."
+		// No reply yet, none ever, or no way to ping: the ping note says
+		// which, so this one doesn't guess.
+		c.State, c.Note = GeoCheckUnknown, "Not checked yet: it needs a ping reply."
 	case c.DistanceKM == nil:
 		c.State, c.Note = GeoCheckUnknown, fmt.Sprintf("The ping puts it within %s of you.", km(*c.MaxKM))
 	case *c.DistanceKM > *c.MaxKM+geoSlackKM:
 		c.State = GeoCheckTooFar
-		c.Note = fmt.Sprintf("Can't be right: that city is %s away, but the ping puts the server within %s of you.", km(*c.DistanceKM), km(*c.MaxKM))
+		c.Note = fmt.Sprintf("Can't be right: that city is %s from where the IP database puts you, but the ping puts the server within %s of you.", km(*c.DistanceKM), km(*c.MaxKM))
 	default:
 		c.State, c.Note = GeoCheckOK, fmt.Sprintf("Matches the ping: %s away, the ping allows up to %s.", km(*c.DistanceKM), km(*c.MaxKM))
 	}

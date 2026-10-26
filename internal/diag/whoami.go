@@ -111,6 +111,9 @@ func (l Location) Redacted() Location {
 		}
 		c := *e
 		c.IP = redactAddr(c.IP)
+		// GeoLite's point can be finer than the city (a postal code), and
+		// the city already says where.
+		c.Lat, c.Lon = nil, nil
 		c.LookupError, c.Partial = redactText(c.LookupError), redactText(c.Partial)
 		return &c
 	}

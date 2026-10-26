@@ -53,6 +53,10 @@ const (
 	watchRetryError     = 30 * time.Second
 )
 
+// errWatchEnded is the watch error when the OS stopped the flow watch
+// without saying why.
+var errWatchEnded = errors.New("the system stopped the flow watch; Lowpath tries again shortly")
+
 type currentServers struct {
 	flows   platform.FlowWatcher
 	owners  platform.OwnerResolver
@@ -104,6 +108,21 @@ func (c *currentServers) tick(running map[string][]string) {
 	now := c.now()
 	var closing detect.FlowWatch
 	c.mu.Lock()
+	if c.watch != nil {
+		select {
+		case <-c.watch.Done():
+			// The OS ended the watch by itself: say so, and try again
+			// later instead of showing "on" while nothing arrives.
+			err := errWatchEnded
+			if e, ok := c.watch.(interface{ Err() error }); ok && e.Err() != nil {
+				err = e.Err()
+			}
+			c.log.Warn("flow watch ended", "err", err)
+			closing = c.detachWatchLocked()
+			c.watchErr, c.retryAt = err, now.Add(watchRetryError)
+		default:
+		}
+	}
 	if len(running) > 0 {
 		c.quietSince = time.Time{}
 		if c.watch == nil && !now.Before(c.retryAt) {
@@ -140,7 +159,10 @@ func (c *currentServers) tick(running map[string][]string) {
 			delete(c.learners, id)
 			continue
 		}
-		if p := primary(list); record && p != nil && p.PktsUp >= minRecordPkts && now.Sub(p.LastSeen) < liveFor {
+		// Only a UDP server is saved: the saved server is proxy mode's
+		// endpoint and Analyze's baseline (RelayNetwork.Endpoint), which
+		// are UDP, and a TCP primary is a lobby's chat or matchmaking.
+		if p := primary(list); record && p != nil && p.Proto == engine.ProtoUDP && p.PktsUp >= minRecordPkts && now.Sub(p.LastSeen) < liveFor {
 			saves[id] = p.Addr
 		}
 	}

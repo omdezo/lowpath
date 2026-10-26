@@ -299,8 +299,6 @@ export interface Bootstrap {
   live: Live;
 }
 
-// GET /api/location: the public address the internet sees and the network
-// behind it (internal/diag). Empty fields are unknown.
 // The registry's answer for a public address (internal/diag NetworkInfo).
 export interface NetworkInfo {
   asn?: number;
@@ -316,6 +314,8 @@ export interface NetworkInfo {
   partial?: string;
 }
 
+// GET /api/location: the public address the internet sees and the network
+// behind it (internal/diag). Empty fields are unknown.
 export interface Endpoint {
   ip: string;
   source: string;

@@ -382,7 +382,8 @@ catalog entry or not:
   (`source: "boost"`); otherwise the OS's flow events (`"traffic"`); otherwise
   the last server saved for the game (`"history"`, state `last`). Sessions in
   route mode and the flow watch both save the primary every 5 s (the watch
-  only once it sent ≥ 10 packets).
+  only a UDP primary that sent ≥ 10 packets: the saved server is proxy
+  mode's endpoint and Analyze's baseline).
 - **Flow events** (Windows): an ETW real-time session ("Lowpath Flows") on
   Microsoft-Windows-Kernel-Network `{7dd42a49-5329-4832-8dfd-43d979153a88}`,
   keywords IPv4|IPv6, events 10/11/26/27 (TCP data sent/received) and
@@ -392,7 +393,9 @@ catalog entry or not:
   WinDivert, and it can't break networking. The session opens while a known
   game runs and closes 30 s after the last one exits; a session left by a
   crashed Lowpath is stopped and replaced. Unelevated it fails with
-  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`), retried every 5 min. The
+  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`), retried every 5 min. A
+  session stopped from outside closes `FlowWatch.Done()`; the card then
+  shows `watch.state: "error"` and the watch is retried after 30 s. The
   callback only looks the PID up in a map of game PIDs (refreshed every 2 s
   from `Owners.ProcessNames`) and drops the rest.
 - **Learning** (`engine.FlowLearner`): the same rules as a session (primary
@@ -405,6 +408,7 @@ catalog entry or not:
   cached 24 h, looked up in the background; private, CGNAT and loopback
   addresses are never sent. `NetworkInfo` gains `lat`/`lon` when GeoLite2
   names a city (a country-only answer's point is its center, useless here).
+  The diagnostics report drops them (`Location.Redacted`).
 - **City check** (`catalog.CheckGeo`): light in fibre covers ≈ 204 km/ms
   (c / 1.468), so a fastest ping of r ms puts the server within
   r / 2 × 204 km. A database city farther than that plus 250 km (city-level

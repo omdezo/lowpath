@@ -368,6 +368,7 @@ type Flows struct {
 	mu      sync.Mutex
 	err     error
 	onEvent func(detect.FlowEvent)
+	watch   *flowWatch
 	starts  int
 }
 
@@ -386,7 +387,21 @@ func (f *Flows) Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error) 
 	}
 	f.onEvent = onEvent
 	f.starts++
-	return flowWatch{f}, nil
+	f.watch = &flowWatch{f: f, done: make(chan struct{})}
+	return f.watch, nil
+}
+
+// End stops the open watch the way the OS can on its own (an ETW session
+// stopped from outside): events stop and Done is closed, but the watch
+// still waits for its owner's Close.
+func (f *Flows) End() {
+	f.mu.Lock()
+	w := f.watch
+	f.onEvent, f.watch = nil, nil
+	f.mu.Unlock()
+	if w != nil {
+		w.end()
+	}
 }
 
 // Watching reports whether a watch is open.
@@ -408,11 +423,22 @@ func (f *Flows) Emit(ev detect.FlowEvent) bool {
 	return true
 }
 
-type flowWatch struct{ f *Flows }
+type flowWatch struct {
+	f    *Flows
+	done chan struct{}
+	once sync.Once
+}
 
-func (w flowWatch) Close() error {
+func (w *flowWatch) end() { w.once.Do(func() { close(w.done) }) }
+
+func (w *flowWatch) Done() <-chan struct{} { return w.done }
+
+func (w *flowWatch) Close() error {
 	w.f.mu.Lock()
-	w.f.onEvent = nil
+	if w.f.watch == w {
+		w.f.onEvent, w.f.watch = nil, nil
+	}
 	w.f.mu.Unlock()
+	w.end()
 	return nil
 }

@@ -22,6 +22,11 @@ type FlowEvent struct {
 type FlowWatch interface {
 	// Close stops the watch. Events stop arriving before it returns.
 	Close() error
+	// Done is closed once events stop: after Close, or when the OS ended
+	// the watch by itself (Windows: the ETW session was stopped from
+	// outside, or its consumer failed). The owner then closes the watch
+	// and may start a new one.
+	Done() <-chan struct{}
 }
 
 // ErrNeedAdmin is returned when the OS lets only administrators watch

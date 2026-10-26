@@ -315,3 +315,80 @@ func TestCurrentServerCountryOnly(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A game in its lobby talks only TCP (chat, matchmaking): the card may
+// show that server, but it must not be saved, because the saved server is
+// proxy mode's UDP endpoint and Analyze's baseline.
+func TestCurrentServerDoesNotSaveTCP(t *testing.T) {
+	fp := newFake(t)
+	ts, srv := newRealServer(t, fp, func(c *Config) {
+		c.Locator, c.ServerLookup = &fakeLocator{}, &fakeLookup{}
+		c.Ping = func(netip.Addr, time.Duration) (time.Duration, error) { return 0, icmp.ErrTimeout }
+	})
+	clock := time.Now()
+	srv.current.now = func() time.Time { return clock }
+	tick := func() {
+		clock = clock.Add(time.Second)
+		srv.scanRunning()
+		srv.current.tick(srv.runningGames())
+	}
+	fp.Games.SetRunning("cs2.exe")
+	fp.Owners.Set(nil, map[uint32]string{4242: "cs2.exe"})
+	tick()
+	local := netip.MustParseAddrPort("192.168.1.20:50124")
+	chat := netip.MustParseAddrPort("203.0.113.70:5223")
+	for range 8 {
+		for range 5 {
+			fp.Flows.Emit(detect.FlowEvent{PID: 4242, Proto: "tcp", Local: local, Remote: chat, Outbound: true})
+		}
+		tick()
+	}
+	var r currentResp
+	call(t, ts, "GET", "/api/games/cs2/current-server", "", &r)
+	if r.State != "live" || r.Server == nil || r.Server.Addr != chat.String() || r.Server.Proto != "tcp" {
+		t.Fatalf("lobby: %+v", r)
+	}
+	if saved := srv.store.Servers("cs2"); len(saved) != 0 {
+		t.Fatalf("a TCP server was saved as the game's server: %v", saved)
+	}
+}
+
+// The OS can end the flow watch by itself (an ETW session stopped from
+// outside). The card must stop saying "on", and the watch comes back.
+func TestCurrentServerWatchEndedByTheOS(t *testing.T) {
+	fp := newFake(t)
+	ts, srv := newRealServer(t, fp, func(c *Config) {
+		c.Locator, c.ServerLookup = &fakeLocator{}, &fakeLookup{}
+		c.Ping = func(netip.Addr, time.Duration) (time.Duration, error) { return 0, icmp.ErrTimeout }
+	})
+	clock := time.Now()
+	srv.current.now = func() time.Time { return clock }
+	tick := func(d time.Duration) {
+		clock = clock.Add(d)
+		srv.scanRunning()
+		srv.current.tick(srv.runningGames())
+	}
+	watch := func() (r currentResp) {
+		call(t, ts, "GET", "/api/games/cs2/current-server", "", &r)
+		return r
+	}
+	fp.Games.SetRunning("cs2.exe")
+	tick(time.Second)
+	if r := watch(); r.Watch.State != "on" || fp.Flows.Starts() != 1 {
+		t.Fatalf("watch %+v, %d starts", r.Watch, fp.Flows.Starts())
+	}
+
+	fp.Flows.End()
+	tick(time.Second)
+	if r := watch(); r.Watch.State != "error" || r.Watch.Message == "" {
+		t.Fatalf("after the OS ended the watch: %+v", r.Watch)
+	}
+	tick(time.Second)
+	if fp.Flows.Starts() != 1 {
+		t.Fatal("the watch must not restart every second")
+	}
+	tick(watchRetryError)
+	if r := watch(); r.Watch.State != "on" || fp.Flows.Starts() != 2 || !fp.Flows.Watching() {
+		t.Fatalf("retry: %+v, %d starts", r.Watch, fp.Flows.Starts())
+	}
+}

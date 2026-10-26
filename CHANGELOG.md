@@ -12,7 +12,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 - "Current server" card on every game page: the server the game is
   really talking to, with its network (AS, ISP), city checked against the
   measured ping, and live ping, jitter and loss, also for games with no
-  catalog entry (#20).
+  catalog entry (#20). Only UDP servers are saved for proxy mode, a flow
+  watch stopped by the OS is retried, and the diagnostics report leaves
+  out map coordinates.
 - Valve server list: Counter-Strike 2, Dota 2 and Deadlock show their Steam
   Datagram Relay data centers with live ping and loss on the game page,
   refreshed in the background and cached for offline starts (#16).

@@ -296,7 +296,8 @@ func (k *KernelNetwork) Watch(onEvent func(FlowEvent)) (FlowWatch, error) {
 		defer close(w.done)
 		handle := w.consumer
 		// Blocks, delivering events on this thread, until the session stops.
-		k.processTrace.Call(uintptr(unsafe.Pointer(&handle)), 1, 0, 0)
+		r, _, _ := k.processTrace.Call(uintptr(unsafe.Pointer(&handle)), 1, 0, 0)
+		w.status.Store(uint32(r))
 	}()
 	return w, nil
 }
@@ -335,7 +336,24 @@ type etwWatch struct {
 	session, consumer uint64
 	onEvent           func(FlowEvent)
 	done              chan struct{}
+	status            atomic.Uint32 // ProcessTrace's result once done is closed
 	once              sync.Once
+}
+
+func (w *etwWatch) Done() <-chan struct{} { return w.done }
+
+// Err says why the watch ended by itself; nil while it runs or when
+// ProcessTrace returned success.
+func (w *etwWatch) Err() error {
+	select {
+	case <-w.done:
+	default:
+		return nil
+	}
+	if r := w.status.Load(); r != 0 {
+		return fmt.Errorf("ETW: the flow session ended: %w", windows.Errno(r))
+	}
+	return nil
 }
 
 func (w *etwWatch) Close() error {
