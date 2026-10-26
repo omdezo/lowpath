@@ -5,10 +5,11 @@
 // trace (MTR) finds and measures every hop.
 //
 // Windows uses IcmpSendEcho, IcmpSendEcho2Ex and Icmp6SendEcho2 (no admin
-// rights needed). Other platforms use a raw ICMP socket when running as
-// root, else an unprivileged ping socket for Ping. PingTTL needs the raw
-// socket there: a ping socket never returns the routers' "time exceeded"
-// replies as messages (Linux only queues them as socket errors).
+// rights needed). Other platforms use a raw ICMP socket when the process
+// may open one (root, or CAP_NET_RAW on Linux), else the unprivileged ICMP
+// socket the OS offers: on Linux a ping socket, which hands PingTTL the
+// routers' "time exceeded" replies through its error queue, on macOS a
+// datagram ICMP socket, which receives them as messages.
 package icmp
 
 import (
