@@ -95,3 +95,58 @@ func TestKernelNetworkWatch(t *testing.T) {
 		}
 	}
 }
+
+// Reset stops a session left behind by name, once, and never the session
+// of an open watch. Unelevated, the session can't be controlled: Reset says
+// ErrNeedAdmin, or nothing when Windows reports no such session first.
+func TestKernelNetworkReset(t *testing.T) {
+	k := NewKernelNetwork()
+	k.name = "Lowpath Flows Reset Test"
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		stopped, err := k.Reset()
+		if stopped || (err != nil && !errors.Is(err, ErrNeedAdmin)) {
+			t.Fatalf("unelevated Reset = %v, %v; want false and nil or ErrNeedAdmin", stopped, err)
+		}
+		t.Logf("unelevated Reset: %v", err)
+		return
+	}
+
+	// No session: nothing to stop.
+	if stopped, err := k.Reset(); stopped || err != nil {
+		t.Fatalf("Reset without a session = %v, %v", stopped, err)
+	}
+
+	// A session left behind: started and never stopped, like a crashed
+	// Lowpath's.
+	props, err := k.properties()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, _ := windows.UTF16PtrFromString(k.name)
+	var session uint64
+	if r, _, _ := k.startTrace.Call(uintptr(unsafe.Pointer(&session)), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(props))); r != 0 {
+		t.Fatalf("start a leftover session: %v", windows.Errno(r))
+	}
+	defer k.stop(0)
+	if stopped, err := k.Reset(); !stopped || err != nil {
+		t.Fatalf("Reset with a leftover = %v, %v; want true", stopped, err)
+	}
+	if stopped, err := k.Reset(); stopped || err != nil {
+		t.Fatalf("second Reset = %v, %v; want false", stopped, err)
+	}
+
+	// Our own open watch stays open.
+	w, err := k.Watch(func(FlowEvent) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if stopped, err := k.Reset(); stopped || err != nil {
+		t.Fatalf("Reset during a watch = %v, %v; want false", stopped, err)
+	}
+	select {
+	case <-w.Done():
+		t.Fatal("Reset stopped the open watch")
+	case <-time.After(2 * etwFlushSeconds * time.Second):
+	}
+}

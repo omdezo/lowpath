@@ -41,5 +41,7 @@ func newRealServer(t *testing.T, fp *fakeplatform.Fake, opts ...func(*Config)) (
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() { srv.Close(); ts.Close() })
+	// Tests tick right away; the first watch waits for start-up's reset.
+	<-srv.current.resetDone
 	return ts, srv
 }

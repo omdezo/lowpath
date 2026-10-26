@@ -80,6 +80,14 @@ type FlowWatcher interface {
 	// the OS wants administrator rights, or errors.ErrUnsupported on a
 	// system without a watcher yet.
 	Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
+	// Reset stops a watch that an earlier Lowpath left running because it
+	// didn't exit cleanly (on Windows a real-time ETW session outlives its
+	// process). The app calls it once at start-up, before the first Watch.
+	// It reports whether there was one to stop; none, or a watch this
+	// process has open, is (false, nil). Missing rights give an error
+	// matching detect.ErrNeedAdmin. Systems whose watch ends with its
+	// process return (false, nil).
+	Reset() (bool, error)
 }
 
 // SystemInventory reads what else on the PC handles network traffic: running

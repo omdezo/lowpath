@@ -78,6 +78,11 @@ type currentServers struct {
 	learnMu  sync.Mutex
 	learners map[string]*engine.FlowLearner
 
+	// resetDone is closed once start-up's flows.Reset has returned. No
+	// watch opens before: Reset may wait on the OS, and tick, which holds
+	// mu, mustn't wait with it.
+	resetDone chan struct{}
+
 	mu         sync.Mutex
 	watch      detect.FlowWatch
 	watchErr   error
@@ -91,14 +96,44 @@ type currentServers struct {
 func newCurrentServers(flows platform.FlowWatcher, owners platform.OwnerResolver, lookup diag.NetworkLookup, locator Locator, ping diag.PingFunc, store *Store, life context.Context, log *slog.Logger) *currentServers {
 	c := &currentServers{
 		flows: flows, owners: owners, locator: locator, store: store, log: log, now: time.Now, life: life,
-		nets:     newNetLookups(lookup, life),
-		pinger:   catalog.NewLivePinger(icmpPinger{ping}, catalog.LiveOptions{}),
-		self:     uint32(os.Getpid()),
-		learners: map[string]*engine.FlowLearner{},
+		resetDone: make(chan struct{}),
+		nets:      newNetLookups(lookup, life),
+		pinger:    catalog.NewLivePinger(icmpPinger{ping}, catalog.LiveOptions{}),
+		self:      uint32(os.Getpid()),
+		learners:  map[string]*engine.FlowLearner{},
 	}
 	empty := map[uint32]string{}
 	c.pids.Store(&empty)
+	go c.reset()
 	return c
+}
+
+// reset stops a flow watch an earlier Lowpath left running when it crashed
+// (on Windows an ETW session, enabled and buffering, until something stops
+// it). It runs once, in the background, so start-up never waits on it.
+func (c *currentServers) reset() {
+	defer close(c.resetDone)
+	stopped, err := c.flows.Reset()
+	switch {
+	case stopped:
+		c.log.Info("stopped the flow watch an earlier run left behind")
+	case errors.Is(err, detect.ErrNeedAdmin):
+		// Without the rights to stop it there are none to start one
+		// either; an elevated start cleans up.
+		c.log.Debug("can't look for a left-behind flow watch without administrator rights")
+	case err != nil:
+		c.log.Warn("stop a left-behind flow watch", "err", err)
+	}
+}
+
+// resetting reports whether start-up's reset is still running.
+func (c *currentServers) resetting() bool {
+	select {
+	case <-c.resetDone:
+		return false
+	default:
+		return true
+	}
 }
 
 // tick runs once a second with the games running now (id → process names):
@@ -125,7 +160,7 @@ func (c *currentServers) tick(running map[string][]string) {
 	}
 	if len(running) > 0 {
 		c.quietSince = time.Time{}
-		if c.watch == nil && !now.Before(c.retryAt) {
+		if c.watch == nil && !now.Before(c.retryAt) && !c.resetting() {
 			c.startWatchLocked(now)
 		}
 		if c.watch != nil && now.Sub(c.pidsAt) >= pidRefresh {

@@ -641,6 +641,11 @@ type Flows struct {
 	onEvent func(detect.FlowEvent)
 	watch   *flowWatch
 	starts  int
+
+	resets    int
+	resetErr  error
+	leftover  bool          // a watch an earlier run left behind, for Reset
+	resetGate chan struct{} // Reset waits on it while set
 }
 
 // SetErr makes Watch fail with err (detect.ErrNeedAdmin to play an
@@ -680,6 +685,53 @@ func (f *Flows) Watching() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.onE
 
 // Starts counts the watches opened so far.
 func (f *Flows) Starts() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
+
+// SetLeftover plays a watch an earlier run left behind (a crashed Lowpath's
+// ETW session): the next Reset stops it and reports true.
+func (f *Flows) SetLeftover(on bool) { f.mu.Lock(); f.leftover = on; f.mu.Unlock() }
+
+// Leftover reports whether the left-behind watch is still there.
+func (f *Flows) Leftover() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.leftover }
+
+// SetResetErr makes Reset fail with err (detect.ErrNeedAdmin to play an
+// unelevated Windows; nil: work again).
+func (f *Flows) SetResetErr(err error) { f.mu.Lock(); f.resetErr = err; f.mu.Unlock() }
+
+// HoldReset makes Reset wait, as a slow OS would, until the returned
+// release is called.
+func (f *Flows) HoldReset() (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.resetGate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
+}
+
+// Resets counts the Reset calls so far.
+func (f *Flows) Resets() int { f.mu.Lock(); defer f.mu.Unlock(); return f.resets }
+
+// Reset stops the left-behind watch, like the ETW watcher: never the open
+// one.
+func (f *Flows) Reset() (bool, error) {
+	f.mu.Lock()
+	gate := f.resetGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resets++
+	switch {
+	case f.resetErr != nil:
+		return false, f.resetErr
+	case f.onEvent != nil || !f.leftover:
+		return false, nil
+	}
+	f.leftover = false
+	return true, nil
+}
 
 // Emit delivers ev to the open watch, as the OS would; false when none is
 // open.
