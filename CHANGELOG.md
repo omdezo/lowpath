@@ -22,7 +22,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   mode is on (Settings → Optimization, on by default), applied again after
   a reconnect and reverted when the boost ends or Lowpath closes. The
   verdict counts a weak signal, 2.4 GHz or a busy channel against the Wi-Fi,
-  and the report gains a Wi-Fi line. Linux shows the signal strength (#11).
+  the route bar's Home part says *Watch* when the router pings are clean
+  but the signal is weak, and the report gains a Wi-Fi line. Linux shows
+  the signal strength (#11).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements

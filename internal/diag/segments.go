@@ -75,6 +75,14 @@ func homeSegment(v *view, checks map[string]Check) Segment {
 			s.Summary = fmt.Sprintf("Your router answers without loss, but %d %s took %d ms or more.", g.Spikes, plural(g.Spikes, "reply", "replies"), spikeMS)
 		}
 	}
+	if s.Status == SegmentGood || s.Status == SegmentWarn {
+		// Clean router pings: the radio link loses nothing now, but a weak
+		// or crowded one is the first part to fail, so the bar doesn't call
+		// Home OK while the Wi-Fi check's facts say the signal is weak.
+		if weak, known, fact := wifiSignal(v.ev.WiFi); known && weak && v.linkKind() == LinkWiFi {
+			s.Status, s.Summary = SegmentWarn, s.Summary+" "+fact
+		}
+	}
 	if line.Status == CheckFound {
 		// A full line queues in the home router: the home end of the route.
 		s.Status, s.Summary = SegmentBad, line.Summary

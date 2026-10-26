@@ -823,7 +823,8 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   measured), what measured it and a summary, and `blamed` on the verdict's
   segment. Home: router pings (median, loss; loss null when the router
   limits replies), `bad` when the home or line check found its problem,
-  `warn` for spikes without loss. ISP: a route trace on this connection
+  `warn` for spikes without loss or, on Wi-Fi, clean pings over a weak or
+  crowded signal (the home check stays clear). ISP: a route trace on this connection
   (time from this PC to the destination; the loss the ISP check cites when
   loss starts past home, else what persists from the first hop past home,
   null when loss starts at home),
