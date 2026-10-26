@@ -75,17 +75,19 @@ func TestCallGateNoCallAfterRelease(t *testing.T) {
 	for round := range 200 {
 		g := newCallGate()
 		var released atomic.Bool
-		var late, calls atomic.Int64
+		var inside, late, calls atomic.Int64
 		var wg sync.WaitGroup
 		for range 8 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for g.enter() {
+					inside.Add(1)
 					calls.Add(1)
 					if released.Load() {
 						late.Add(1)
 					}
+					inside.Add(-1)
 					g.exit()
 				}
 			}()
@@ -96,6 +98,9 @@ func TestCallGateNoCallAfterRelease(t *testing.T) {
 		g.shut()
 		if left := g.wait(time.Hour); left != 0 {
 			t.Fatalf("round %d: wait = %d", round, left)
+		}
+		if n := inside.Load(); n != 0 {
+			t.Fatalf("round %d: wait returned with %d calls between enter and exit", round, n)
 		}
 		released.Store(true)
 		wg.Wait()
