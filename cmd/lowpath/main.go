@@ -49,6 +49,8 @@ type options struct {
 	demo, headless, open   bool
 	noElevate, dataFromArg bool
 	waitPID                int
+	traceCount             int
+	traceInterval          time.Duration
 }
 
 func main() {
@@ -62,6 +64,8 @@ func main() {
 	flag.BoolVar(&o.open, "open", false, "open the UI in the default browser instead of a window")
 	flag.BoolVar(&o.noElevate, "no-elevate", false, "don't ask for administrator rights at start (route mode needs them)")
 	flag.StringVar(&o.bloatServer, "bloat-server", "", "load server for the bufferbloat test (default "+diag.DefaultLoadURL+"); it must answer GET /__down?bytes=N and POST /__up")
+	flag.IntVar(&o.traceCount, "trace-count", 0, "probes per hop in a route trace (default 200; for tests)")
+	flag.DurationVar(&o.traceInterval, "trace-interval", 0, "time between probes to one hop in a route trace (default 1s; for tests)")
 	flag.IntVar(&o.waitPID, "wait-pid", 0, "wait for this process to exit before starting (used when restarting elevated)")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
@@ -220,7 +224,8 @@ func buildServer(ctx context.Context, o options, plat *platform.Platform, logger
 		Cache:  catalog.NewDirCache(filepath.Join(o.data, "catalog")),
 		Log:    logger.With("component", "catalog"),
 	})
-	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art")}
+	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: dist, Log: logger, Quit: quit, ArtDir: filepath.Join(o.data, "art"),
+		TraceCount: o.traceCount, TraceInterval: o.traceInterval}
 	if o.bloatServer != "" {
 		l, err := diag.NewHTTPLoader(diag.HTTPLoaderConfig{BaseURL: o.bloatServer, UserAgent: "Lowpath/" + app.Version + " (bufferbloat test)"})
 		if err != nil {

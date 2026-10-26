@@ -294,6 +294,9 @@ func (s *Server) handleStartBloat(w http.ResponseWriter, r *http.Request) {
 	case busy:
 		writeErr(w, 409, "session_active", errBloatSession)
 		return
+	case s.trace.isRunning():
+		writeErr(w, 409, "trace_running", errBloatTrace)
+		return
 	}
 	if err := s.bloat.start(s.lifetime); err != nil {
 		writeErr(w, 409, "bloat_running", err)
