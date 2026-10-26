@@ -177,7 +177,9 @@ func checked(file string) bool {
 		ext := path.Ext(file)
 		return (ext == ".mjs" || ext == ".js" || ext == ".ts" || ext == ".json" || ext == ".md") &&
 			!strings.HasSuffix(file, "package-lock.json")
-	case strings.HasPrefix(file, "docs/"):
+	case strings.HasPrefix(file, "docs/"), !strings.Contains(file, "/"):
+		// docs/ and the top-level README, CONTRIBUTING, SECURITY and
+		// CHANGELOG.
 		return path.Ext(file) == ".md"
 	}
 	return false

@@ -77,6 +77,8 @@ func TestScan(t *testing.T) {
 	write("docs/guide.md", "Ping "+pastPriv.String()+" to see.\n")
 	write("internal/capture/divert_windows_test.go", "{dst: \""+pastPriv.String()+":9000\"}\n") // allowed here only
 	write("e2e/node_modules/pkg/index.js", "\""+realV4.String()+"\"\n")
+	write("README.md", "Try "+realV4.String()+"\n")
+	write("notes.txt", realV4.String()+"\n") // not a doc
 	list, err := walkFiles(root)
 	if err != nil {
 		t.Fatal(err)
@@ -85,8 +87,9 @@ func TestScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].file != "docs/guide.md" || got[0].addr != pastPriv ||
-		got[1].file != "internal/x/x_test.go" || got[1].line != 2 || got[1].addr != realV4 {
+	if len(got) != 3 || got[0].file != "README.md" || got[0].addr != realV4 ||
+		got[1].file != "docs/guide.md" || got[1].addr != pastPriv ||
+		got[2].file != "internal/x/x_test.go" || got[2].line != 2 || got[2].addr != realV4 {
 		t.Fatalf("found %+v", got)
 	}
 }
