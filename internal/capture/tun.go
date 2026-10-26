@@ -97,10 +97,23 @@ type tunRoute struct {
 	uid     uint32
 }
 
-// tunDevice is the packet loop's device, plus the kernel's fast path.
+// tunDevice is the packet loop's device, plus the kernel's fast path and
+// the check that its routing is still there.
 type tunDevice interface {
 	device
 	directSetter
+	routeKeeper
+}
+
+// routeKeeper is a device that packets reach through routing other programs
+// can change. Capture.maintain calls keepRoute every second.
+type routeKeeper interface {
+	// keepRoute puts back the parts of the routing that another program
+	// removed and names them ("routing rule"). An error matching
+	// ErrRouteRemoved means a part is gone and couldn't be put back; any
+	// other error means the check itself failed, and the next one tries
+	// again.
+	keepRoute() (fixed []string, err error)
 }
 
 // directSetter keeps a kernel-side list of local UDP ports whose packets go

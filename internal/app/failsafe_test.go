@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,30 @@ func TestCaptureFailOpenEndsSession(t *testing.T) {
 		t.Fatalf("after a new boost: failsafe %+v session %+v", lv.Failsafe, lv.Session)
 	}
 	srv.stopSession()
+}
+
+// The banner names the cause: routing another program removed is not
+// Lowpath's packet handling failing.
+func TestFailOpenMessage(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New("capture stopped: a packet was stuck in the handler for 500ms"), "packet handling for Example Game stopped working"},
+		{fmt.Errorf("capture stopped: another program keeps removing the routing rule: %w", capture.ErrRouteRemoved), "another program (a network manager, VPN or firewall) removed the routing that sends Example Game"},
+	} {
+		if got := failOpenMessage(tc.err, "Example Game"); !strings.Contains(got, tc.want) || !strings.Contains(got, "normal connection") {
+			t.Errorf("%v: %q, want %q", tc.err, got, tc.want)
+		}
+	}
+	// End to end: the session ends with that message and the reason.
+	fp := newFake(t)
+	srv, c, _ := startRouteSession(t, fp)
+	c.Fail(fmt.Errorf("capture stopped: another program removed the routing rule and putting it back failed: %w", capture.ErrRouteRemoved))
+	lv := waitLive(t, srv, func(lv liveView) bool { return lv.Session == nil })
+	if f := lv.Failsafe; f == nil || f.Kind != "stopped" || !strings.Contains(f.Message, "removed the routing") || !strings.Contains(f.Detail, "putting it back failed") {
+		t.Fatalf("failsafe = %+v", f)
+	}
 }
 
 // A plain Stop is not a failure.

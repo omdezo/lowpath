@@ -425,6 +425,23 @@ relay reply ──Inject──▶ write IPv4+UDP into lowpathN ──▶ kernel 
   `Recover` (and every Start) removes the rule and the table; without the
   rights it reports success only when no `lowpath` device is left. The
   watchdog works as on Windows.
+- **Routing other programs remove.** Every second (`Capture.maintain`)
+  the device dumps the IPv4 rules and the `ip` tables and puts back what
+  is missing: the rule (the device, its route and table 19536 are still
+  there, so this is Start's last step), or the table with the direct
+  ports it held. systemd-networkd deletes every rule its `.network` files
+  don't declare whenever it configures a link
+  (`ManageForeignRoutingPolicyRules=`, on by default since systemd 249),
+  and VPN scripts flush rules; `nft flush ruleset` passes an owned table
+  by but deletes an unowned one (kernels before 5.12). A table of that
+  name with another handle was made again by someone else and counts as
+  missing (kernels before 4.16 report no handle; the name is all that is
+  checked there). Until then the game's packets take the normal route
+  (fail-open). Each repair is logged and counted in `Stats.RouteRepairs`
+  (*Route fixes* in the live view); when a part can't be put back, or was
+  put back more than 5 times within a minute, capture stops with an error
+  matching `capture.ErrRouteRemoved`, and the app's fail-open notice says
+  another program removed the routing.
 
 `internal/capture/tun_linux_test.go` checks all of it as root, without
 touching the machine's network: the test re-runs itself in a new network
@@ -437,7 +454,12 @@ of the capturing process as root, as an ordinary user with only the two
 capabilities and with an unowned table as kernels before 5.12 make it
 (direct again within 60 ms each time; the owned table is gone with the
 process, the unowned one stays and diverts nothing), `Recover`, a user
-without rights,
+without rights, the rule deleted from outside mid-capture (relayed again
+within about 1 s, as root and as the user with two capabilities), `nft
+flush ruleset` (an owned table stays; an unowned one is made again within
+about 1 s, also when an empty table of that name took its place, and when
+another program's socket takes its name in the same transaction, capture
+stops with `ErrRouteRemoved` and leaves nothing),
 and the acceptance test: the real `lpcheck` (found by name through `/proc`)
 routed by the engine through the relay reports the relay's address, while a
 copy under another name reports the client's.

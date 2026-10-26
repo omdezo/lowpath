@@ -6,8 +6,11 @@ import (
 	"net/netip"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"lowpath/internal/divert"
 	"lowpath/internal/netlink"
@@ -41,6 +44,30 @@ type fakeTUNDev struct {
 	*fakeDev
 	mu      sync.Mutex
 	directs [][]uint16
+	checks  []routeCheck // what the next keepRoute calls find, in order
+}
+
+// routeCheck is what one keepRoute call reports.
+type routeCheck struct {
+	fixed []string
+	err   error
+}
+
+func (d *fakeTUNDev) keepRoute() ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.checks) == 0 {
+		return nil, nil // all there
+	}
+	c := d.checks[0]
+	d.checks = d.checks[1:]
+	return c.fixed, c.err
+}
+
+func (d *fakeTUNDev) script(checks ...routeCheck) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.checks = append(d.checks, checks...)
 }
 
 func (d *fakeTUNDev) setDirect(ports []uint16) error {
@@ -395,5 +422,98 @@ func TestTUNOnOtherSystems(t *testing.T) {
 		if err := b.Recover(Marker{Backend: "tun"}); err != nil {
 			t.Fatalf("Recover where there is nothing to undo: %v", err)
 		}
+	}
+}
+
+// keeper replays routeChecks for Capture.keepRoute.
+type keeper []routeCheck
+
+func (k *keeper) keepRoute() ([]string, error) {
+	c := (*k)[0]
+	*k = (*k)[1:]
+	return c.fixed, c.err
+}
+
+func TestKeepRoute(t *testing.T) {
+	rule := routeCheck{fixed: []string{"routing rule"}}
+	lost := routeCheck{err: &routeLost{part: "routing rule", err: syscall.ENOBUFS}}
+	every := func(n int, c routeCheck) keeper {
+		k := make(keeper, n)
+		for i := range k {
+			k[i] = c
+		}
+		return k
+	}
+	for _, tc := range []struct {
+		name    string
+		checks  keeper
+		apart   time.Duration // between checks
+		repairs uint64
+		errs    uint64
+		stopped string // in Err when capture stops; "" = keeps running
+	}{
+		{name: "all there", checks: every(3, routeCheck{}), apart: time.Second},
+		{name: "the check failed", checks: keeper{{err: errors.New("netlink: receive: timed out")}, {}}, apart: time.Second, errs: 1},
+		{name: "put back", checks: keeper{rule, {}, {fixed: []string{"nftables table", "routing rule"}}}, apart: time.Second, repairs: 2},
+		{name: "put back, then the check failed", checks: keeper{{fixed: []string{"nftables table"}, err: errors.New("dump failed")}}, apart: time.Second, repairs: 1, errs: 1},
+		{name: "couldn't put it back", checks: keeper{rule, lost}, apart: time.Second, repairs: 1, errs: 1, stopped: "removed the routing rule and putting it back failed"},
+		{name: "keeps being removed", checks: every(maxRouteRepairs+1, rule), apart: 5 * time.Second, repairs: maxRouteRepairs + 1, errs: 1, stopped: "keeps removing the routing rule (6 times"},
+		{name: "now and then", checks: every(3*maxRouteRepairs, rule), apart: routeRepairWindow / maxRouteRepairs, repairs: 3 * maxRouteRepairs},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			now := time.Now()
+			running := true
+			for k := tc.checks; len(k) > 0 && running; now = now.Add(tc.apart) {
+				running = h.c.keepRoute(&k, now)
+			}
+			st := h.c.Stats()
+			if st.RouteRepairs != tc.repairs || st.Errors != tc.errs {
+				t.Errorf("stats %+v, want %d repairs and %d errors", st, tc.repairs, tc.errs)
+			}
+			if tc.stopped == "" {
+				if !running || h.c.Err() != nil {
+					t.Fatalf("stopped: %v", h.c.Err())
+				}
+				h.c.Close()
+				return
+			}
+			if running {
+				t.Fatal("still running")
+			}
+			waitDone(t, h.c, time.Second)
+			if err := h.c.Err(); !errors.Is(err, ErrRouteRemoved) || !strings.Contains(err.Error(), tc.stopped) {
+				t.Fatalf("Err = %v, want ErrRouteRemoved with %q", err, tc.stopped)
+			}
+			if !strings.Contains(st.LastError, tc.stopped) {
+				t.Errorf("last error %q", st.LastError)
+			}
+		})
+	}
+}
+
+// Through Start: the packet loop asks the device every second, and a part
+// it couldn't put back ends the session with the reason.
+func TestTUNKeepsRoute(t *testing.T) {
+	sys := &fakeTUNSystem{}
+	s, err := tunUnderTest(sys, newFakeOS()).Start(Config{
+		Processes: []string{"game"},
+		OnPacket:  func(_, _ netip.AddrPort, _ []byte) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sys.dev.script(routeCheck{fixed: []string{"routing rule"}})
+	waitFor(t, func() bool { return s.Stats().RouteRepairs == 1 })
+	select {
+	case <-s.Done():
+		t.Fatalf("stopped after putting the rule back: %v", s.Err())
+	default:
+	}
+	sys.dev.script(routeCheck{err: &routeLost{part: "nftables table", err: syscall.EPERM}})
+	waitDone(t, s.(*Capture), 3*time.Second)
+	if !errors.Is(s.Err(), ErrRouteRemoved) || !sys.dev.closed.Load() {
+		t.Fatalf("Err = %v, device closed %v", s.Err(), sys.dev.closed.Load())
 	}
 }

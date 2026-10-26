@@ -40,6 +40,10 @@ func TestRuleRoundTrip(t *testing.T) {
 	if _, ok := ParseRule(netlink.Reply{Type: typeNewRule, Data: append([]byte{10}, add.Data[1:]...)}); ok {
 		t.Error("an IPv6 rule parsed as IPv4")
 	}
+	// The dump asks for IPv4 rules only, not every family's.
+	if l := ListRules(); l.Type != typeGetRule || len(l.Data) != 12 || l.Data[0] != afInet {
+		t.Errorf("ListRules = %+v", l)
+	}
 }
 
 func TestRoute(t *testing.T) {
