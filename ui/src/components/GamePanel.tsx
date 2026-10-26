@@ -113,7 +113,8 @@ export function GamePanel(props: Props) {
         const list = r.routes ?? [];
         setRoutes(list);
         if (live.session?.game_id !== game.id) setChoice(game.smart ? "smart" : `region:${list[0]?.continent ?? ""}`);
-        const fresh = r.analysis && Date.now() - new Date(r.analysis.at).getTime() < 60_000;
+        // One taken during the bufferbloat test is measured again.
+        const fresh = r.analysis && !r.analysis.loaded && Date.now() - new Date(r.analysis.at).getTime() < 60_000;
         if (fresh) setAnalysis(r.analysis!);
         else if (settings.auto_analyze !== false && game.routable && list.length > 0 && live.session?.game_id !== game.id) analyze();
       })
@@ -489,6 +490,12 @@ export function GamePanel(props: Props) {
                     <RouteRow key={r.id} title={r.label} desc={[r.region, r.continent].filter(Boolean).join(" · ")} stats={statsFor(r.id)} loading={analyzing} active={statsFor(r.id)?.active} />
                   ))}
                   {routes.length === 0 && <div className="empty-list">No routes yet.</div>}
+                  {!snap && analysis?.loaded && (
+                    <div className="muted" role="note" style={{ fontSize: 12, padding: "6px 2px 0" }}>
+                      Measured while the bufferbloat test was filling your connection, so these pings are higher than normal. Re-test routes for normal
+                      numbers.
+                    </div>
+                  )}
                 </div>
 
                 <div className="facts">

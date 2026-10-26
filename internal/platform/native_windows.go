@@ -33,5 +33,8 @@ func Native() *Platform {
 		// The window talks only to the installed service's process.
 		ServiceAPI: NewPipe(PipeName, service.PID),
 		WiFi:       diag.NewWLAN(),
+		// No per-connection byte counters without administrator rights
+		// (see diag.newPlatformConnStats).
+		Conns: diag.NewConnStats(),
 	}
 }

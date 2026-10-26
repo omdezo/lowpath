@@ -38,6 +38,19 @@ func TestNativeIsComplete(t *testing.T) {
 			t.Errorf("Wi-Fi tuning on darwin: %v, want errors.ErrUnsupported", err)
 		}
 	}
+	// Per-connection counters: Linux reads them without rights (sock_diag);
+	// Windows and macOS say they can't instead of reporting nothing.
+	switch conns, err := p.Conns.TCPConns(); runtime.GOOS {
+	case "linux":
+		if err != nil && !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("TCP connections on linux: %v", err)
+		}
+		t.Logf("TCP connections on linux: %d (%v)", len(conns), err)
+	default:
+		if !errors.Is(err, errors.ErrUnsupported) || conns != nil {
+			t.Errorf("TCP connections on %s: %d, %v; want errors.ErrUnsupported", runtime.GOOS, len(conns), err)
+		}
+	}
 	if runtime.GOOS == "windows" {
 		return
 	}

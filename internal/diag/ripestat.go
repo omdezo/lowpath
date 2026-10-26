@@ -156,8 +156,11 @@ type transientError struct{ error }
 
 func (e transientError) Unwrap() error { return e.error }
 
-// transient reports whether err is a timeout or a transientError.
-func transient(err error) bool {
+// Transient reports whether err is a timeout or a transientError: a failure
+// that says nothing about the address, so asking again in a few seconds
+// may well work. Callers that keep results use it to keep such a failure
+// only briefly.
+func Transient(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -262,7 +265,7 @@ func (r *RIPEstat) hedged(ctx context.Context, name, resource string) (json.RawM
 			if firstErr == nil {
 				firstErr = got.err
 			}
-			if !hedgedYet && transient(got.err) {
+			if !hedgedYet && Transient(got.err) {
 				hedge()
 			}
 			if pending == 0 {
@@ -422,7 +425,7 @@ func (r *RIPEstat) LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo
 		partial = append(partial, "city unknown ("+describe(geoErr)+")")
 	}
 	info.Partial = strings.Join(partial, "; ")
-	info.transient = transient(asErr) || transient(geoErr)
+	info.transient = Transient(asErr) || Transient(geoErr)
 	return info, nil
 }
 

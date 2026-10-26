@@ -566,10 +566,12 @@ func (p icmpPinger) Ping(dst netip.Addr, timeout time.Duration) (time.Duration, 
 // --- network lookups, never blocking the card ------------------------------
 
 // netLookups looks server addresses up in the background: the card shows
-// "looking up" at once and the answer on its next poll.
+// "looking up" at once and the answer on its next poll. While an answer is
+// looked up again, the card keeps showing the last one.
 type netLookups struct {
 	lookup diag.NetworkLookup
 	life   context.Context
+	now    func() time.Time
 	mu     sync.Mutex
 	m      map[netip.Addr]*netEntry
 }
@@ -577,64 +579,114 @@ type netLookups struct {
 type netEntry struct {
 	info    *diag.NetworkInfo
 	note    string
-	done    bool
+	running bool // a lookup is in flight
 	expires time.Time
 	added   time.Time
+	// streak counts the lookups in a row spoiled by a timeout or a busy
+	// registry. Each one waits twice as long before the next, up to
+	// netLookupErrTTL, so a registry that stays down is not asked every
+	// few seconds for as long as the card is open.
+	streak int
 }
 
 const (
 	netLookupTTL    = time.Hour // the cache under it keeps answers 24 h
 	netLookupErrTTL = time.Minute
-	netLookupMax    = 64
+	// netLookupTransientTTL keeps a failure, or an answer with a missing
+	// part, that a timeout or a busy registry caused: it says nothing
+	// about the address and the next lookup usually works. The cache
+	// under it forgets these just as fast, so the next lookup reaches the
+	// registry.
+	netLookupTransientTTL = diag.DefaultTransientTTL
+	netLookupMax          = 64
 )
 
 func newNetLookups(l diag.NetworkLookup, life context.Context) *netLookups {
-	return &netLookups{lookup: l, life: life, m: map[netip.Addr]*netEntry{}}
+	return &netLookups{lookup: l, life: life, now: time.Now, m: map[netip.Addr]*netEntry{}}
 }
 
+// get returns what is known about a, and whether a lookup is running. It
+// starts one when a is new or its answer has expired.
 func (n *netLookups) get(a netip.Addr) (*diag.NetworkInfo, string, bool) {
-	now := time.Now()
+	now := n.now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	e := n.m[a]
-	if e != nil && (!e.done || now.Before(e.expires)) {
-		if !e.done {
-			return nil, "", true
-		}
-		return e.info, e.note, false
+	if e != nil && (e.running || now.Before(e.expires)) {
+		return e.info, e.note, e.running
 	}
-	if e == nil && len(n.m) >= netLookupMax {
-		var oldest netip.Addr
-		var at time.Time
-		for k, v := range n.m {
-			if v.done && (at.IsZero() || v.added.Before(at)) {
-				oldest, at = k, v.added
+	if e == nil {
+		if len(n.m) >= netLookupMax {
+			var oldest netip.Addr
+			var at time.Time
+			for k, v := range n.m {
+				if !v.running && (at.IsZero() || v.added.Before(at)) {
+					oldest, at = k, v.added
+				}
 			}
+			delete(n.m, oldest)
 		}
-		delete(n.m, oldest)
+		e = &netEntry{added: now}
+		n.m[a] = e
 	}
-	n.m[a] = &netEntry{added: now}
-	go n.run(a)
-	return nil, "", true
+	e.running = true
+	go n.run(a, e)
+	return e.info, e.note, true
 }
 
-func (n *netLookups) run(a netip.Addr) {
+// run looks a up and stores the answer in e, which get no longer evicts
+// or replaces while e.running is set.
+func (n *netLookups) run(a netip.Addr, e *netEntry) {
 	ctx, cancel := context.WithTimeout(n.life, 12*time.Second)
 	defer cancel()
 	info, err := n.lookup.LookupNetwork(ctx, a)
-	e := &netEntry{done: true, added: time.Now(), expires: time.Now().Add(netLookupTTL)}
-	if err != nil {
-		e.expires = time.Now().Add(netLookupErrTTL)
+	now := n.now()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	e.running, e.added = false, now
+	transient := diag.Transient(err) || (err == nil && info.Transient())
+	if transient {
+		e.streak++
+		e.expires = now.Add(transientBackoff(e.streak))
+	} else {
+		e.streak = 0
+		e.expires = now.Add(netLookupTTL)
+	}
+	switch {
+	case transient && e.info != nil && (err != nil || sameNetwork(e.info, &info)):
+		// What an earlier lookup found is still right: keep showing it
+		// rather than a timeout, or than the same network with a part
+		// lost to one.
+	case err != nil:
+		e.info = nil
 		e.note = "Network unknown: " + err.Error()
 		if errors.Is(err, context.DeadlineExceeded) {
 			e.note = "Network unknown: the lookup took too long."
 		}
-	} else {
-		e.info = &info
+		if !transient {
+			e.expires = now.Add(netLookupErrTTL)
+		}
+	default:
+		e.info, e.note = &info, ""
 	}
-	n.mu.Lock()
-	n.m[a] = e
-	n.mu.Unlock()
+}
+
+// sameNetwork reports whether partial, an answer with a part lost to a
+// timeout, names the network already known, and known lacks no part for
+// such a reason.
+func sameNetwork(known, partial *diag.NetworkInfo) bool {
+	return !known.Transient() && known.ASN == partial.ASN && known.Prefix == partial.Prefix
+}
+
+// transientBackoff is how long the streak-th spoiled lookup in a row is
+// kept: netLookupTransientTTL, doubled for each one before it, at most
+// netLookupErrTTL.
+func transientBackoff(streak int) time.Duration {
+	d := netLookupTransientTTL
+	for i := 1; i < streak && d < netLookupErrTTL; i++ {
+		d *= 2
+	}
+	return min(d, netLookupErrTTL)
 }
 
 // --- HTTP -----------------------------------------------------------------

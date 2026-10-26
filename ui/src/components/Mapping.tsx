@@ -47,7 +47,7 @@ export function Mapping({ onDone }: { onDone: (m: MappingResult | null) => void 
           {failed
             ? "Couldn't reach the relays. You can still browse; try Analyze later."
             : result
-              ? `${result.relays} relays probed · best: ${result.best} (${ms(result.best_ms)} ms)`
+              ? `${result.relays} relays probed · best: ${result.best} (${ms(result.best_ms)} ms${result.loaded ? ", measured during the bufferbloat test" : ""})`
               : "Measuring latency to every relay near you"}
         </div>
         <div className="progress" aria-label="Route mapping progress" role="progressbar" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}>
