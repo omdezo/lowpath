@@ -61,6 +61,7 @@ export const api = {
   apply: (game_id: string, mode: RouteMode, region?: string, route_id?: string) =>
     call<Live>("POST", "/apply", { game_id, mode, region, route_id }),
   stop: () => call<Live>("POST", "/stop"),
+  dismissFailsafe: () => call<Live>("DELETE", "/failsafe"),
   saveSettings: (s: Settings) => call<Settings>("PUT", "/settings", s),
   impair: (path_id: string, action: "degrade" | "outage" | "restore") =>
     call<{ ok: boolean }>("POST", "/demo/impair", { path_id, action }),

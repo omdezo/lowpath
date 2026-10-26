@@ -273,6 +273,14 @@ async function main() {
     await shot(page, "failsafe-recovered", "Start-up cleanup: the last run closed mid-boost; the game went back to the normal connection");
     await notice.getByRole("button", { name: "Dismiss" }).click().catch(() => {});
     check("The notice can be dismissed", !(await notice.isVisible().catch(() => false)));
+    // The service forgets it too, so a reload or another window doesn't
+    // bring it back (the click's request may still be in flight).
+    let after = await live(page);
+    for (let i = 0; i < 20 && after?.failsafe; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      after = await live(page);
+    }
+    check("The service forgets a dismissed notice", after != null && !after.failsafe, JSON.stringify(after?.failsafe ?? null).slice(0, 140));
     await shot(page, "home", "Home: pick a game, press BOOST, play");
 
     // 2. No relays yet: the game screen offers the two ways to start.

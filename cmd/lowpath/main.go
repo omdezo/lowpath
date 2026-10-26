@@ -85,7 +85,6 @@ func run(o options, plat *platform.Platform) error {
 		return err
 	}
 	defer closeLog()
-	defer keepCrashes(o.data, logger)()
 
 	if o.waitPID != 0 {
 		// The copy we replace still holds the port until it has exited.
@@ -122,6 +121,11 @@ func run(o options, plat *platform.Platform) error {
 			logger.Warn("could not restart as administrator", "err", err)
 		}
 	}
+
+	// Only the copy that serves keeps crash reports: the one that just
+	// relaunched elevated, or found Lowpath already running, adds nothing
+	// to match a report (or a session marker's PID) against.
+	defer keepCrashes(o.data, logger)()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

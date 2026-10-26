@@ -214,7 +214,11 @@ PC's UDP) stuck in the driver's queue. Three layers make sure it doesn't:
   `Send`, owner lookup) is recovered and does the same, and so do 100
   receive errors in a row (driver stopped). Worst case from a stuck engine
   to direct traffic: about 0.8 s. A tick that arrives late (the PC slept)
-  restarts the clock instead of counting the sleep.
+  restarts the clock instead of counting the sleep. A plain `Close` (Stop)
+  waits up to 3 s for workers that are still draining the queue, but stops
+  waiting once one has held the same packet for 200 ms: packets older than
+  WinDivert's 2 s queue time are dropped, not sent on, when the handle
+  closes.
 - **The app.** `Session.Done()` closes when the capture has stopped, and
   `Session.Err()` says why when it stopped on its own. The app then ends the
   session (stopping the engine with a 2 s bound, since a stuck engine may
@@ -560,7 +564,7 @@ line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
 `wire_bytes_up` / `wire_bytes_down`. `"failsafe": null | {at, kind:
 "stopped"|"recovered", game_id, game, message, detail}` is the last boost
 that ended without the user asking (see Capture → Fail-open), until the
-next Boost.
+next Boost or `DELETE /api/failsafe` (Dismiss), which returns the live view.
 Session adds `"capture_mode"`.
 
 New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
@@ -604,7 +608,9 @@ prints that URL to stderr only, never to the log.
 - Demo-only controls (Network lab) only when `demo` is true.
 - `live.failsafe` (no session running) → a banner above the page: "Boost
   stopped to keep your game connected" or "Your last boost was cut short",
-  the service's message and detail, and a Dismiss button.
+  the service's message and detail, and a Dismiss button that hides it
+  at once and calls `DELETE /api/failsafe`, so it stays dismissed after a
+  reload and in other windows.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,
   direct ping and loss (six rows, "Show all"), "—" and the reason when a POP

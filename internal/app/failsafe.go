@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,7 +101,7 @@ func (s *Server) recoverLeftover() {
 	if g, ok := s.game(m.Game); ok {
 		v.Game = g.Name
 	}
-	v.Message = fmt.Sprintf("Lowpath closed unexpectedly while boosting %s. Your game went back to your normal connection when it closed.", nameOr(v.Game, "a game"))
+	game := nameOr(v.Game, "a game")
 	switch {
 	case m.Backend != s.plat.Capture.Name():
 		// A marker from another capture method (an older or newer build);
@@ -112,6 +113,12 @@ func (s *Server) recoverLeftover() {
 			v.Detail = "Cleaning up after it failed: " + err.Error()
 			s.log.Error("recover capture leftovers", "backend", m.Backend, "err", err)
 		}
+	}
+	if v.Detail == "" {
+		v.Message = fmt.Sprintf("Lowpath closed unexpectedly while boosting %s. Your game went back to your normal connection when it closed.", game)
+	} else {
+		// Only a clean Recover says the connection is back to normal.
+		v.Message = fmt.Sprintf("Lowpath closed unexpectedly while boosting %s and could not finish cleaning up after it, so your connection may not be back to normal yet.", game)
 	}
 	s.log.Warn("the last route-mode session ended without stopping", "game", m.Game, "pid", m.PID, "started", m.Started)
 	s.unmarkSession()
@@ -133,6 +140,15 @@ func (s *Server) stillRunning(m capture.Marker) bool {
 	}
 	name, ok := names[m.PID]
 	return ok && m.Exe != "" && strings.EqualFold(name, m.Exe)
+}
+
+// handleDismissFailsafe forgets the fail-open notice, so it stays closed
+// after a reload and on every other window showing this Lowpath.
+func (s *Server) handleDismissFailsafe(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.failsafe = nil
+	s.mu.Unlock()
+	writeJSON(w, 200, s.live())
 }
 
 func nameOr(name, fallback string) string {

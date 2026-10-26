@@ -240,6 +240,11 @@ func TestFailOpenStuck(t *testing.T) {
 	stuck := time.Now()
 	took := waitFlowing(t, s, stuck)
 	t.Logf("direct traffic %v after the handler got stuck", took)
+	// The watchdog can't fire before the stall limit: packets leaving much
+	// sooner were never held, and the test would prove nothing.
+	if took < DefaultStallLimit/2 {
+		t.Fatalf("direct traffic after only %v: the helper was not holding the packets", took)
+	}
 	if took > failOpenWithin {
 		t.Fatalf("direct traffic after %v, want under %v", took, failOpenWithin)
 	}

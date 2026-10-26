@@ -336,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/apply", s.handleApply)
 	mux.HandleFunc("POST /api/stop", s.handleStop)
 	mux.HandleFunc("GET /api/live", s.handleLive)
+	mux.HandleFunc("DELETE /api/failsafe", s.handleDismissFailsafe)
 	mux.HandleFunc("PUT /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/relays", s.handleRelays)
 	mux.HandleFunc("POST /api/relays", s.handleAddRelay)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -203,5 +204,57 @@ func TestCloseIsNotAFailure(t *testing.T) {
 	}
 	if h.c.Err() != nil {
 		t.Fatalf("Err after Close: %v", h.c.Err())
+	}
+}
+
+// Stop pressed while the engine is stuck: Close must not wait its full
+// closeWait for a worker that never returns, or the queued packets outlive
+// the driver's queue time and are dropped instead of sent on.
+func TestCloseDoesNotWaitForAStuckWorker(t *testing.T) {
+	h := newHarness(t)
+	release := make(chan struct{})
+	defer close(release)
+	entered := make(chan struct{}, 1)
+	h.c.cfg.OnPacket = func(_, _ netip.AddrPort, _ []byte) bool {
+		entered <- struct{}{}
+		<-release
+		return true
+	}
+	h.c.run(2)
+	h.dev.in <- recvd{udp(t, gameLocal, gameServer, "game"), outboundOn(7, 3)}
+	<-entered
+	start := time.Now()
+	h.c.Close()
+	took := time.Since(start)
+	if !h.dev.closed.Load() {
+		t.Fatal("handle still open")
+	}
+	if took > abortWait+500*time.Millisecond { // well under closeWait, with CI slack
+		t.Errorf("Close with a stuck worker took %v (closeWait %v)", took, closeWait)
+	}
+	if h.c.Err() != nil {
+		t.Errorf("Err after Close = %v, want nil", h.c.Err())
+	}
+}
+
+// A worker still draining the queue at Close keeps moving, so Close waits
+// for it rather than cutting it off after abortWait.
+func TestCloseWaitsForADrainingWorker(t *testing.T) {
+	h := newHarness(t)
+	var handled atomic.Int64
+	h.c.cfg.OnPacket = func(_, _ netip.AddrPort, _ []byte) bool {
+		time.Sleep(20 * time.Millisecond)
+		handled.Add(1)
+		return true
+	}
+	h.c.run(1)
+	const n = 20 // about 400 ms of work, longer than abortWait
+	for range n {
+		h.dev.in <- recvd{udp(t, gameLocal, gameServer, "game"), outboundOn(7, 3)}
+	}
+	waitFor(t, func() bool { return handled.Load() > 0 })
+	h.c.Close()
+	if got := handled.Load(); got != n {
+		t.Fatalf("Close cut off a moving worker: %d of %d packets handled", got, n)
 	}
 }

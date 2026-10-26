@@ -445,16 +445,40 @@ func (c *Capture) shutdown(wait time.Duration) error {
 		if err := c.dev.ShutdownRecv(); err != nil && !errors.Is(err, divert.ErrClosed) {
 			c.log.Warn("capture: shutdown", "err", err)
 		}
-		done := make(chan struct{})
-		go func() { c.wg.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(wait):
-			c.log.Warn("capture: receivers did not stop; closing the handle anyway")
-		}
+		c.awaitWorkers(wait)
 		c.closeErr = c.dev.Close()
 		c.log.Info("capture stopped", "captured", c.captured.Load(), "passed", c.passed.Load(),
 			"injected", c.injected.Load(), "errors", c.errs.Load())
 	})
 	return c.closeErr
+}
+
+// awaitWorkers waits up to wait for the receive goroutines to return. It
+// gives up early when one of them has held the same packet for abortWait:
+// that worker is stuck (the watchdog has already stopped with c.stop), and
+// waiting the rest of wait would only keep the queued packets past the
+// driver's queue time, after which closing the handle drops them instead
+// of sending them on.
+func (c *Capture) awaitWorkers(wait time.Duration) {
+	done := make(chan struct{})
+	go func() { c.wg.Wait(); close(done) }()
+	sw := newStallWatch(abortWait, c.workers, time.Now())
+	tick := time.NewTicker(sw.every)
+	defer tick.Stop()
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-deadline.C:
+			c.log.Warn("capture: receivers did not stop; closing the handle anyway")
+			return
+		case now := <-tick.C:
+			if _, stuck := sw.check(now); stuck {
+				c.log.Warn("capture: a receiver is stuck in the handler; closing the handle anyway")
+				return
+			}
+		}
+	}
 }

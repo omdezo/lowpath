@@ -140,8 +140,38 @@ func TestRecoverLeftoverAtStart(t *testing.T) {
 		t.Error("marker still there")
 	}
 	f := srv.live().Failsafe
-	if f == nil || f.Kind != "recovered" || f.Game != "Counter-Strike 2" || !strings.Contains(f.Message, "closed unexpectedly") || f.Detail != "" {
+	if f == nil || f.Kind != "recovered" || f.Game != "Counter-Strike 2" || !strings.Contains(f.Message, "closed unexpectedly") ||
+		!strings.Contains(f.Message, "went back to your normal connection") || f.Detail != "" {
 		t.Fatalf("failsafe = %+v", f)
+	}
+}
+
+// Dismissing the notice is remembered by the service, not just one window:
+// a reload or a second UI doesn't bring it back.
+func TestDismissFailsafe(t *testing.T) {
+	fp := newFake(t)
+	marker := newMarker(t)
+	if err := marker.Save(capture.Marker{Backend: "fake", PID: 999999, Exe: "Lowpath.exe", Game: "cs2"}); err != nil {
+		t.Fatal(err)
+	}
+	ts, srv := newRealServer(t, fp, withMarker(marker))
+	if srv.live().Failsafe == nil {
+		t.Fatal("no notice to dismiss")
+	}
+	// Behind the same local-API guard as every other change.
+	if code, _ := do(t, ts, "DELETE", "/api/failsafe", "", nil); code != 403 || srv.live().Failsafe == nil {
+		t.Fatalf("dismiss without X-Lowpath: %d", code)
+	}
+	var lv liveView
+	if code := call(t, ts, "DELETE", "/api/failsafe", "", &lv); code != 200 || lv.Failsafe != nil {
+		t.Fatalf("dismiss: %d %+v", code, lv.Failsafe)
+	}
+	if f := srv.live().Failsafe; f != nil {
+		t.Fatalf("notice back after dismiss: %+v", f)
+	}
+	// Nothing to dismiss is fine too.
+	if code := call(t, ts, "DELETE", "/api/failsafe", "", nil); code != 200 {
+		t.Fatalf("second dismiss: %d", code)
 	}
 }
 
@@ -152,7 +182,8 @@ func TestRecoverLeftoverFailureIsReported(t *testing.T) {
 	marker.Save(capture.Marker{Backend: "fake", PID: 999999, Exe: "Lowpath.exe", Game: "custom-gone"})
 	_, srv := newRealServer(t, fp, withMarker(marker))
 	f := srv.live().Failsafe
-	if f == nil || !strings.Contains(f.Detail, "could not be removed") || !strings.Contains(f.Message, "a game") {
+	if f == nil || !strings.Contains(f.Detail, "could not be removed") || !strings.Contains(f.Message, "a game") ||
+		strings.Contains(f.Message, "went back") || !strings.Contains(f.Message, "may not be back to normal") {
 		t.Fatalf("failsafe = %+v", f)
 	}
 }
@@ -167,7 +198,7 @@ func TestRecoverLeftoverOtherBackend(t *testing.T) {
 	if got := fp.Capture.Recovered(); len(got) != 0 {
 		t.Fatalf("Recover called for another backend: %+v", got)
 	}
-	if f := srv.live().Failsafe; f == nil || !strings.Contains(f.Detail, `"tun"`) {
+	if f := srv.live().Failsafe; f == nil || !strings.Contains(f.Detail, `"tun"`) || strings.Contains(f.Message, "went back") {
 		t.Fatalf("failsafe = %+v", f)
 	}
 }
