@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"lowpath/internal/catalog"
 	"lowpath/internal/demo"
 	"lowpath/internal/detect"
 	"lowpath/internal/diag"
@@ -43,6 +44,14 @@ type Config struct {
 	Network Network
 	Sim     *demo.Network
 
+	// Servers answers "which servers does this game have, and how far are
+	// they" before the game connects (Valve's SDR POPs). Nil: no server
+	// lists; the game page leaves the card out.
+	Servers ServerLists
+
+	// Locator finds the public IP and ISP for /api/location. Nil: STUN and
+	// RIPEstat over the internet, only when the UI asks.
+	Locator Locator
 	// Platform is the OS layer: capture backend, socket owners, privileges,
 	// game detection, icons and folders. Nil: platform.Native(), the one
 	// built for this OS. Tests pass fakeplatform.
@@ -73,13 +82,23 @@ type Config struct {
 	Ping diag.PingFunc
 }
 
+// ServerLists is the catalog of known game servers (catalog.ValveServers).
+// List and Ping answer at once from memory and refresh in the background.
+type ServerLists interface {
+	List(appID int) catalog.ServerList
+	Ping(appID int) catalog.ServerList
+	Close()
+}
+
 type Server struct {
 	store   *Store
 	games   []Game
 	net     Network
 	relays  *RelayNetwork
+	servers ServerLists   // nil: no server lists
 	sim     *demo.Network // nil unless demo mode
 	plat    *platform.Platform
+	locator Locator
 	log     *slog.Logger
 	ui      fs.FS
 	elevate func() error
@@ -160,10 +179,13 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 		cfg.BloatLoader = l
 	}
+	if cfg.Locator == nil {
+		cfg.Locator = diag.NewInternetLocator()
+	}
 	life, endLife := context.WithCancel(context.Background())
 	s := &Server{
-		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, sim: cfg.Sim,
-		plat: cfg.Platform, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
+		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
+		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
 		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
@@ -231,6 +253,9 @@ func (s *Server) Close() {
 	s.endLife()
 	s.stopSession()
 	s.relays.Close()
+	if s.servers != nil {
+		s.servers.Close()
+	}
 }
 
 // lineInput feeds the passive detector: the session's engine snapshot.
@@ -295,6 +320,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/games/{id}/routes", s.handleRoutes)
 	mux.HandleFunc("POST /api/games/{id}/analyze", s.handleAnalyze)
 	mux.HandleFunc("POST /api/games/{id}/favorite", s.handleFavorite)
+	mux.HandleFunc("GET /api/games/{id}/servers", s.handleServers)
+	mux.HandleFunc("POST /api/games/{id}/servers/ping", s.handleServers)
 	mux.HandleFunc("POST /api/games/custom", s.handleAddCustomGame)
 	mux.HandleFunc("DELETE /api/games/custom/{id}", s.handleDeleteCustomGame)
 	mux.HandleFunc("POST /api/apply", s.handleApply)
@@ -309,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/art/{id}/{kind}", s.handleArt)
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
+	mux.HandleFunc("GET /api/location", s.handleLocation)
 	mux.HandleFunc("GET /api/diag/bloat", s.handleBloat)
 	mux.HandleFunc("POST /api/diag/bloat", s.handleStartBloat)
 	mux.HandleFunc("DELETE /api/diag/bloat", s.handleStopBloat)
@@ -651,6 +679,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"relays":       s.relays.Views(), // never includes keys
 		"settings":     s.store.Settings(),
 		"analysis":     analysis,
+		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"bufferbloat":  s.store.Bloat(),
 		"live":         s.live(),
 	})

@@ -193,6 +193,19 @@ async function waitForRoutes(page, id, ms = 20000) {
   return null;
 }
 
+// waitForServers waits for a Valve game's POP list to download and be pinged.
+async function waitForServers(page, id, ms = 30000) {
+  const end = Date.now() + ms;
+  let l = null;
+  while (Date.now() < end) {
+    l = (await api(page, "GET", `/games/${id}/servers`)).body;
+    if (l && l.state !== "loading" && !l.pinging && l.pinged_at) return l;
+    if (l?.state === "error") return l;
+    await page.waitForTimeout(500);
+  }
+  return l;
+}
+
 async function openDetails(page) {
   const t = page.getByRole("button", { name: /Details/ });
   if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
@@ -245,6 +258,34 @@ async function main() {
     check("Without relays the game shows the setup choices", await onboard.isVisible().catch(() => false));
     await shot(page, "setup", "No relay yet: try it on this PC, or add your server");
 
+    // 2b. Valve games know their servers before launch: Steam's SDR POP list
+    //     with a direct ping from this PC, no relay needed.
+    //     The list comes from Steam: offline (no LOWPATH_INTERNET=1) the
+    //     card must instead say plainly why there is no list.
+    const internet = process.env.LOWPATH_INTERNET === "1";
+    const sdr = await waitForServers(page, "cs2");
+    const measured = (sdr?.pops || []).filter((p) => p.ping_ms != null);
+    const unmeasured = (sdr?.pops || []).filter((p) => p.ping_ms == null);
+    const popList = page.getByRole("list", { name: "Valve servers" });
+    if (sdr?.state === "ready" || internet) {
+      check(
+        "CS2 lists Valve's servers with a direct ping",
+        sdr?.state === "ready" && (measured.length > 0 || (!internet && unmeasured.every((p) => p.note))),
+        sdr?.state === "ready" ? `${sdr.pops.length} POPs, ${measured.length} answered; nearest ${measured.slice(0, 3).map((p) => `${p.id} ${p.ping_ms.toFixed(0)} ms`).join(", ")}` : `${sdr?.state}: ${sdr?.message}`,
+      );
+      check("POPs without a reply show a reason, not a number", unmeasured.every((p) => p.note), `${unmeasured.length} without a reply`);
+      await popList.waitFor({ timeout: 5000 }).catch(() => {});
+      const uiRows = await popList.getByRole("listitem").count().catch(() => 0);
+      check("Game page shows the Valve server list", uiRows > 0, `${uiRows} rows shown`);
+    } else {
+      const card = page.getByRole("region", { name: "Valve servers" });
+      const said = await card.getByRole("status").first().textContent({ timeout: 15000 }).catch(() => "");
+      check("Offline, the Valve servers card says why there is no list", sdr?.state === "error" && !!sdr.message && /Valve's server list/.test(said || ""), `${sdr?.state}: ${said}`);
+    }
+    await page.getByRole("region", { name: "Valve servers" }).scrollIntoViewIfNeeded().catch(() => {});
+    await shot(page, "cs2-servers", "CS2 before launch: Valve's relay POPs with a direct ping from this PC");
+    await scrollTop(page);
+
     // 3. Relays: turn on the loopback test relay and test it.
     await page.getByRole("button", { name: /Add my server/ }).click();
     await page.getByRole("switch", { name: "Use loopback test relay" }).check();
@@ -257,9 +298,24 @@ async function main() {
     check("Relay test gets answers", t && t.ok, t && `${t.rtt_ms?.toFixed?.(2)} ms, ${t.loss_pct}% loss: ${t.message}`);
     await shot(page, "relays", "Settings → Relays: loopback relay on and tested");
 
-    // 4. Network: capture mode.
+    // 4. Network: your connection (public IP via STUN, ISP via RIPEstat)
+    // and the capture mode.
     await page.getByRole("tab", { name: "Network" }).click();
-    await shot(page, "network", `Settings → Network: capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
+    const conn = page.getByTestId("connection");
+    await page
+      .waitForFunction(() => document.querySelector('[data-testid="connection"]')?.getAttribute("aria-busy") === "false", null, { timeout: 20000 })
+      .catch(() => {});
+    const where = (await api(page, "GET", "/location")).body;
+    const v4 = where?.ipv4;
+    const headline = (await conn.locator(".conn-headline").textContent().catch(() => "")) ?? "";
+    const connText = (await conn.textContent().catch(() => "")) ?? "";
+    check(
+      "Your connection shows the public IP and ISP",
+      where?.state === "ok" && v4?.asn > 0 && headline.includes(`AS${v4.asn}`) && connText.includes(v4.ip),
+      v4 ? `${headline}; ${v4.ip} via ${v4.source}` : `${where?.state}: ${where?.message ?? "no answer"}`,
+    );
+    check("STUN and lpcheck see the same public IP", !base.public || !v4 || base.public.startsWith(v4.ip + ":"), `${v4?.ip} vs ${base.public}`);
+    await shot(page, "network", `Settings → Network: your connection and capture mode (${admin ? "admin" : "no admin: route mode warns"})`);
     await page.getByRole("radio", { name: /Proxy mode/ }).click();
     await page.waitForTimeout(500);
 

@@ -28,7 +28,13 @@ type Game struct {
 	IconExe   []string `json:"icon_exe,omitempty"`  // programs whose icon to show, before Processes
 	Exe       string   `json:"exe,omitempty"`       // custom games: the program's path when it was added
 	Custom    bool     `json:"custom"`              // added by the user from a running process
+	// Discovery lists where the game's server list comes from before it
+	// connects: "sdr" = Valve's SDR network config for SteamApp.
+	Discovery []string `json:"discovery,omitempty"`
 }
+
+// DiscoverySDR marks a game that routes through Valve's Steam Datagram Relay.
+const DiscoverySDR = "sdr"
 
 func LoadCatalog() ([]Game, error) {
 	var g []Game

@@ -25,6 +25,42 @@ export interface Game {
   custom?: boolean;
   processes?: string[] | null;
   steam_app?: number; // Steam app id: the service has library artwork for it
+  // Where the game's server list comes from before it connects:
+  // "sdr" = Valve's Steam Datagram Relay POPs.
+  discovery?: string[] | null;
+}
+
+// One Valve SDR point of presence with the direct ping from this PC.
+// Numbers that weren't measured are null, never 0.
+export interface POPView {
+  id: string;
+  city: string;
+  country?: string;
+  desc: string;
+  lat: number | null;
+  lon: number | null;
+  geo_fix?: "swapped" | "corrected" | "unknown";
+  relays: number;
+  ping_ms: number | null;
+  loss_pct: number | null;
+  sent: number;
+  received: number;
+  note?: string; // why there is no number
+  pinged_at?: string;
+}
+
+export interface ServerList {
+  source: "valve_sdr" | "";
+  app_id?: number;
+  state: "unsupported" | "loading" | "ready" | "error";
+  message?: string;
+  revision?: number;
+  fetched_at?: string;
+  stale: boolean;
+  pinging: boolean;
+  pinged_at?: string;
+  pops: POPView[] | null;
+  no_relay: number;
 }
 
 export interface Route {
@@ -260,4 +296,30 @@ export interface Bootstrap {
   recent: string[] | null;
   mapping: Mapping | null;
   live: Live;
+}
+
+// GET /api/location: the public address the internet sees and the network
+// behind it (internal/diag). Empty fields are unknown.
+export interface Endpoint {
+  ip: string;
+  source: string;
+  asn?: number;
+  asns?: number[];
+  holder?: string;
+  as_name?: string;
+  isp?: string;
+  prefix?: string;
+  country?: string;
+  city?: string;
+  partial?: string;
+  lookup_error?: string;
+}
+
+export interface NetLocation {
+  state: "ok" | "partial" | "offline";
+  message?: string;
+  at: string;
+  ipv4: Endpoint | null;
+  ipv6: Endpoint | null;
+  ipv6_note?: string;
 }

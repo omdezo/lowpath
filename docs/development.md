@@ -59,6 +59,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `%APPDATA%\Lowpath\state.json` | Settings, favorites, custom games, relays (with keys), learned servers |
 | `%APPDATA%\Lowpath\lowpath.log` | Log (starts over above 5 MB) |
 | `%APPDATA%\Lowpath\art\` | Cached game artwork and extracted icons |
+| `%APPDATA%\Lowpath\catalog\` | Last downloaded Valve server lists (`sdr-<app id>.json`) |
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
 | `%LOCALAPPDATA%\Lowpath\WebView2*` | App window data |
 
@@ -76,7 +77,8 @@ header. This is local security, not a login.
 cmd/lowpath        desktop app: API + embedded UI + window + elevation
 cmd/relay          relay server (egress or forwarding hop)
 cmd/lpcheck        STUN check for verifying routes
-internal/app       catalog, local store, relays, sessions, game art, HTTP API
+internal/app       game list, local store, relays, sessions, game art, HTTP API
+internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
 internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
 internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
@@ -86,6 +88,8 @@ internal/engine    client: multipath send, dedup, probes, path selection, fallba
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
 internal/proto     overlay framing {type, token, flow, seq, ts, addr}
 internal/icmp      ICMP echo (IcmpSendEcho on Windows, raw/ping socket on Linux)
+internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
+internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries
 internal/diag      bufferbloat test, passive detector, default route + NIC counters per OS
@@ -119,15 +123,27 @@ go test ./...
   `cmd/lowpath`'s) run unchanged on Windows, Linux and macOS.
 - **Platform:** each OS implementation is complete, and what isn't built
   for an OS yet reports `errors.ErrUnsupported` instead of empty results.
-- **Diagnostics:** bufferbloat grading against a simulated line (latency
+- **Catalog:** SDR config parsing against a trimmed copy of the live CS2
+  config, every geo fix seen in it, hostile replies, download errors and
+  timeouts, the disk cache, POP pinging, and the refresh/backoff/offline
+  behavior of the server list (fake clock, source and pinger).
+- **Diagnostics:** the STUN client against local fake servers (resends,
+  stray replies, timeouts, closed ports, cancellation), RIPEstat parsing
+  against canned replies, the lookup cache, and every locator state
+  (offline, no IPv6, partial, private addresses, shared lookups).
+- **Bufferbloat:** grading grading against a simulated line (latency
   that rises under load, lost pings, a refusing load server, no target),
   the HTTP loader against a local speed-test server, target choice, the
   passive detector's rules second by second, `/proc` and sysfs parsing from
   fixtures, and the Windows IP Helper calls without admin rights.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
-Google through a keyed relay and through the engine in capture mode, and a
-short real bufferbloat test against Cloudflare (about 100 MB of data).
+Google through a keyed relay and through the engine in capture mode,
+download the live SDR configs of CS2, Dota 2 and Deadlock and ping Dubai
+and Frankfurt, look up this PC's public IP and ISP with real STUN
+servers and RIPEstat, and run a short real bufferbloat test against
+Cloudflare (about 100 MB of data). `go test -run TestInternet -v
+./internal/diag` prints what they found.
 
 ### End-to-end UI test
 

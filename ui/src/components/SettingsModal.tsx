@@ -4,6 +4,7 @@ import { api } from "../api";
 import type { CaptureMode, Platform, RelayView, Settings } from "../types";
 import { cap } from "../util";
 import { Modal, Toggle } from "./Bits";
+import { Connection } from "./Connection";
 import { RelaysPane } from "./RelaysPane";
 import { BloatTest } from "./BloatTest";
 
@@ -101,7 +102,8 @@ export function SettingsModal(props: Props) {
           {tab === "network" && (
             <>
               <h3>Network</h3>
-              <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
+              <Connection />
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 10, marginBottom: 6 }}>
                 Changes take effect the next time you press Apply Routes.
               </div>
               <div className="setting" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>

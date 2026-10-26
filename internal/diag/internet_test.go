@@ -4,75 +4,83 @@ import (
 	"context"
 	"net/netip"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"lowpath/internal/icmp"
+	"lowpath/internal/stun"
 )
 
-// These tests use the real internet (Cloudflare's speed-test endpoints):
+// Real STUN servers and the real RIPEstat API. Run with
 //
-//	$env:LOWPATH_INTERNET=1; go test -run TestInternet ./internal/diag
-func needInternet(t *testing.T) {
+//	$env:LOWPATH_INTERNET=1; go test -run TestInternet -v ./internal/diag
+func internet(t *testing.T) {
+	t.Helper()
 	if os.Getenv("LOWPATH_INTERNET") != "1" {
 		t.Skip("set LOWPATH_INTERNET=1 to run tests that use the internet")
 	}
 }
 
-func TestInternetLoaderReachesCloudflare(t *testing.T) {
-	needInternet(t)
-	l, err := NewHTTPLoader(HTTPLoaderConfig{MaxDownBytes: 50e6, MaxUpBytes: 20e6})
+func TestInternetLocate(t *testing.T) {
+	internet(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	loc, err := NewInternetLocator().Locate(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	for _, dir := range []string{"download", "upload"} {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		var moved atomic.Int64
-		fn := l.Download
-		if dir == "upload" {
-			fn = l.Upload
+	t.Logf("state %s %s", loc.State, loc.Message)
+	for _, e := range []*Endpoint{loc.IPv4, loc.IPv6} {
+		if e != nil {
+			t.Logf("%s via %s: AS%d %q (%s) %s %s/%s %s", e.IP, e.Source, e.ASN, e.ISP, e.ASName, e.Prefix, e.City, e.Country, e.LookupError)
 		}
-		err := fn(ctx, func(n int64) { moved.Add(n) })
-		cancel()
-		if err != nil {
-			t.Fatalf("%s: %v", dir, err)
-		}
-		t.Logf("%s: %.1f MB in 3 s", dir, float64(moved.Load())/1e6)
-		if moved.Load() == 0 {
-			t.Fatalf("%s moved nothing", dir)
-		}
+	}
+	t.Logf("ipv6 note: %s", loc.IPv6Note)
+	if loc.State != StateOK || loc.IPv4 == nil || loc.IPv4.ASN == 0 || loc.IPv4.ISP == "" || loc.IPv4.Country == "" {
+		t.Fatalf("incomplete: %+v", loc)
+	}
+	if !loc.IPv4.Prefix.Contains(loc.IPv4.IP) {
+		t.Fatalf("prefix %s doesn't hold %s", loc.IPv4.Prefix, loc.IPv4.IP)
 	}
 }
 
-func TestInternetShortBloatTest(t *testing.T) {
-	needInternet(t)
-	l, err := NewHTTPLoader(HTTPLoaderConfig{MaxDownBytes: 100e6, MaxUpBytes: 40e6})
+// STUN and HTTPS must agree on the public IPv4 address (they would not
+// behind a multi-WAN or a proxy, which is worth knowing too).
+func TestInternetSTUNAgreesWithHTTPS(t *testing.T) {
+	internet(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	s, err := NewSTUNFinder(stun.NewClient(stun.ClientOptions{}), DefaultSTUNServers(), 0).PublicAddr(ctx, IPv4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	ns := NewNetStats()
-	route, _ := ns.DefaultRoute()
-	cfg := BloatConfig{
-		Internet: []Candidate{
-			{Tier: 1, Prober: NewICMPProber("Cloudflare", netip.MustParseAddr("1.1.1.1"), icmp.Ping)},
-			{Tier: 2, Prober: NewTCPProber("Cloudflare", netip.MustParseAddrPort("1.1.1.1:443"))},
-		},
-		Loader: l, Net: ns, Route: route,
-		Phase: 2 * time.Second, Ramp: 500 * time.Millisecond,
-	}
-	if route.Gateway.Is4() {
-		cfg.Gateway = NewICMPProber("Gateway", route.Gateway, icmp.Ping)
-	}
-	res, err := NewBloatTest(cfg).Run(context.Background(), nil)
+	h, err := NewRIPEstat(RIPEstatOptions{}).PublicAddr(ctx, IPv4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("grade %q target %q idle %v down +%v up +%v down %v Mbit/s up %v Mbit/s, %.0f MB; note %q",
-		res.Grade, res.Target, deref(res.IdleMS), deref(res.DownIncreaseMS), deref(res.UpIncreaseMS), deref(res.DownMbps), deref(res.UpMbps), res.DataMB, res.Note)
-	if res.Grade == "" {
-		t.Fatalf("no grade: %s", res.Note)
+	if s.Addr != h.Addr {
+		t.Logf("STUN saw %s, HTTPS saw %s: this connection uses more than one public address", s.Addr, h.Addr)
+	}
+}
+
+// Known networks resolve to their registered holders.
+func TestInternetRIPEstatKnownNetworks(t *testing.T) {
+	internet(t)
+	r := NewRIPEstat(RIPEstatOptions{})
+	for ip, asn := range map[string]uint32{"193.0.6.139": 3333, "8.8.8.8": 15169, "2001:67c:2e8:22::c100:68b": 3333} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ni, err := r.LookupNetwork(ctx, netip.MustParseAddr(ip))
+		cancel()
+		if err != nil {
+			// An IPv6 lookup needs IPv6 to reach RIPEstat.
+			if netip.MustParseAddr(ip).Is6() {
+				t.Logf("%s: %v (no IPv6 here?)", ip, err)
+				continue
+			}
+			t.Fatalf("%s: %v", ip, err)
+		}
+		t.Logf("%s: %+v", ip, ni)
+		if ni.ASN != asn || ni.ISP == "" {
+			t.Fatalf("%s: got AS%d %q, want AS%d", ip, ni.ASN, ni.ISP, asn)
+		}
 	}
 }
