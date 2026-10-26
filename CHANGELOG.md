@@ -116,6 +116,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
   the generated `ui/dist` output doesn't count as an uncommitted change.
+- The forwarding-hop and path-selection tests no longer fail on a busy
+  machine: they wait for the hop's counters and the engine's live samples
+  instead of sleeping, and check the order of measured routes rather than
+  RTT ceilings (#114).
 
 ## [0.2.0] - 2026-10-26
 

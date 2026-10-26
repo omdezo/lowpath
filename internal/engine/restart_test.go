@@ -55,15 +55,21 @@ func TestRepliesSurviveEgressRestart(t *testing.T) {
 	e, s := startCapture(t, engine.Config{Paths: []engine.PathSpec{{ID: "r", Label: "r", Addr: addr}}})
 
 	next := uint32(0)
+	// At most inFlight packets wait for their reply. A burst paced by the
+	// clock alone overruns a loopback receive buffer whenever a reader is
+	// starved (Linux drops them and counts RcvbufErrors), which would be
+	// lost replies this test doesn't mean to measure.
+	const inFlight = 64
 	sendBatch := func(n int) {
 		pkt := make([]byte, 8)
+		base := len(s.all())
 		for i := range n {
+			if i%16 == 0 {
+				waitFor(t, time.Second, func() bool { return len(s.all())-base >= i-inFlight })
+			}
 			next++
 			binary.BigEndian.PutUint32(pkt, next)
 			e.Send(gameLocal, game.Addr(), pkt)
-			if i%20 == 19 {
-				time.Sleep(2 * time.Millisecond) // don't overrun loopback socket buffers
-			}
 		}
 	}
 	// Well past the dedup window, so "too old" would apply after a restart.
