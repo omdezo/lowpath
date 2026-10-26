@@ -95,7 +95,7 @@ internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, ca
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
-internal/diag      bufferbloat test, passive detector, route trace (MTR), default route + NIC counters per OS
+internal/diag      bufferbloat test, passive detector, route trace (MTR), verdict engine, default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike impairment
 internal/gamesim   echo game server
@@ -165,6 +165,15 @@ go test ./...
   relay, offline and missing privileges, stopping early, the text report,
   redaction, matching routers' replies to probes from raw packets, a real
   TTL-limited echo to 127.0.0.1 and ::1, and the API with the loopback relay.
+- **Verdict:** every rule against hand-built evidence (router loss on Wi-Fi
+  with and without a signal reading, a cable, one stray lost ping, a router
+  that ignores ping, slow replies only, a test from another adapter, old
+  and stale evidence, grades A+ to F, the passive flag, loss starting at
+  home, past home, only at the destination or only at a relay's UDP port,
+  a lossy direct route next to a clean relay, a lossy server leg, already
+  optimal with and without the relay's server leg), the order in which
+  they win, the text report (no full addresses, 78 columns), and the API
+  on `fakeplatform` with stored tests, a learned server and an analysis.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
 Google through a keyed relay and through the engine in capture mode,
