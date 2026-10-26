@@ -604,7 +604,10 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	// Keep current paths that are still healthy (hysteresis). Dead paths are
 	// replaced at once; a merely worse path is swapped only when auto-switch
 	// is on, the spare is clearly better, and we haven't swapped recently,
-	// so the route set doesn't flap on probe noise.
+	// so the route set doesn't flap on probe noise. A path not judged yet
+	// (grace above) is not kept here: it only fills a slot below, after every
+	// path that has answered, so a spare known to work isn't held back by
+	// paths that may be dead.
 	var bestSpare *ranked
 	for i := range up {
 		if !slices.Contains(active, up[i].p) {
@@ -615,7 +618,7 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	canSwap := e.cfg.AutoSwitch && bestSpare != nil && now.Sub(e.lastSwap) >= swapHold
 	for _, p := range active {
 		s, ok := isUp(p)
-		if !ok || len(next) >= k {
+		if !ok || !s.measured() || len(next) >= k {
 			continue
 		}
 		if canSwap && s.Score() > bestSpare.s.Score()*1.2+8 {

@@ -96,6 +96,16 @@ func TestSelectionJudgesPathsOnProbeOutcomes(t *testing.T) {
 			want: []string{"a", "b"},
 		},
 		{
+			name: "paths not judged yet give way to a spare that has answered",
+			// a and b may be dead; only c is known to work, so it must carry
+			// the game now rather than at the next tick.
+			probes: map[string][]probeRun{
+				"a": silent(time.Second), "b": silent(time.Second), "c": fast(time.Second),
+			},
+			tick: time.Second,
+			want: []string{"a", "c"},
+		},
+		{
 			name: "a path whose probes timed out is dropped within the grace window",
 			probes: map[string][]probeRun{
 				"a": silent(1500 * time.Millisecond), "b": fast(1500 * time.Millisecond), "c": fast(1500 * time.Millisecond),
