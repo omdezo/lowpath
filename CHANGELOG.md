@@ -77,6 +77,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   destination, so routers that limit their replies aren't blamed; the
   trace says where real loss starts and exports a WinMTR-style text
   report (#13).
+- Route trace without root on Linux and macOS: when the raw ICMP socket
+  isn't allowed, Linux traces through an unprivileged ping socket
+  (`net.ipv4.ping_group_range`, open on systemd distributions) and reads
+  the routers' answers from its error queue, and macOS through its
+  datagram ICMP socket; IPv4 and IPv6. The trace only asks for root when
+  neither works (#137).
 - Fail-open watchdog: a stuck or crashed packet handler, a stopped driver
   or a killed app puts the game back on the direct connection within a
   second; the app ends the session and says why, and the next start cleans

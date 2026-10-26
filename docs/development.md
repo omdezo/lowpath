@@ -155,7 +155,7 @@ internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
 internal/proto     overlay framing {type, token, flow, seq, ts, addr}
-internal/icmp      ICMP echo and TTL-limited echo (IP Helper on Windows, raw/ping socket elsewhere)
+internal/icmp      ICMP echo and TTL-limited echo (IP Helper on Windows, raw socket, else ping socket (Linux) or datagram ICMP socket (macOS))
 internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
@@ -273,8 +273,15 @@ go test ./...
   the destination losing, a destination that ignores ping, load balancing,
   delay that carries on vs a slow router), UDP mode with a lossy and a dead
   relay, offline and missing privileges, stopping early, the text report,
-  redaction, matching routers' replies to probes from raw packets, a real
-  TTL-limited echo to 127.0.0.1 and ::1, and the API with the loopback relay.
+  redaction, matching routers' replies to probes from raw packets and from
+  Linux error-queue messages, the fallback from a refused raw socket to the
+  unprivileged one, a real TTL-limited echo to 127.0.0.1 and ::1, and the
+  API with the loopback relay. As **root** on Linux, `go test -run
+  TestPingTTLRouteLab -v ./internal/icmp` builds a chain of two routers and
+  a destination in network namespaces of its own (nothing on the machine
+  changes, WSL2 works) and traces it over IPv4 and IPv6 as root (raw
+  socket), as nobody with only `net.ipv4.ping_group_range` open (ping
+  socket), with 24 probes at once, and as nobody with it closed.
 - **Verdict:** every rule against hand-built evidence (router loss on Wi-Fi
   with and without a signal reading, a cable, one stray lost ping, a router
   that ignores ping, slow replies only, a test from another adapter, old

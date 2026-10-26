@@ -821,9 +821,19 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   `IP_OPTION_INFORMATION.Ttl`, no admin rights; the reply status says who
   answered (`IP_SUCCESS` = the destination, `IP_TTL_EXPIRED_TRANSIT` /
   `IP_HOP_LIMIT_EXCEEDED` = a router, unreachable codes). Linux and macOS:
-  a raw ICMP socket (root or `CAP_NET_RAW`), matching "time exceeded" and
-  "unreachable" replies to the probe by the echo ID and sequence quoted
-  inside them; without privileges the trace says so. TTLs past the one the
+  a raw ICMP socket when the process may open one (root or `CAP_NET_RAW`),
+  matching "time exceeded" and "unreachable" replies to the probe by the
+  echo ID and sequence quoted inside them. Without it, no rights are
+  needed: Linux uses a ping socket (`SOCK_DGRAM`, `IPPROTO_ICMP` or
+  `IPPROTO_ICMPV6`; allowed when `net.ipv4.ping_group_range` covers the
+  user's group, systemd's default) with `IP_RECVERR` / `IPV6_RECVERR`: the
+  destination's echo reply arrives as a datagram, a router's answer on the
+  socket's error queue (`MSG_ERRQUEUE`, `sock_extended_err` with the router
+  in `SO_EE_OFFENDER`), read with `poll(2)` since Go's poller reports an
+  `EPOLLERR`-only wakeup as an error. macOS uses a datagram ICMP socket,
+  a raw socket underneath that any user may open, with the raw socket's
+  matching (`icmp(4)`). A refused raw socket is not tried again; when no
+  socket can be opened the trace says what the system needs. TTLs past the one the
   destination answered at stop; silent trailing hops are left out. Per hop:
   sent, received, raw loss (as WinMTR counts it), best/avg/worst/last/stdev,
   every address that answered (load balancing), reverse DNS.

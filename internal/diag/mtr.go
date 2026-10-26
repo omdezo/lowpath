@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -722,11 +723,22 @@ func sendFailure(err error) string {
 	case errors.Is(err, icmp.ErrNoRoute):
 		return "There is no route to this address: the PC looks offline, or this network has no IPv6."
 	case errors.Is(err, os.ErrPermission):
-		return "On this system a route trace needs root rights (on Linux, CAP_NET_RAW is enough)."
+		return traceRightsWords(runtime.GOOS)
 	case errors.Is(err, errors.ErrUnsupported):
 		return "Route traces aren't available on this system: " + err.Error()
 	}
 	return "The trace couldn't send probes: " + err.Error()
+}
+
+// traceRightsWords explains what the trace needs when the OS refuses its
+// probes. Linux traces without root through a ping socket when
+// net.ipv4.ping_group_range covers the user's group (systemd opens it to
+// everyone); macOS needs no rights for it and the BSDs need root.
+func traceRightsWords(goos string) string {
+	if goos == "linux" {
+		return "This system doesn't let Lowpath send the trace's probes: it needs root, CAP_NET_RAW, or net.ipv4.ping_group_range covering your group."
+	}
+	return "On this system a route trace needs root rights."
 }
 
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")

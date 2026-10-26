@@ -374,6 +374,25 @@ func TestTraceCannotSend(t *testing.T) {
 	}
 }
 
+func TestTraceRightsWords(t *testing.T) {
+	t.Parallel()
+	for goos, want := range map[string][]string{
+		"linux":   {"root", "CAP_NET_RAW", "net.ipv4.ping_group_range"},
+		"darwin":  {"root"},
+		"freebsd": {"root"},
+	} {
+		got := traceRightsWords(goos)
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q doesn't mention %s", goos, got, w)
+			}
+		}
+	}
+	if strings.Contains(traceRightsWords("darwin"), "ping_group_range") {
+		t.Error("macOS has no ping_group_range")
+	}
+}
+
 func TestTraceStopKeepsWhatWasMeasured(t *testing.T) {
 	t.Parallel()
 	f := testRoute()
