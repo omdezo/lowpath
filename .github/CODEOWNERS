@@ -1,0 +1,9 @@
+# Default reviewers for every change.
+*                       @omdezo
+
+# Areas that need extra care: packet capture, the wire protocol and relays.
+/internal/capture/      @omdezo
+/internal/divert/       @omdezo
+/internal/proto/        @omdezo
+/internal/relay/        @omdezo
+/deploy/                @omdezo

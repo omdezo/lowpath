@@ -54,7 +54,7 @@ func exampleLocation() diag.Location {
 
 func TestLocationEndpoint(t *testing.T) {
 	fl := &fakeLocator{loc: exampleLocation()}
-	ts, _ := newRealServer(t, &fakeCapturer{}, func(c *Config) { c.Locator = fl })
+	ts, _ := newRealServer(t, newFake(t), func(c *Config) { c.Locator = fl })
 
 	// The diagnostics report has no location before one was looked up.
 	var rep map[string]any
@@ -96,7 +96,7 @@ func TestLocationEndpoint(t *testing.T) {
 
 func TestLocationEndpointErrors(t *testing.T) {
 	fl := &fakeLocator{err: context.DeadlineExceeded}
-	ts, _ := newRealServer(t, &fakeCapturer{}, func(c *Config) { c.Locator = fl })
+	ts, _ := newRealServer(t, newFake(t), func(c *Config) { c.Locator = fl })
 	if code, body := do(t, ts, "GET", "/api/location", "", nil); code != 504 || !strings.Contains(body, "location_timeout") {
 		t.Fatalf("timeout: %d %s", code, body)
 	}

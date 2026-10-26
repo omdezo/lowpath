@@ -168,7 +168,7 @@ anti-cheats may object to the capture driver. Both are tracked on the
 cmd/lowpath        desktop app (API + embedded UI + window)
 cmd/relay          relay server
 cmd/lpcheck        STUN route checker
-internal/          capture, engine, relay, protocol, app and helpers
+internal/          platform layer, capture, engine, relay, protocol, app and helpers
 ui/                React + TypeScript interface
 deploy/            relay install scripts
 e2e/               end-to-end UI test

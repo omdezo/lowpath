@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"lowpath/internal/detect"
+	"lowpath/internal/platform"
 )
 
 // Game art: real artwork for the library and the game screen. For Steam
@@ -58,6 +59,8 @@ type artStore struct {
 	client *http.Client
 	steam  func() []string // Steam client roots
 	libs   func() []string // Steam library common\ folders
+	games  platform.GameDetector
+	icons  platform.IconProvider
 
 	mu    sync.Mutex
 	files map[string]string    // key -> cached file path
@@ -66,13 +69,15 @@ type artStore struct {
 	fetch chan struct{} // bounds concurrent downloads
 }
 
-func newArtStore(dir string, log *slog.Logger) *artStore {
+func newArtStore(dir string, log *slog.Logger, games platform.GameDetector, icons platform.IconProvider) *artStore {
 	return &artStore{
 		dir:    dir,
 		log:    log,
 		client: &http.Client{Timeout: 10 * time.Second},
-		steam:  detect.SteamRoots,
-		libs:   detect.SteamLibraries,
+		steam:  games.SteamRoots,
+		libs:   games.SteamLibraries,
+		games:  games,
+		icons:  icons,
 		files:  map[string]string{},
 		miss:   map[string]time.Time{},
 		keyMu:  map[string]*sync.Mutex{},
@@ -193,7 +198,7 @@ func (a *artStore) steamLocal(app int, names []string) string {
 func (a *artStore) exeIcon(g Game, out string) (string, error) {
 	exe := g.Exe
 	if exe == "" || !fileExists(exe) {
-		exe = detect.RunningExe(g.Processes)
+		exe = a.games.RunningExe(g.Processes)
 	}
 	if exe == "" {
 		roots := slicesClone(g.Paths)
@@ -208,7 +213,7 @@ func (a *artStore) exeIcon(g Game, out string) (string, error) {
 	if exe == "" {
 		return "", errNoArt
 	}
-	img, err := detect.ExeIcon(exe, iconSize)
+	img, err := a.icons.ExeIcon(exe, iconSize)
 	if err != nil {
 		return "", errNoArt
 	}
