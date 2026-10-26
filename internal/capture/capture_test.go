@@ -339,7 +339,7 @@ func TestBrokenHandleStopsCapture(t *testing.T) {
 func TestStatsJSON(t *testing.T) {
 	h := newHarness(t)
 	b, _ := json.Marshal(h.c.Stats())
-	want := `{"captured":0,"passed":0,"injected":0,"errors":0,"game_pids":[100],"last_error":""}`
+	want := `{"captured":0,"passed":0,"injected":0,"errors":0,"game_pids":[100],"last_error":"","route_repairs":0}`
 	if string(b) != want {
 		t.Fatalf("got  %s\nwant %s", b, want)
 	}

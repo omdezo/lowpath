@@ -9,6 +9,7 @@ package nft
 
 import (
 	"encoding/binary"
+	"strings"
 
 	"lowpath/internal/netlink"
 )
@@ -25,6 +26,7 @@ const (
 	batchEnd       = 0x11
 
 	msgNewTable   = 0
+	msgGetTable   = 1
 	msgDelTable   = 2
 	msgNewChain   = 3
 	msgNewRule    = 6
@@ -32,8 +34,9 @@ const (
 	msgNewSetElem = 12
 	msgDelSetElem = 14
 
-	tableName  = 1
-	tableFlags = 2
+	tableName   = 1
+	tableFlags  = 2
+	tableHandle = 4
 
 	chainTable  = 1
 	chainName   = 3
@@ -116,6 +119,40 @@ func AddTable(f Family, name string, flags uint32) netlink.Message {
 		a.BE32(tableFlags, flags)
 	}
 	return msg(msgNewTable, f, netlink.FlagAck|netlink.FlagCreate, "add table "+name, &a)
+}
+
+// ListTables is the dump request for the tables of family f, sent outside
+// a batch; ParseTable reads the answers. Listing needs no ownership.
+func ListTables(f Family) netlink.Message {
+	return msg(msgGetTable, f, 0, "list tables", &netlink.Attrs{})
+}
+
+// Table is one table of a ListTables answer.
+type Table struct {
+	Name string
+	// Handle is unique to this table: one made again under the same name
+	// gets a new one (Linux 4.16+; 0 on older kernels).
+	Handle uint64
+	Flags  uint32
+}
+
+// ParseTable decodes one table of a ListTables answer; ok is false for any
+// other message.
+func ParseTable(r netlink.Reply) (t Table, ok bool) {
+	if r.Type != subsysNftables<<8|msgNewTable || len(r.Data) < 4 {
+		return Table{}, false
+	}
+	for _, a := range netlink.ParseAttrs(r.Data[4:]) {
+		switch {
+		case a.Type == tableName:
+			t.Name = strings.TrimRight(string(a.Data), "\x00")
+		case a.Type == tableFlags && len(a.Data) == 4:
+			t.Flags = binary.BigEndian.Uint32(a.Data)
+		case a.Type == tableHandle && len(a.Data) == 8:
+			t.Handle = binary.BigEndian.Uint64(a.Data)
+		}
+	}
+	return t, t.Name != ""
 }
 
 // DelTable deletes a table and everything in it; ENOENT when there is none.

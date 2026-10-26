@@ -212,9 +212,12 @@ func DelRule(r Rule) netlink.Message {
 }
 
 // ListRules is the dump request for every IPv4 rule; ParseRule reads the
-// answers.
+// answers. The family in the header limits the dump to IPv4 (AF_UNSPEC
+// would add every other family's rules).
 func ListRules() netlink.Message {
-	return netlink.Message{Type: typeGetRule, Op: "list routing rules", Data: make([]byte, 12)}
+	b := make([]byte, 12)
+	b[0] = afInet
+	return netlink.Message{Type: typeGetRule, Op: "list routing rules", Data: b}
 }
 
 // ParseRule decodes one rule of a ListRules answer. ok is false for a

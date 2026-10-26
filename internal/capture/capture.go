@@ -27,6 +27,8 @@ import (
 	"log/slog"
 	"net/netip"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,6 +64,10 @@ type Stats struct {
 	Errors    uint64   `json:"errors"`
 	GamePIDs  []uint32 `json:"game_pids"` // running game processes
 	LastError string   `json:"last_error"`
+	// RouteRepairs counts the times another program removed part of the
+	// routing that brings the game's packets here, and it was put back
+	// (TUN backend). Packets in between took the normal route.
+	RouteRepairs uint64 `json:"route_repairs"`
 }
 
 // Process is a running program with at least one UDP socket.
@@ -72,7 +78,30 @@ var (
 	ErrNoDriver    = divert.ErrNoDriver
 	ErrUnsupported = divert.ErrUnsupported
 	ErrClosed      = errors.New("capture: closed")
+	// ErrRouteRemoved means another program removed the routing that brings
+	// the game's packets to the capture (a network manager or a firewall
+	// reload), and it couldn't be put back or keeps being removed: capture
+	// stopped and the game is on the normal route.
+	ErrRouteRemoved = errors.New("capture: another program removed the routing to the capture")
 )
+
+// routeLost is an ErrRouteRemoved that says which part went and why it
+// couldn't come back.
+type routeLost struct {
+	part  string // "routing rule", "nftables table"
+	err   error  // why putting it back failed; nil when it keeps going
+	times int    // how often it was put back within routeRepairWindow
+}
+
+func (e *routeLost) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("capture stopped: another program keeps removing the %s (%d times within a minute)", e.part, e.times)
+	}
+	return fmt.Sprintf("capture stopped: another program removed the %s and putting it back failed: %v", e.part, e.err)
+}
+
+func (e *routeLost) Is(target error) bool { return target == ErrRouteRemoved }
+func (e *routeLost) Unwrap() error        { return e.err }
 
 // device is the part of a WinDivert handle the packet loop uses; tests swap
 // in a fake so the loop runs without the driver.
@@ -93,6 +122,12 @@ const (
 	// maxRecvFailures consecutive receive errors (~1 s) mean the handle is
 	// broken; capture then stops so matching traffic isn't held in the queue.
 	maxRecvFailures = 100
+	// A program that removes the routing more than maxRouteRepairs times
+	// within routeRepairWindow (a script that keeps re-applying its own
+	// rules) would send the game's packets on the normal route part of the
+	// time while the UI says boosted; capture stops instead and says why.
+	maxRouteRepairs   = 5
+	routeRepairWindow = time.Minute // routeLost's message says "a minute"
 )
 
 type Capture struct {
@@ -103,6 +138,8 @@ type Capture struct {
 
 	captured, passed, injected, errs atomic.Uint64
 	lastErr                          atomic.Pointer[string]
+	routeRepairs                     atomic.Uint64
+	repairedAt                       []time.Time // within routeRepairWindow; maintain's own
 
 	flowMu  sync.RWMutex
 	flows   map[flowKey]*route
@@ -357,17 +394,22 @@ func (c *Capture) Inject(local, remote netip.AddrPort, payload []byte) error {
 }
 
 // maintain refreshes the owner table every second (new game processes, new
-// sockets, PID reuse) and forgets idle flows.
+// sockets, PID reuse), checks that the routing to the device is still there
+// (TUN backend) and forgets idle flows.
 func (c *Capture) maintain() {
 	defer c.wg.Done()
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	rk, _ := c.dev.(routeKeeper)
 	for {
 		select {
 		case <-c.stop:
 			return
 		case now := <-t.C:
 			c.tick.Store(now.Unix())
+			if rk != nil && !c.keepRoute(rk, now) {
+				return // stopping: the routing is gone for good
+			}
 			if err := c.owners.refresh(); err != nil {
 				c.fail(err)
 			} else if ds, ok := c.dev.(directSetter); ok {
@@ -380,6 +422,35 @@ func (c *Capture) maintain() {
 			c.pruneFlows(now.Add(-flowIdle).Unix())
 		}
 	}
+}
+
+// keepRoute has the device put back routing that another program removed,
+// counts and logs each time, and stops capturing (false) when that fails or
+// keeps happening: then the game's packets take the normal route for good,
+// and the UI must stop saying they are boosted.
+func (c *Capture) keepRoute(rk routeKeeper, now time.Time) bool {
+	fixed, err := rk.keepRoute()
+	if errors.Is(err, ErrRouteRemoved) {
+		c.abort(err)
+		return false
+	}
+	if err != nil {
+		c.fail(err) // the check itself failed; the next one tries again
+	}
+	if len(fixed) == 0 {
+		return true
+	}
+	n := c.routeRepairs.Add(1)
+	c.repairedAt = append(slices.DeleteFunc(c.repairedAt, func(t time.Time) bool {
+		return now.Sub(t) >= routeRepairWindow
+	}), now)
+	c.log.Warn("capture: another program removed the routing to the capture; put it back",
+		"parts", fixed, "times", n, "within_window", len(c.repairedAt))
+	if len(c.repairedAt) > maxRouteRepairs {
+		c.abort(&routeLost{part: strings.Join(fixed, " and "), times: len(c.repairedAt)})
+		return false
+	}
+	return true
 }
 
 func (c *Capture) pruneFlows(before int64) {
@@ -407,11 +478,12 @@ func (c *Capture) fail(err error) {
 
 func (c *Capture) Stats() Stats {
 	s := Stats{
-		Captured: c.captured.Load(),
-		Passed:   c.passed.Load(),
-		Injected: c.injected.Load(),
-		Errors:   c.errs.Load(),
-		GamePIDs: c.owners.gamePIDs(),
+		Captured:     c.captured.Load(),
+		Passed:       c.passed.Load(),
+		Injected:     c.injected.Load(),
+		Errors:       c.errs.Load(),
+		GamePIDs:     c.owners.gamePIDs(),
+		RouteRepairs: c.routeRepairs.Load(),
 	}
 	if s.GamePIDs == nil {
 		s.GamePIDs = []uint32{}
@@ -426,7 +498,8 @@ func (c *Capture) Stats() Stats {
 // by Close or on its own.
 func (c *Capture) Done() <-chan struct{} { return c.done }
 
-// Err says why capture stopped on its own (watchdog, panic, broken handle).
+// Err says why capture stopped on its own (watchdog, panic, broken handle,
+// routing removed: ErrRouteRemoved).
 // It is nil while capturing and after a plain Close.
 func (c *Capture) Err() error {
 	if e := c.reason.Load(); e != nil {

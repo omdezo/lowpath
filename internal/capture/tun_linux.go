@@ -3,10 +3,12 @@ package capture
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -136,6 +138,9 @@ type tunLink struct {
 	mu      sync.Mutex
 	ruleOn  bool
 	tableOn bool
+	owned   bool            // the table belongs to nf (Linux 5.12+)
+	handle  uint64          // the table's, to tell it from one made again
+	route   tunRoute        // what the table was made for, to make it again
 	direct  map[uint16]bool // what the kernel's set holds
 
 	shutOnce, closeOnce sync.Once
@@ -183,6 +188,7 @@ func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 		return err
 	}
 	err = d.nf.Do(tunRuleset(r, own)...)
+	d.owned = own && err == nil
 	if own && (errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL)) {
 		// Before Linux 5.12 a table can't belong to a socket, and the
 		// unknown flag is refused with EINVAL (EOPNOTSUPP since); Close
@@ -200,6 +206,8 @@ func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 		return d.rightsOr(fmt.Errorf("capture: nftables: %w", err), err)
 	}
 	d.tableOn = true
+	d.route = r
+	d.handle, _, _ = d.findTable() // without it, keepRoute checks the name only
 	for _, p := range r.direct {
 		d.direct[p] = true
 	}
@@ -360,6 +368,83 @@ func (d *tunLink) ShutdownRecv() error {
 		d.file.SetReadDeadline(time.Now().Add(drainWait))
 	})
 	return err
+}
+
+// keepRoute (every second, from Capture.maintain) puts back the table and
+// the rule when another program removed them; without either, the game's
+// packets silently take the normal route. Two common causes:
+//
+//   - systemd-networkd deletes every rule its .network files don't declare
+//     whenever it configures a link (ManageForeignRoutingPolicyRules=, on
+//     by default since systemd 249), after a carrier change, a resume or a
+//     `networkctl reload`; VPN scripts that flush rules do the same.
+//   - A firewall reload's `nft flush ruleset` deletes the table on kernels
+//     before 5.12. An owned table is skipped by the flush and only its own
+//     socket may delete it, so there the check finds it every time.
+//
+// A table made again under the same name (by another program after a
+// flush) has another handle, so it doesn't pass for this one; kernels
+// before 4.16 give no handle, and there the name is all that is checked.
+// One dump of the ip tables and one of the IPv4 rules: both cheap.
+func (d *tunLink) keepRoute() ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.ruleOn || !d.tableOn {
+		return nil, nil // stopping; nothing comes back now
+	}
+	var fixed []string
+	handle, ok, err := d.findTable()
+	if err != nil {
+		return nil, fmt.Errorf("capture: list the nftables tables: %w", err)
+	}
+	if ok && d.handle == 0 {
+		d.handle = handle // the lookup at Start failed, or a kernel before 4.16
+	}
+	if !ok || handle != d.handle {
+		// Gone, or a table of that name that isn't this one (made after a
+		// flush). Made again as at Start, with the direct ports it held;
+		// that fails when another program's socket owns the name.
+		r := d.route
+		r.direct = slices.Sorted(maps.Keys(d.direct))
+		if err := d.nf.Do(tunRuleset(r, d.owned)...); err != nil {
+			return nil, &routeLost{part: "nftables table", err: err}
+		}
+		d.handle, _, _ = d.findTable()
+		fixed = append(fixed, "nftables table")
+	}
+	rules, err := d.rt.Dump(rtnl.ListRules())
+	if err != nil {
+		return fixed, fmt.Errorf("capture: list the routing rules: %w", err)
+	}
+	if !slices.ContainsFunc(rules, isTUNRule) {
+		// The device, its route and table tunTable are still there: this is
+		// the same last step as at Start.
+		if err := d.rt.Do(rtnl.AddRule(tunRule)); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return fixed, &routeLost{part: "routing rule", err: err}
+		}
+		fixed = append(fixed, "routing rule")
+	}
+	return fixed, nil
+}
+
+// findTable looks up the nftables table's handle; ok is false when there
+// is no table of that name.
+func (d *tunLink) findTable() (handle uint64, ok bool, err error) {
+	tables, err := d.nf.Dump(nft.ListTables(nft.IPv4))
+	if err != nil {
+		return 0, false, err
+	}
+	for _, r := range tables {
+		if t, _ := nft.ParseTable(r); t.Name == tunNftTable {
+			return t.Handle, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func isTUNRule(r netlink.Reply) bool {
+	rule, ok := rtnl.ParseRule(r)
+	return ok && rule == tunRule
 }
 
 func (d *tunLink) removeRule() error {

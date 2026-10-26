@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -177,7 +178,7 @@ func (s *Server) watchCapture(ctx context.Context, sess *session, c capture.Sess
 	if g, ok := s.game(sess.GameID); ok {
 		v.Game = g.Name
 	}
-	v.Message = fmt.Sprintf("Boost stopped: Lowpath's packet handling for %s stopped working, so the game went back to your normal connection.", nameOr(v.Game, "the game"))
+	v.Message = failOpenMessage(err, nameOr(v.Game, "the game"))
 	s.life.Lock()
 	defer s.life.Unlock()
 	s.mu.Lock()
@@ -189,6 +190,16 @@ func (s *Server) watchCapture(ctx context.Context, sess *session, c capture.Sess
 	if current {
 		s.stopSessionLocked()
 	}
+}
+
+// failOpenMessage says why a capture stopped on its own, for game.
+func failOpenMessage(err error, game string) string {
+	if errors.Is(err, capture.ErrRouteRemoved) {
+		// Not Lowpath's packet handling, and something the user can change:
+		// name the usual culprits.
+		return fmt.Sprintf("Boost stopped: another program (a network manager, VPN or firewall) removed the routing that sends %s through Lowpath, so the game went back to your normal connection.", game)
+	}
+	return fmt.Sprintf("Boost stopped: Lowpath's packet handling for %s stopped working, so the game went back to your normal connection.", game)
 }
 
 // stopEngine stops the engine (recording the game's server first in route

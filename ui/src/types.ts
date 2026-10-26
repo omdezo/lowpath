@@ -132,6 +132,9 @@ export interface CaptureStats {
   errors: number;
   game_pids: number[] | null;
   last_error: string;
+  // Times another program removed the routing to the capture and Lowpath
+  // put it back (Linux).
+  route_repairs?: number;
 }
 
 export interface Live {

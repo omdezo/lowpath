@@ -124,6 +124,14 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- Route mode on Linux notices when another program removes its routing
+  rule (systemd-networkd does this to rules its `.network` files don't
+  declare) or, on kernels before 5.12, its nftables table (a firewall's
+  `nft flush ruleset`): it puts them back within about a second, counts
+  and logs each time (*Route fixes* in the live view), and ends the boost
+  with the reason when it can't put them back or another program keeps
+  removing them, instead of saying the game is boosted while its packets
+  take the normal connection (#151).
 - The background service's Unix socket on Linux and macOS no longer serves
   every local account: root, the service's own account and accounts signed
   in at the computer (a logind session, a utmpx session on macOS, or a
