@@ -9,6 +9,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Verdict in Settings → Diagnostics: one plain answer to "why am I
+  lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
+  server, or already optimal), with a confidence level, the measurements
+  behind it and an exportable text report (#14). It says when the PC is
+  offline, ignores a route trace taken on another connection, and counts a
+  carrier-grade NAT hop as the ISP's, not the home network.
 - Route trace (MTR) in Settings → Diagnostics: loss and delay at every
   router on the way to a relay, game server or any host, 200 probes per
   hop over ICMP (no admin rights on Windows), or with the relay's own UDP

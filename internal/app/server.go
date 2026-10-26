@@ -126,6 +126,7 @@ type Server struct {
 	trace   *traceRunner
 	line    *lineWatch
 	current *currentServers
+	verdict *verdicts
 	marker  SessionMarker // nil: none
 
 	// lifetime ends when the server closes; background work (the
@@ -229,8 +230,9 @@ func NewServer(cfg Config) (*Server, error) {
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
 		lifetime: life, endLife: endLife,
-		line:   newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
-		marker: cfg.Marker,
+		line:    newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
+		verdict: newVerdicts(cfg.NetStats),
+		marker:  cfg.Marker,
 	}
 	s.bloat = &bloatRunner{
 		net: cfg.NetStats, loader: cfg.BloatLoader, ping: cfg.Ping, store: cfg.Store,
@@ -239,7 +241,7 @@ func NewServer(cfg Config) (*Server, error) {
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
 	}
 	s.trace = &traceRunner{
-		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
+		ping: cfg.PingTTL, names: cfg.Names, net: cfg.NetStats, store: cfg.Store, log: cfg.Log.With("component", "trace"),
 		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
 	s.recoverLeftover()
@@ -412,6 +414,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/diag/trace", s.handleStartTrace)
 	mux.HandleFunc("DELETE /api/diag/trace", s.handleStopTrace)
 	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
+	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
+	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -757,6 +761,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"location":     s.lastLocation(), // addresses cut to /24 and /48
 		"bufferbloat":  s.store.Bloat(),
 		"route_trace":  s.lastTrace(), // addresses cut to /24 and /48
+		"verdict":      s.diagnosis(),
 		"live":         s.live(),
 	})
 }

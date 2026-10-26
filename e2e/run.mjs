@@ -174,6 +174,8 @@ const scrollPanel = (page, text) =>
 
 // scrollTop brings the main panel back to the top (banners live there).
 const scrollTop = (page) => page.evaluate(() => document.querySelector(".main")?.scrollTo(0, 0));
+// scrollToStart brings the top of the first element matching sel to the top of its scroller.
+const scrollToStart = (page, sel) => page.locator(sel).first().evaluate((el) => el.scrollIntoView({ block: "start" })).catch(() => {});
 
 const closeSettings = (page) => page.getByRole("button", { name: "Close settings" }).click();
 
@@ -368,10 +370,11 @@ async function main() {
     // 4b. Diagnostics: the bufferbloat test, against the local load server.
     await page.getByRole("tab", { name: "Diagnostics" }).click();
     await page.getByRole("button", { name: "Run test" }).waitFor();
-    await shot(page, "diagnostics", "Settings → Diagnostics: bufferbloat test, not run yet");
+    await shot(page, "diagnostics", "Settings → Diagnostics: the verdict with nothing measured yet");
     await page.getByRole("button", { name: "Run test" }).click();
     await page.locator(".bloat-live", { hasText: "Downloading" }).waitFor({ timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1500);
+    await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-running", "Bufferbloat test running: download phase, live ping and load");
     let bloat;
     for (let i = 0; i < 80; i++) {
@@ -388,6 +391,7 @@ async function main() {
     check("Bufferbloat test loaded the line both ways", br && br.phases?.[1]?.load_mbps > 0 && br.phases?.[2]?.load_mbps > 0, br && `${br.phases?.[1]?.load_mbps?.toFixed?.(0)} / ${br.phases?.[2]?.load_mbps?.toFixed?.(0)} Mbit/s`);
     check("A grade comes with a measured idle ping", br && (!br.grade || br.idle_ms > 0), br && `grade ${br.grade || "none"}`);
     await page.getByRole("button", { name: "Run again" }).waitFor({ timeout: 5000 }).catch(() => {});
+    await scrollToStart(page, 'section[aria-label="Bufferbloat test"]');
     await shot(page, "bloat-result", `Bufferbloat result: grade ${br?.grade || "none (see note)"}`);
 
     // 4c. Diagnostics: route trace (MTR), shortened to 15 rounds by the
@@ -434,6 +438,30 @@ async function main() {
     await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
     await page.locator(".trace-foot").scrollIntoViewIfNeeded();
     await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
+
+    // 4d. The verdict reads the tests above (it refreshes every 4 s).
+    await page.waitForTimeout(4500);
+    await scrollToStart(page, ".verdict");
+    const vd = (await api(page, "GET", "/diag/verdict")).body;
+    const vchk = (rule) => vd?.checks?.find((c) => c.rule === rule);
+    const shown = (await page.locator(".verdict-main .t").textContent().catch(() => "")) ?? "";
+    check(
+      "Verdict reads the bufferbloat test and the route trace",
+      vd?.checks?.length === 5 && vchk("home")?.status !== "unknown" && vchk("isp")?.summary && shown === vd.verdict.title,
+      vd ? `${vd.verdict.id} (${vd.verdict.confidence}): ${vd.verdict.title}; ${vd.checks.map((c) => `${c.rule} ${c.status}`).join(", ")}` : "no answer",
+    );
+    const diagText = await page.evaluate(async () => (await fetch("/api/diag/verdict/report")).text());
+    // Shared reports keep only the network part of public addresses.
+    const privateV4 = (a) => /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a);
+    const fullAddrs = (diagText.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) ?? []).filter((a) => !a.endsWith(".0") && !privateV4(a));
+    check(
+      "Diagnosis report exports as text without full public addresses",
+      diagText.startsWith("Lowpath diagnosis") && diagText.includes("VERDICT: ") && diagText.includes("CHECKS") && fullAddrs.length === 0,
+      `${diagText.split("\n").length} lines${fullAddrs.length ? `; full addresses: ${fullAddrs.length}` : ""}`,
+    );
+    await page.getByRole("button", { name: /Show the measurements/ }).click().catch(() => {});
+    await scrollToStart(page, ".verdict");
+    await shot(page, "verdict", `Diagnostics verdict with the measurements open: ${vd?.verdict?.title ?? "—"}`);
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.
