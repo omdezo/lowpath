@@ -102,7 +102,7 @@ func newTestConnWatch(f *fakeConns, names map[uint32]string) (*ConnWatch, *int) 
 }
 
 func TestConnWatchSplitsLANFromInternet(t *testing.T) {
-	f := &fakeConns{owners: map[uint64]uint32{1: 300, 2: 300, 3: 400, 9: 500}}
+	f := &fakeConns{owners: map[uint64]uint32{1: 300, 2: 300, 3: 400, 9: 500, 11: 300}}
 	w, nameReads := newTestConnWatch(f, map[uint32]string{300: "steam", 400: "backup", 500: "nas-sync"})
 	at := time.Unix(1000, 0)
 	f.conns = []TCPConn{
@@ -117,8 +117,8 @@ func TestConnWatchSplitsLANFromInternet(t *testing.T) {
 	}
 	// One second later: Steam downloads 10 MB/s over two connections, a
 	// backup uploads 2 MB/s over IPv6, the NAS copy moves 100 MB/s on the
-	// LAN, loopback traffic is ignored, and a connection opened during the
-	// second counts in full.
+	// LAN, loopback traffic is ignored, and connections opened during the
+	// second count in full.
 	f.conns = []TCPConn{
 		conn(1, "192.0.2.10:50001", "203.0.113.5:443", 1000, 5_000_000),
 		conn(2, "192.0.2.10:50002", "203.0.113.6:443", 0, 8_000_000),
@@ -126,6 +126,7 @@ func TestConnWatchSplitsLANFromInternet(t *testing.T) {
 		conn(9, "192.0.2.10:50009", "192.0.2.20:445", 0, 150_000_000),
 		conn(10, "127.0.0.1:50010", "127.0.0.1:7878", 2e10, 2e10),
 		conn(11, "192.0.2.10:50011", "203.0.113.5:443", 0, 1_000_000),
+		conn(12, "192.0.2.10:50012", "203.0.113.8:443", 0, 3_000_000),
 	}
 	s, ok := w.Sample(at.Add(time.Second), 7)
 	if !ok {
@@ -135,7 +136,7 @@ func TestConnWatchSplitsLANFromInternet(t *testing.T) {
 		t.Errorf("LAN = %v down, %v up; want 100 MB/s down", s.LANRx, s.LANTx)
 	}
 	want := []Talker{
-		{PID: 300, Name: "steam", Rx: 10e6}, // conn 11 has no owner: not counted for Steam
+		{PID: 300, Name: "steam", Rx: 11e6}, // conn 12 has no owner: no one's
 		{PID: 400, Name: "backup", Tx: 2e6},
 	}
 	if !reflect.DeepEqual(s.Talkers, want) {
