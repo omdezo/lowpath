@@ -28,22 +28,22 @@ type fakeOS struct {
 func newFakeOS() *fakeOS {
 	return &fakeOS{
 		socks: []socket{
-			{gameLocal, pidGame},
-			{netip.MustParseAddrPort("192.168.1.10:50001"), pidOther},
-			{netip.MustParseAddrPort("0.0.0.0:50002"), pidSelf},
+			{Local: gameLocal, PID: pidGame},
+			{Local: netip.MustParseAddrPort("192.168.1.10:50001"), PID: pidOther},
+			{Local: netip.MustParseAddrPort("0.0.0.0:50002"), PID: pidSelf},
 		},
 		procs: map[uint32]string{pidGame: "Game.exe", pidOther: "chrome.exe", pidSelf: "game.exe"},
 	}
 }
 
-func (f *fakeOS) sockets() ([]socket, error) {
+func (f *fakeOS) UDPSockets() ([]socket, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sockCalls++
 	return slices.Clone(f.socks), f.err
 }
 
-func (f *fakeOS) processes() (map[uint32]string, error) {
+func (f *fakeOS) ProcessNames() (map[uint32]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.procCalls++
@@ -55,7 +55,7 @@ func (f *fakeOS) add(s socket, name string) {
 	defer f.mu.Unlock()
 	f.socks = append(f.socks, s)
 	if name != "" {
-		f.procs[s.pid] = name
+		f.procs[s.PID] = name
 	}
 }
 
@@ -67,7 +67,7 @@ func (f *fakeOS) calls() (socks, procs int) {
 
 func newTestOwners(t *testing.T, f *fakeOS, processes ...string) *owners {
 	t.Helper()
-	o, err := newOwners(processes, nil, pidSelf, f.sockets, f.processes)
+	o, err := newOwners(processes, nil, pidSelf, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +84,14 @@ func mustGame(t *testing.T, o *owners, local string, want bool) {
 
 func TestOwnersVerdicts(t *testing.T) {
 	f := newFakeOS()
-	f.add(socket{netip.MustParseAddrPort("0.0.0.0:6000"), pidGame}, "")
-	f.add(socket{netip.MustParseAddrPort("[::]:6001"), pidGame}, "")                  // dual-stack
-	f.add(socket{netip.MustParseAddrPort("[::ffff:192.168.1.10]:6002"), pidGame}, "") // v4-mapped
-	f.add(socket{netip.MustParseAddrPort("[2001:db8::1]:6003"), pidGame}, "")         // pure IPv6
-	f.add(socket{netip.MustParseAddrPort("192.168.1.10:6000"), pidOther}, "")         // exact beats wildcard
-	f.add(socket{netip.MustParseAddrPort("[::]:6004"), pidGame}, "")
-	f.add(socket{netip.MustParseAddrPort("0.0.0.0:6004"), pidOther}, "") // v4 wildcard beats [::]
-	o := newTestOwners(t, f, " GAME ")                                   // normalized to game.exe
+	f.add(socket{Local: netip.MustParseAddrPort("0.0.0.0:6000"), PID: pidGame}, "")
+	f.add(socket{Local: netip.MustParseAddrPort("[::]:6001"), PID: pidGame}, "")                  // dual-stack
+	f.add(socket{Local: netip.MustParseAddrPort("[::ffff:192.168.1.10]:6002"), PID: pidGame}, "") // v4-mapped
+	f.add(socket{Local: netip.MustParseAddrPort("[2001:db8::1]:6003"), PID: pidGame}, "")         // pure IPv6
+	f.add(socket{Local: netip.MustParseAddrPort("192.168.1.10:6000"), PID: pidOther}, "")         // exact beats wildcard
+	f.add(socket{Local: netip.MustParseAddrPort("[::]:6004"), PID: pidGame}, "")
+	f.add(socket{Local: netip.MustParseAddrPort("0.0.0.0:6004"), PID: pidOther}, "") // v4 wildcard beats [::]
+	o := newTestOwners(t, f, " GAME ")                                               // normalized to game.exe
 
 	mustGame(t, o, gameLocal.String(), true)
 	mustGame(t, o, "192.168.1.10:50001", false) // chrome
@@ -110,7 +110,7 @@ func TestOwnersVerdicts(t *testing.T) {
 
 func TestOwnersExactPIDs(t *testing.T) {
 	f := newFakeOS()
-	o, err := newOwners(nil, []uint32{pidOther, pidSelf}, pidSelf, f.sockets, f.processes)
+	o, err := newOwners(nil, []uint32{pidOther, pidSelf}, pidSelf, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestOwnersFirstPacketOfNewGame(t *testing.T) {
 	o := newTestOwners(t, f, "late.exe")
 	s0, p0 := f.calls()
 
-	f.add(socket{netip.MustParseAddrPort("192.168.1.10:7000"), 400}, "late.exe")
+	f.add(socket{Local: netip.MustParseAddrPort("192.168.1.10:7000"), PID: 400}, "late.exe")
 	mustGame(t, o, "192.168.1.10:7000", true)
 	if s, p := f.calls(); s != s0+1 || p != p0+1 {
 		t.Fatalf("lookups: sockets %d->%d, processes %d->%d; want one each", s0, s, p0, p)
@@ -136,7 +136,7 @@ func TestOwnersFirstPacketOfNewGame(t *testing.T) {
 	}
 
 	// A new socket of a known process needs no process list.
-	f.add(socket{netip.MustParseAddrPort("192.168.1.10:7001"), 400}, "")
+	f.add(socket{Local: netip.MustParseAddrPort("192.168.1.10:7001"), PID: 400}, "")
 	mustGame(t, o, "192.168.1.10:7001", true)
 	if _, p := f.calls(); p != p0+1 {
 		t.Fatal("process list re-read for a known PID")
@@ -154,7 +154,7 @@ func TestOwnersUnownedCached(t *testing.T) {
 	}
 	// The next background refresh drops the negative entry, so a game that
 	// binds the port later is found.
-	f.add(socket{netip.MustParseAddrPort("192.168.1.10:9999"), pidGame}, "")
+	f.add(socket{Local: netip.MustParseAddrPort("192.168.1.10:9999"), PID: pidGame}, "")
 	if err := o.refresh(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestOwnersPIDReuse(t *testing.T) {
 func TestOwnersErrors(t *testing.T) {
 	f := newFakeOS()
 	f.err = errors.New("boom")
-	if _, err := newOwners([]string{"game.exe"}, nil, pidSelf, f.sockets, f.processes); err == nil {
+	if _, err := newOwners([]string{"game.exe"}, nil, pidSelf, f); err == nil {
 		t.Fatal("newOwners ignored a listing error")
 	}
 	f.err = nil

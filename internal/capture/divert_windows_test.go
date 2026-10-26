@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"lowpath/internal/divert"
+	"lowpath/internal/owner"
 )
 
 // These tests use the real WinDivert.dll from the source tree. Its helpers
@@ -156,32 +157,17 @@ func TestChecksumsMatchDLL(t *testing.T) {
 }
 
 func TestStartWithoutAdmin(t *testing.T) {
-	if IsAdmin() {
+	if divert.IsAdmin() {
 		t.Skip("elevated: Start would really capture")
 	}
 	loadDLL(t)
 	_, err := Start(Config{
 		DriverDir: "../divert/bin",
 		Processes: []string{"game.exe"},
+		Owners:    owner.New(),
 		OnPacket:  func(_, _ netip.AddrPort, _ []byte) bool { return true },
 	})
 	if !errors.Is(err, ErrNeedAdmin) {
 		t.Fatalf("Start without admin: %v, want ErrNeedAdmin", err)
-	}
-}
-
-func BenchmarkOwnerLookupMiss(b *testing.B) {
-	for b.Loop() {
-		if _, err := udpSockets(); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkProcessList(b *testing.B) {
-	for b.Loop() {
-		if _, err := processNames(); err != nil {
-			b.Fatal(err)
-		}
 	}
 }

@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Platform layer: capture, socket-owner lookup, privileges, game detection,
+  icons and folders sit behind per-OS interfaces; the app builds for Windows,
+  Linux and macOS, and explains when a feature isn't available on the
+  current OS (#40).
 - Local CI publishes its result as the `local-ci` status check on pull
   requests (`scripts/ci.ps1 -Report`).
 - CODEOWNERS, this changelog, and the pull request process in

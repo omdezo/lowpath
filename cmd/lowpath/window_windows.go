@@ -5,16 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"runtime"
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
 	"github.com/jchv/go-webview2/webviewloader"
 	"golang.org/x/sys/windows"
-
-	"lowpath/internal/capture"
 )
 
 const (
@@ -40,7 +36,7 @@ var (
 // runWindow shows url in a WebView2 window and returns when the window is
 // closed (by the user, or because ctx ended). It returns an error at once if
 // WebView2 is not available, so the caller can fall back to the browser.
-func runWindow(ctx context.Context, url string, log *slog.Logger) error {
+func runWindow(ctx context.Context, url, dataDir string, log *slog.Logger) error {
 	if v, err := webviewloader.GetInstalledVersion(); err != nil || v == "" {
 		return fmt.Errorf("the WebView2 runtime is not installed (%v)", err)
 	}
@@ -51,7 +47,7 @@ func runWindow(ctx context.Context, url string, log *slog.Logger) error {
 	scale := dpiScale()
 	w, h := fitScreen(int(winWidth*scale), int(winHeight*scale))
 	wv := webview2.NewWithOptions(webview2.WebViewOptions{
-		DataPath:  webViewDataDir(),
+		DataPath:  dataDir,
 		AutoFocus: true,
 		WindowOptions: webview2.WindowOptions{
 			Title: windowTitle, Width: uint(w), Height: uint(h), IconId: iconID, Center: true,
@@ -102,23 +98,6 @@ func fitScreen(w, h int) (int, int) {
 		h = min(h, int(sh)*90/100)
 	}
 	return w, h
-}
-
-// webViewDataDir is WebView2's profile folder. An elevated run gets its own:
-// WebView2 fails to start (and go-webview2 then exits the process) on a folder
-// that browser processes of the other elevation level still use, as the old
-// window's do for a moment after "Restart as administrator". The UI keeps no
-// state in the browser, so nothing is lost by not sharing it.
-func webViewDataDir() string {
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		base, _ = os.UserCacheDir()
-	}
-	name := "WebView2"
-	if capture.IsAdmin() {
-		name = "WebView2-admin"
-	}
-	return filepath.Join(base, "Lowpath", name)
 }
 
 // focusExisting brings an already open Lowpath window to the front.

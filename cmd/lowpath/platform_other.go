@@ -12,11 +12,8 @@ import (
 	"time"
 )
 
-// Route mode (and so elevation) exists only on Windows; elsewhere the app
-// runs in proxy mode and is viewed in a browser.
-const elevationSupported = false
-
-func relaunchElevated([]string) error { return errors.New("not supported on this platform") }
+// The desktop shell (window, focusing a running copy) exists only on
+// Windows so far; elsewhere the UI opens in the browser (issue #44).
 
 func waitForExit(pid int, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
@@ -31,7 +28,7 @@ func waitForExit(pid int, timeout time.Duration) {
 
 func showError(title, msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", title, msg) }
 
-func runWindow(ctx context.Context, url string, log *slog.Logger) error {
+func runWindow(ctx context.Context, url, dataDir string, log *slog.Logger) error {
 	return errors.New("the app window is only available on Windows")
 }
 

@@ -11,6 +11,10 @@
 //
 // Nothing persistent is installed besides the driver files: when the handle
 // is closed (Close, or the process exits) networking is back to normal.
+//
+// Backend (backend.go) is the OS-neutral contract the app depends on;
+// WinDivert implements it on Windows, and Unavailable stands in where no
+// capture method exists yet.
 package capture
 
 import (
@@ -23,6 +27,7 @@ import (
 	"time"
 
 	"lowpath/internal/divert"
+	"lowpath/internal/owner"
 )
 
 type Config struct {
@@ -30,6 +35,7 @@ type Config struct {
 	Processes []string         // image names to capture, case-insensitive ("cs2.exe")
 	PIDs      []uint32         // extra exact PIDs to capture (optional)
 	Exclude   []netip.AddrPort // relay endpoints: never captured (port 0 = whole host)
+	Owners    owner.Resolver   // who owns each local UDP socket (required)
 
 	// OnPacket is called for every captured game packet, from several
 	// goroutines at once; payload is only valid during the call. true =
@@ -49,12 +55,8 @@ type Stats struct {
 	LastError string   `json:"last_error"`
 }
 
-// Process is a running program with at least one UDP socket (see Processes).
-type Process struct {
-	PID      uint32   `json:"pid"`
-	Name     string   `json:"name"`
-	UDPPorts []uint16 `json:"udp_ports"`
-}
+// Process is a running program with at least one UDP socket.
+type Process = owner.Process
 
 var (
 	ErrNeedAdmin   = divert.ErrNeedAdmin
@@ -62,9 +64,6 @@ var (
 	ErrUnsupported = divert.ErrUnsupported
 	ErrClosed      = errors.New("capture: closed")
 )
-
-// IsAdmin reports whether this process runs elevated, which capture needs.
-func IsAdmin() bool { return divert.IsAdmin() }
 
 // device is the part of a WinDivert handle the packet loop uses; tests swap
 // in a fake so the loop runs without the driver.
@@ -131,6 +130,9 @@ func (cfg *Config) check() error {
 	}
 	if len(cfg.Processes) == 0 && len(cfg.PIDs) == 0 {
 		return errors.New("capture: no processes to capture")
+	}
+	if cfg.Owners == nil {
+		return errors.New("capture: Config.Owners is required")
 	}
 	return nil
 }

@@ -73,14 +73,21 @@ var (
 	// ErrNoDriver: the WinDivert files are missing or Windows refused to load
 	// the driver. The wrapped error says which.
 	ErrNoDriver = errors.New("divert: the WinDivert driver is not available")
-	// ErrUnsupported: not 64-bit Windows.
-	ErrUnsupported = errors.New("divert: packet capture needs 64-bit Windows")
+	// ErrUnsupported: not 64-bit Windows. It also matches
+	// errors.ErrUnsupported, which every platform layer uses for "not on
+	// this system".
+	ErrUnsupported error = unsupportedError("divert: packet capture needs 64-bit Windows")
 	// ErrNotLoaded: Load has not been called (or failed).
 	ErrNotLoaded = errors.New("divert: WinDivert.dll is not loaded")
 	// ErrClosed: the handle was shut down or closed. Recv returns it once a
 	// shut-down handle's queue is empty.
 	ErrClosed = errors.New("divert: handle closed")
 )
+
+type unsupportedError string
+
+func (e unsupportedError) Error() string      { return string(e) }
+func (unsupportedError) Is(target error) bool { return target == errors.ErrUnsupported }
 
 // Address mirrors WINDIVERT_ADDRESS (80 bytes). Recv fills it in and Send
 // reads it: for a network-layer packet it says the direction and the
