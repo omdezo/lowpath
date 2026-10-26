@@ -94,6 +94,9 @@ export function describeError(e: unknown, fallback: string): { title?: string; m
   if (!(e instanceof ApiError)) return { msg: fallback };
   switch (e.kind) {
     case "needs_admin":
+      // The daemon says which rights route mode needs on its OS; the
+      // Windows wording below is the default.
+      if (e.message && !e.message.includes("administrator")) return { title: "More rights needed", msg: sentence(e.message) };
       return {
         title: "Administrator rights needed",
         msg: "Route mode captures game traffic with a network driver, which needs administrator rights. Restart Lowpath as administrator, or switch to Proxy mode in Settings → Network.",
@@ -142,4 +145,10 @@ export function subscribeLive(onData: (l: Live) => void, onDown: (down: boolean)
     es?.close();
     window.clearTimeout(retry);
   };
+}
+
+// sentence turns a daemon message ("route mode can't …") into one for a toast.
+function sentence(s: string): string {
+  const t = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }

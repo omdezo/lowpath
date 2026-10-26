@@ -184,6 +184,10 @@ func pickPaths(paths []engine.PathSpec, req *applyReq) ([]engine.PathSpec, error
 // captureErr turns "route mode can't run here" into the error kinds the UI
 // knows: needs_admin (it offers a restart as administrator) or capture_failed.
 func captureErr(err error) *apiError {
+	var rights *capture.RightsError
+	if errors.As(err, &rights) {
+		return &apiError{409, "needs_admin", fmt.Errorf("route mode can't capture game traffic: %s. To fix it, %s; or switch to proxy mode", rights.Reason, rights.Fix)}
+	}
 	if errors.Is(err, capture.ErrNeedAdmin) {
 		return &apiError{409, "needs_admin", errors.New("route mode needs administrator rights: restart Lowpath as administrator, or switch to proxy mode")}
 	}

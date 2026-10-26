@@ -47,7 +47,10 @@ func (s *Server) platform() platformView {
 }
 
 func captureReason(err error) string {
+	var rights *capture.RightsError
 	switch {
+	case errors.As(err, &rights):
+		return rights.Reason // the backend says which rights, for its OS
 	case errors.Is(err, capture.ErrNeedAdmin):
 		return "administrator rights are needed"
 	case errors.Is(err, capture.ErrUnsupported):
@@ -56,6 +59,8 @@ func captureReason(err error) string {
 		return "packet capture isn't available on this system yet"
 	case errors.Is(err, capture.ErrNoDriver):
 		return "the WinDivert driver can't run on this PC"
+	case errors.Is(err, capture.ErrNoTUN):
+		return "the kernel has no TUN device (/dev/net/tun)"
 	default:
 		return err.Error()
 	}
