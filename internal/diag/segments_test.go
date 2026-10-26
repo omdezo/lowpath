@@ -19,7 +19,7 @@ func segment(t *testing.T, d Diagnosis, id string) Segment {
 
 // livePings is a minute of 20 Hz router pings on link.
 func livePings(link *Route, lost int, p99 float64) *GatewaySample {
-	return &GatewaySample{Source: "live router pings, 20 a second", At: vNow.Add(-time.Second), Sent: 1200, Lost: lost,
+	return &GatewaySample{Source: "live router pings, 20 times a second", At: vNow.Add(-time.Second), Sent: 1200, Lost: lost,
 		P50MS: ptr(2.0), TailMS: ptr(p99), TailPct: 99, Link: link.Kind, Interface: link.Name}
 }
 
@@ -46,7 +46,7 @@ func TestSegmentsWiFiLossBlamesHome(t *testing.T) {
 	d := diagnose(Evidence{Link: wifiLink(), Gateway: livePings(wifiLink(), 36, 9)})
 	wantVerdict(t, d, VerdictWiFi, ConfidenceMedium)
 	h := segment(t, d, SegmentHome)
-	if h.Status != SegmentBad || !h.Blamed || *h.RTTMS != 2 || *h.LossPct != 3 || !strings.Contains(h.Source, "20 a second") {
+	if h.Status != SegmentBad || !h.Blamed || *h.RTTMS != 2 || *h.LossPct != 3 || !strings.Contains(h.Source, "Live router pings, 20 times a second") {
 		t.Fatalf("home %+v", h)
 	}
 	for _, id := range []string{SegmentISP, SegmentLowpath, SegmentServer} {
@@ -121,7 +121,7 @@ func TestSegmentsISPTrace(t *testing.T) {
 	d := diagnose(Evidence{Link: cableLink(), Gateway: livePings(cableLink(), 0, 3), Trace: tr})
 	wantVerdict(t, d, VerdictISP, ConfidenceHigh)
 	s := segment(t, d, SegmentISP)
-	if s.Status != SegmentBad || !s.Blamed || *s.RTTMS != 30 || *s.LossPct != 0 || !strings.Contains(s.Source, "Route trace") {
+	if s.Status != SegmentBad || !s.Blamed || *s.RTTMS != 30 || *s.LossPct != 0 || !strings.Contains(s.Source, "Route trace to") {
 		// Hop 2 is the first past home and still clean; the loss starts at 3.
 		t.Fatalf("isp %+v", s)
 	}
@@ -138,7 +138,7 @@ func TestSegmentsBoost(t *testing.T) {
 		t.Fatalf("lowpath %+v", l)
 	}
 	sv := segment(t, d, SegmentServer)
-	if *sv.RTTMS != 35 || sv.LossPct != nil || !strings.Contains(sv.Source, "relay's own leg") {
+	if *sv.RTTMS != 35 || sv.LossPct != nil || !strings.Contains(sv.Source, "the relay to the server") {
 		t.Fatalf("server %+v", sv)
 	}
 	// A lossy relay leg.
@@ -157,7 +157,7 @@ func TestSegmentsInReport(t *testing.T) {
 	ev := Evidence{At: vNow, Link: wifiLink(), Gateway: livePings(wifiLink(), 36, 9)}
 	d := NewVerdictEngine(VerdictConfig{}).Diagnose(ev)
 	txt := DiagnosisReport{Diagnosis: d, Evidence: ev}.Text()
-	for _, want := range []string{"ROUTE, PART BY PART", "[bad] Home: 2.0 ms, 3.0% loss (the verdict).", "[off] Lowpath relay: —.", "Router pings (live router pings, 20 a second"} {
+	for _, want := range []string{"ROUTE, PART BY PART", "[bad] Home: 2.0 ms, 3.0% loss (the verdict).", "[off] Lowpath relay: —.", "Router pings (live router pings, 20 times a second"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("report lacks %q:\n%s", want, txt)
 		}

@@ -1,6 +1,9 @@
 package diag
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Segments split the way from this PC to the game server into the parts a
 // verdict can blame (roadmap §3.7: "segmented Home/ISP/Lowpath/Server
@@ -58,7 +61,7 @@ func homeSegment(v *view, checks map[string]Check) Segment {
 	home, line := checks[ruleHome], checks[ruleLine]
 	s := Segment{ID: SegmentHome, Name: "Home", Status: checkStatus(home), Summary: home.Summary}
 	if g := v.gateway; g != nil && g.Lost < g.Sent {
-		s.RTTMS, s.Source = g.P50MS, "Router pings: "+g.Source
+		s.RTTMS, s.Source = g.P50MS, upperFirst(g.Source)
 		if !g.Limited {
 			s.LossPct = ptr(g.lossPct())
 		}
@@ -90,7 +93,7 @@ func ispSegment(v *view, checks map[string]Check, vd Verdict) Segment {
 		if h := firstISPHop(t); h != nil && h.PersistPct != nil {
 			s.LossPct = h.PersistPct
 		}
-		s.Source = fmt.Sprintf("Route trace to %s: time to the destination, loss that persists past your home network", traceHost(t))
+		s.Source = "Route trace to " + traceHost(t)
 		return s
 	}
 	if b := v.bloat; b != nil {
@@ -98,7 +101,7 @@ func ispSegment(v *view, checks map[string]Check, vd Verdict) Segment {
 			if p.Phase == PhaseIdle && p.Internet.Sent > 0 && p.Internet.Sent > p.Internet.Lost {
 				s.RTTMS = p.Internet.P50
 				s.LossPct = ptr(100 * p.Internet.lossFrac())
-				s.Source = "Bufferbloat test, idle: pings to " + b.Target
+				s.Source = "Bufferbloat test, idle pings to " + b.Target
 			}
 		}
 	}
@@ -141,7 +144,7 @@ func lowpathSegment(v *view, vd Verdict) Segment {
 	}
 	r := p.Relay
 	s.RTTMS, s.LossPct = ptr(r.RTTMS), ptr(r.LossPct)
-	s.Source = pathWords(p, v) + ": the leg from this PC to the relay"
+	s.Source = pathWords(p, v) + ", this PC to the relay"
 	if s.Status != "" {
 		return s
 	}
@@ -166,12 +169,19 @@ func serverSegment(v *view, checks map[string]Check) Segment {
 	case p == nil:
 	case p.ServerMS != nil:
 		s.RTTMS, s.LossPct = p.ServerMS, p.ServerLossPct
-		s.Source = pathWords(p, v) + ": the relay's own leg to the game server"
+		s.Source = pathWords(p, v) + ", the relay to the server"
 	case p.Direct != nil:
 		s.RTTMS, s.LossPct = ptr(p.Direct.RTTMS), ptr(p.Direct.LossPct)
-		s.Source = pathWords(p, v) + ": ping from this PC straight to the game server"
+		s.Source = pathWords(p, v) + ", direct ping from this PC"
 	}
 	return s
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func plural(n int, one, many string) string {

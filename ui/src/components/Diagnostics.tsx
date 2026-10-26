@@ -172,10 +172,10 @@ export function GatewayCard() {
           <div className={`gw-stats t-${tone}`} data-state={v.state}>
             <Stat k="Median" v={fmtMs(st.p50_ms)} unit="ms" s={`fastest ${fmtMs(st.min_ms)} ms`} />
             <Stat
-              k={st.p99_ms != null ? "99% within" : "95% within"}
+              k={st.p99_ms != null ? "p99" : "p95"}
               v={fmtMs(st.p99_ms ?? st.p95_ms)}
               unit="ms"
-              s={st.p99_ms != null ? `slowest ${fmtMs(st.max_ms)} ms` : "p99 needs 100 replies"}
+              s={st.p99_ms != null ? `99% of replies; slowest ${fmtMs(st.max_ms)} ms` : "95% of replies; p99 after 100"}
             />
             <Stat
               k="Lost"

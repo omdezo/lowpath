@@ -587,6 +587,7 @@
 
 /* Diagnostics: the route, part by part (Home / ISP / Lowpath / Server) */
 .segs {
+  container-type: inline-size;
   display: flex;
   align-items: stretch;
   gap: 8px;
@@ -665,6 +666,7 @@
 
 .seg-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   min-width: 0;
@@ -733,7 +735,8 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 760px) {
+/* Four parts need about 170 px each; the Settings pane is narrower. */
+@container (max-width: 720px) {
   .segs-end {
     display: none;
   }
@@ -783,6 +786,10 @@
   line-height: 1.45;
 }
 
+.gw {
+  container-type: inline-size;
+}
+
 .gw-stats {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -827,7 +834,7 @@
   border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
 }
 
-@media (max-width: 760px) {
+@container (max-width: 520px) {
   .gw-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

@@ -404,8 +404,14 @@ async function main() {
     const gwCard = page.locator('section[aria-label="Router pings"]');
     const gwShown = gw?.state === "on" ? await gwCard.locator(".gw-stats .stat").count() : await gwCard.locator(".gw-msg").count();
     check("Router pings card shows the numbers or the reason", gwShown > 0, `${gwShown} ${gw?.state === "on" ? "stats" : "message"}`);
+    // The verdict refreshes every 4 s; then Home carries the router pings.
+    if (gw?.state === "on") await page.locator('.seg[data-segment="home"]:not([data-status="unknown"])').waitFor({ timeout: 6000 }).catch(() => {});
     const segs = await page.locator(".segs .seg").evaluateAll((els) => els.map((e) => `${e.dataset.segment}:${e.dataset.status}`));
-    check("Route bar: Home, ISP, Lowpath relay and Game server", segs.length === 4 && segs[0].startsWith("home:") && segs[3].startsWith("server:"), segs.join(" "));
+    check(
+      "Route bar: Home, ISP, Lowpath relay and Game server; Home from the router pings",
+      segs.length === 4 && segs[0].startsWith("home:") && segs[3].startsWith("server:") && (gw?.state !== "on" || !segs[0].endsWith(":unknown")),
+      segs.join(" "),
+    );
     await scrollToStart(page, ".segs");
     await shot(page, "route-segments", "Diagnostics: the route part by part, Home from the live router pings");
     await scrollToStart(page, 'section[aria-label="Router pings"]');
