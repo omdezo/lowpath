@@ -314,13 +314,13 @@ func (e *VerdictEngine) Diagnose(ev Evidence) Diagnosis {
 // noProblem is the verdict when no rule fired: how sure "it's fine" is
 // depends on how many of the four problem checks could be measured.
 func noProblem(checks []Check) Verdict {
-	clear := 0
+	measured := 0
 	for _, c := range checks {
 		if c.Rule != ruleOptimal && c.Status == CheckClear {
-			clear++
+			measured++
 		}
 	}
-	if clear == 0 {
+	if measured == 0 {
 		return Verdict{ID: VerdictUnknown, Confidence: ConfidenceLow,
 			Title:  "Not enough measurements yet",
 			Detail: "Lowpath can't tell where lag comes from without measurements on this connection.",
@@ -328,15 +328,15 @@ func noProblem(checks []Check) Verdict {
 	}
 	conf := ConfidenceLow
 	switch {
-	case clear >= 4:
+	case measured >= 4:
 		conf = ConfidenceHigh
-	case clear >= 2:
+	case measured >= 2:
 		conf = ConfidenceMedium
 	}
 	v := Verdict{ID: VerdictClean, Confidence: conf,
 		Title:  "No problem found",
-		Detail: fmt.Sprintf("%d of the 4 checks were measured and found nothing wrong.", clear)}
-	if clear < 4 {
+		Detail: fmt.Sprintf("%d of the 4 checks were measured and found nothing wrong.", measured)}
+	if measured < 4 {
 		v.Advice = "The checks marked as not measured could still hide a problem; run them for a surer answer."
 	}
 	return v
