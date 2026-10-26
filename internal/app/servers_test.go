@@ -45,7 +45,7 @@ func newServersTestServer(t *testing.T, lists ServerLists) (*httptest.Server, *S
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(Config{Store: openTestStore(t), Games: games, Servers: lists, Capture: &fakeCapturer{}, Log: discard, Session: testSession})
+	srv, err := NewServer(Config{Store: openTestStore(t), Games: games, Servers: lists, Platform: newFake(t).Platform(), Log: discard, Session: testSession})
 	if err != nil {
 		t.Fatal(err)
 	}

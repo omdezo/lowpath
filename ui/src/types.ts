@@ -173,7 +173,9 @@ export interface Mapping {
 export interface Platform {
   os: string;
   admin: boolean;
-  capture: { available: boolean; reason: string };
+  /** The app can restart itself with the rights route mode needs. */
+  can_elevate: boolean;
+  capture: { backend: string; available: boolean; reason: string };
 }
 
 export interface RelayView {

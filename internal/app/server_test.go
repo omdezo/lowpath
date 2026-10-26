@@ -31,7 +31,7 @@ func newDemoServer(t *testing.T) (*httptest.Server, *Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(Config{Store: store, Games: games, Network: DemoNetwork{N: sim}, Sim: sim, Capture: &fakeCapturer{}, Log: discard, Session: testSession})
+	srv, err := NewServer(Config{Store: store, Games: games, Network: DemoNetwork{N: sim}, Sim: sim, Platform: newFake(t).Platform(), Log: discard, Session: testSession})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestGuardBlocksForeignHostAndCSRF(t *testing.T) {
 // Any local program can reach the port; only the app's window holds the
 // session cookie, which it gets once through LaunchPath.
 func TestSessionRequired(t *testing.T) {
-	ts, srv := newRealServer(t, &fakeCapturer{})
+	ts, srv := newRealServer(t, newFake(t))
 	noCookie := map[string]string{"Cookie": ""}
 	if code, body := do(t, ts, "GET", "/api/bootstrap", "", noCookie); code != 401 || !strings.Contains(body, `"unauthorized"`) {
 		t.Errorf("GET without the session: %d %s, want 401 unauthorized", code, body)

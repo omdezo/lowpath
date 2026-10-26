@@ -1,6 +1,8 @@
 package divert
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"unsafe"
 )
@@ -58,5 +60,14 @@ func TestAddressBits(t *testing.T) {
 	}
 	if a.data[0] != 0x04 || a.data[4] != 7 { // little-endian UINT32s
 		t.Fatalf("union bytes = % x", a.data[:8])
+	}
+}
+
+func TestErrUnsupportedMatchesStdlib(t *testing.T) {
+	if !errors.Is(ErrUnsupported, errors.ErrUnsupported) || !errors.Is(fmt.Errorf("x: %w", ErrUnsupported), ErrUnsupported) {
+		t.Fatal("ErrUnsupported does not match errors.ErrUnsupported")
+	}
+	if errors.Is(ErrNoDriver, errors.ErrUnsupported) {
+		t.Fatal("ErrNoDriver matches errors.ErrUnsupported")
 	}
 }

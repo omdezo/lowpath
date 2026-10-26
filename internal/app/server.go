@@ -23,6 +23,7 @@ import (
 	"lowpath/internal/detect"
 	"lowpath/internal/engine"
 	"lowpath/internal/netsim"
+	"lowpath/internal/platform"
 )
 
 const Version = "0.2.0"
@@ -46,10 +47,13 @@ type Config struct {
 	// lists; the game page leaves the card out.
 	Servers ServerLists
 
-	Capture Capturer // nil: WinDivert
-	UI      fs.FS    // nil: API only
-	Log     *slog.Logger
-	ArtDir  string // where downloaded and extracted game art is kept; "" = Steam's own cache only
+	// Platform is the OS layer: capture backend, socket owners, privileges,
+	// game detection, icons and folders. Nil: platform.Native(), the one
+	// built for this OS. Tests pass fakeplatform.
+	Platform *platform.Platform
+	UI       fs.FS // nil: API only
+	Log      *slog.Logger
+	ArtDir   string // where downloaded and extracted game art is kept; "" = Steam's own cache only
 
 	// Elevate relaunches the app as administrator (it returns once the new
 	// process is starting, or ErrElevateCancelled); Quit then asks this
@@ -79,7 +83,7 @@ type Server struct {
 	relays  *RelayNetwork
 	servers ServerLists   // nil: no server lists
 	sim     *demo.Network // nil unless demo mode
-	capt    Capturer
+	plat    *platform.Platform
 	log     *slog.Logger
 	ui      fs.FS
 	elevate func() error
@@ -131,17 +135,20 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Network == nil {
 		cfg.Network = cfg.Relays
 	}
-	if cfg.Capture == nil {
-		cfg.Capture = &WinDivert{}
+	if cfg.Platform == nil {
+		cfg.Platform = platform.Native()
+	}
+	if err := cfg.Platform.Check(); err != nil {
+		return nil, err
 	}
 	if cfg.Quit == nil {
 		cfg.Quit = func() {}
 	}
 	return &Server{
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
-		capt: cfg.Capture, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
+		plat: cfg.Platform, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
-		art:    newArtStore(cfg.ArtDir, cfg.Log),
+		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
 		installed: map[string]bool{}, running: map[string]bool{},
 		done: make(chan struct{}),
@@ -155,7 +162,7 @@ func (s *Server) Run(ctx context.Context) {
 	// the first time the home screen opens.
 	go s.art.warm(ctx, s.allGames())
 	go func() {
-		libs := detect.SteamLibraries()
+		libs := s.plat.Games.SteamLibraries()
 		inst := map[string]bool{}
 		for _, g := range s.games {
 			if detect.Installed(g.Paths, g.Steam, libs) {
@@ -215,7 +222,7 @@ func (s *Server) game(id string) (Game, bool) {
 }
 
 func (s *Server) scanRunning() {
-	procs := detect.Running()
+	procs := s.plat.Games.Running()
 	run := map[string]bool{}
 	for _, g := range s.allGames() {
 		for _, p := range g.Processes {

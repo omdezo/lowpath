@@ -2,9 +2,12 @@
 
 package capture
 
-// Available reports why capture can't work here: it is Windows-only.
-func Available() error { return ErrUnsupported }
+// WinDivert is Windows-only: elsewhere it is never available.
+func available(elevated bool) error { return ErrUnsupported }
 
-func Start(cfg Config) (*Capture, error) { return nil, ErrUnsupported }
-
-func Processes() ([]Process, error) { return nil, ErrUnsupported }
+func Start(cfg Config) (*Capture, error) {
+	if err := cfg.check(); err != nil {
+		return nil, err
+	}
+	return nil, ErrUnsupported
+}

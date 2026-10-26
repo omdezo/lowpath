@@ -332,6 +332,9 @@ async function main() {
       await boostBtn(page, "lpcheck").click();
       await page.waitForTimeout(1200);
       check("UI shows the admin banner", await page.getByText("Route mode can't capture game traffic").isVisible());
+      const plat = (await api(page, "GET", "/bootstrap")).body?.platform;
+      check("Platform layer offers the restart", plat?.can_elevate === true && plat?.capture?.backend === "divert", JSON.stringify(plat));
+      check("Banner offers Restart as administrator", await page.getByRole("button", { name: "Restart as administrator" }).isVisible());
       await scrollTop(page);
       await shot(page, "route-needs-admin", "Route mode without admin: banner offers a restart as administrator");
       // What real games look like on the Boost screen: Steam artwork, and

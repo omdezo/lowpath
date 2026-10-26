@@ -78,7 +78,10 @@ cmd/relay          relay server (egress or forwarding hop)
 cmd/lpcheck        STUN check for verifying routes
 internal/app       game list, local store, relays, sessions, game art, HTTP API
 internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
-internal/capture   per-process UDP capture and injection (WinDivert)
+internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
+internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
+internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
+internal/capture   capture backend contract; per-process UDP capture with WinDivert
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
@@ -112,7 +115,10 @@ go test ./...
   forwarding hops.
 - **App:** local API guard and per-launch session, relay and custom-game
   validation, error kinds, game art lookup, and a full route-mode session
-  through the loopback relay with a fake capture device.
+  through the loopback relay on `fakeplatform`, so the app tests (and
+  `cmd/lowpath`'s) run unchanged on Windows, Linux and macOS.
+- **Platform:** each OS implementation is complete, and what isn't built
+  for an OS yet reports `errors.ErrUnsupported` instead of empty results.
 - **Catalog:** SDR config parsing against a trimmed copy of the live CS2
   config, every geo fix seen in it, hostile replies, download errors and
   timeouts, the disk cache, POP pinging, and the refresh/backoff/offline

@@ -11,15 +11,17 @@ interface Props {
 }
 
 // How long to wait for the elevated copy to take over before assuming the
-// Windows prompt was cancelled.
+// administrator prompt was cancelled.
 const RESTART_GRACE_MS = 30_000;
 
-// Route mode is selected but capture can't start in this process. Offers the
-// one fix that works on Windows (run elevated) or, elsewhere, proxy mode.
+// Route mode is selected but capture can't start in this process. Offers a
+// restart with administrator rights when the platform can ask for them, and
+// proxy mode otherwise. The server decides which (platform.can_elevate), so
+// this component has no OS checks.
 export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props) {
   const [state, setState] = useState<"idle" | "busy" | "restarting">("idle");
   const sawDown = useRef(false);
-  const canElevate = platform.os === "windows" && !platform.admin;
+  const canElevate = platform.can_elevate && !platform.admin;
 
   useEffect(() => {
     if (down) sawDown.current = true;
@@ -32,7 +34,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       // bootstrap refresh after reconnect decides what to show.
       if (sawDown.current) return;
       setState("idle");
-      onError("Lowpath is still running without administrator rights. If you cancelled the Windows prompt, try again.", "Not restarted");
+      onError("Lowpath is still running without administrator rights. If you cancelled the administrator prompt, try again.", "Not restarted");
     }, RESTART_GRACE_MS);
     return () => window.clearTimeout(t);
   }, [state, onError]);
