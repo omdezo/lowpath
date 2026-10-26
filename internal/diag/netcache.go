@@ -31,6 +31,11 @@ type cacheEntry struct {
 	added   time.Time
 }
 
+// DefaultTransientTTL is how long a lookup spoiled by a timeout or a busy
+// registry is kept by default (CacheOptions.TransientTTL). Caches above a
+// CachedLookup use it too, so they don't hold on to what it forgets.
+const DefaultTransientTTL = 3 * time.Second
+
 // CacheOptions tune a CachedLookup; zero fields take the defaults.
 type CacheOptions struct {
 	TTL time.Duration // a found network, default 24 h
@@ -66,7 +71,7 @@ func NewCachedLookup(next NetworkLookup, o CacheOptions) *CachedLookup {
 		o.PartialTTL = 10 * time.Minute
 	}
 	if o.TransientTTL <= 0 {
-		o.TransientTTL = 3 * time.Second
+		o.TransientTTL = DefaultTransientTTL
 	}
 	o.TransientTTL = min(o.TransientTTL, o.ErrTTL)
 	return &CachedLookup{next: next, ttl: o.TTL, errTTL: o.ErrTTL, partialTTL: o.PartialTTL, transientTTL: o.TransientTTL, max: o.Max, now: o.Now, entries: map[netip.Addr]cacheEntry{}}
@@ -87,7 +92,7 @@ func (c *CachedLookup) LookupNetwork(ctx context.Context, a netip.Addr) (Network
 	}
 	ttl := c.ttl
 	switch {
-	case err != nil && transient(err), err == nil && info.transient:
+	case err != nil && Transient(err), err == nil && info.Transient():
 		ttl = c.transientTTL
 	case err != nil:
 		ttl = c.errTTL
