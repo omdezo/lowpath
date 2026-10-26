@@ -603,7 +603,7 @@ prints that URL to stderr only, never to the log.
   (from `/api/processes`), name field, add; custom games get a delete action.
 - Demo-only controls (Network lab) only when `demo` is true.
 - `live.failsafe` (no session running) → a banner above the page: "Boost
-  stopped to keep your game connected" or "Lowpath closed during a boost",
+  stopped to keep your game connected" or "Your last boost was cut short",
   the service's message and detail, and a Dismiss button.
 - Valve games (`discovery` has `sdr`): a **Valve servers** card on the game
   page, with or without relays, lists the POPs with city, id, country,

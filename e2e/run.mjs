@@ -266,7 +266,7 @@ async function main() {
     const noticeText = (await notice.textContent().catch(() => "")) ?? "";
     check(
       "A boost the last run never finished is reported at start",
-      /Lowpath closed during a boost/.test(noticeText) && noticeText.includes("Counter-Strike 2") && noticeText.includes("normal connection"),
+      /Your last boost was cut short/.test(noticeText) && noticeText.includes("Counter-Strike 2") && noticeText.includes("normal connection"),
       noticeText.trim().slice(0, 140),
     );
     check("The leftover session marker is removed", !fs.existsSync(path.join(data, "capture-session.json")));

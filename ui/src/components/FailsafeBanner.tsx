@@ -6,7 +6,7 @@ import type { Failsafe } from "../types";
 // mid-boost and this start cleaned up ("recovered"). The message comes from
 // the service; the game is on the normal connection either way.
 export function FailsafeBanner({ failsafe, onDismiss }: { failsafe: Failsafe; onDismiss: () => void }) {
-  const title = failsafe.kind === "recovered" ? "Lowpath closed during a boost" : "Boost stopped to keep your game connected";
+  const title = failsafe.kind === "recovered" ? "Your last boost was cut short" : "Boost stopped to keep your game connected";
   return (
     <div className="banner banner-warn" role="alert" aria-label="Boost ended">
       <ShieldCheck size={16} style={{ flex: "none" }} />
@@ -14,7 +14,7 @@ export function FailsafeBanner({ failsafe, onDismiss }: { failsafe: Failsafe; on
         <b>{title}.</b> {failsafe.message}
         {failsafe.detail && <span className="banner-detail"> {failsafe.detail}</span>} Press BOOST to start again.
       </span>
-      <button className="icon-btn" onClick={onDismiss} aria-label="Dismiss" title="Dismiss" style={{ flex: "none" }}>
+      <button className="btn btn-ghost icon-btn" onClick={onDismiss} aria-label="Dismiss" title="Dismiss" style={{ flex: "none", width: 24, height: 24 }}>
         <X size={14} />
       </button>
     </div>
