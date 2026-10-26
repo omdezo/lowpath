@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"net/http"
 	"net/netip"
 	"time"
@@ -29,8 +30,11 @@ func newVerdicts(ns diag.NetStats) *verdicts {
 // every diagnosis built from it can be shared.
 func (s *Server) evidence(now time.Time) diag.Evidence {
 	ev := diag.Evidence{At: now, Bloat: s.store.Bloat()}
-	if r, err := s.verdict.net.DefaultRoute(); err == nil {
+	switch r, err := s.verdict.net.DefaultRoute(); {
+	case err == nil:
 		ev.Link = &r
+	case errors.Is(err, diag.ErrNoRoute):
+		ev.Offline = true
 	}
 	if raw := s.store.Trace(); raw != nil {
 		ev.TraceKind = s.traceKind(raw.Target)

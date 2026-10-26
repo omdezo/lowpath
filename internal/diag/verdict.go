@@ -35,6 +35,7 @@ const (
 	VerdictOptimal = "optimal" // the direct route is already as good as a relay
 	VerdictClean   = "clean"   // no rule found a problem
 	VerdictUnknown = "unknown" // not enough measurements to say anything
+	VerdictOffline = "offline" // no route to the internet at all
 )
 
 // Segments of the way from the PC to the game server a verdict can blame.
@@ -202,6 +203,9 @@ const (
 // never quote a public address themselves.
 type Evidence struct {
 	At time.Time // now
+	// Offline: the PC has no default route right now (ErrNoRoute). The
+	// stored tests then describe an earlier connection.
+	Offline bool
 	// Link is the connection in use now (the default route); nil unknown.
 	Link *Route
 	// WiFi is the radio state on a Wi-Fi link; nil unknown.
@@ -302,13 +306,27 @@ func (e *VerdictEngine) Diagnose(ev Evidence) Diagnosis {
 			found = vd
 		}
 	}
-	if found != nil {
+	switch {
+	case ev.Offline:
+		// Nothing the tests say matters while no game can connect at all,
+		// and none of them can run.
+		d.Verdict = offlineVerdict()
+		return d
+	case found != nil:
 		d.Verdict = *found
-	} else {
+	default:
 		d.Verdict = noProblem(d.Checks)
 	}
-	d.Next = suggestions(d.Checks, d.Verdict)
+	d.Next = suggestions(d.Checks, d.Verdict, ev.Boost != nil)
 	return d
+}
+
+func offlineVerdict() Verdict {
+	return Verdict{ID: VerdictOffline, Segment: SegmentHome, Confidence: ConfidenceHigh,
+		Title:  "No internet connection",
+		Detail: "This PC has no route to the internet right now, so no game can connect. The checks below come from tests taken while it was online.",
+		Advice: "Check the Wi-Fi or the cable and the router's lights, and restart the router if the connection doesn't come back.",
+		Facts:  []string{"The system has no default route on any network adapter."}}
 }
 
 // noProblem is the verdict when no rule fired: how sure "it's fine" is
@@ -343,7 +361,8 @@ func noProblem(checks []Check) Verdict {
 }
 
 // suggestions turns unmeasured checks into next steps, without repeats.
-func suggestions(checks []Check, vd Verdict) []Suggestion {
+// boosting: a boost is running, so "boost the game" is no next step.
+func suggestions(checks []Check, vd Verdict, boosting bool) []Suggestion {
 	var out []Suggestion
 	seen := map[string]bool{}
 	add := func(id, text string) {
@@ -365,7 +384,7 @@ func suggestions(checks []Check, vd Verdict) []Suggestion {
 			add(NextMeasure, "Measure routes on a game's page, or boost the game: that compares the direct route with a relay.")
 		}
 	}
-	if vd.ID == VerdictISP {
+	if vd.ID == VerdictISP && !boosting {
 		add(NextMeasure, "Boost the game through a relay and compare its ping and loss with the direct route.")
 	}
 	return out
@@ -429,16 +448,35 @@ func (v *view) useBloat() {
 		v.bloatWhy = fmt.Sprintf("The last bufferbloat test is %s old.", ago(v.ev.At.Sub(b.FinishedAt)))
 		return
 	}
-	if l := v.ev.Link; l != nil {
-		if (l.Name != "" && b.Interface != "" && l.Name != b.Interface) || (l.Kind != "" && b.Link != "" && l.Kind != b.Link) {
-			v.bloatWhy = fmt.Sprintf("The last bufferbloat test ran on %s, not on the connection in use now.", linkWords(b.Link, b.Interface))
-			return
-		}
-	} else {
+	switch v.otherLink(b.Link, b.Interface) {
+	case linkOther:
+		v.bloatWhy = fmt.Sprintf("The last bufferbloat test ran on %s, not on the connection in use now.", linkWords(b.Link, b.Interface))
+		return
+	case linkUnsure:
 		conf = conf.lower()
 		v.bloatWhy = "Lowpath can't tell whether the last bufferbloat test ran on the connection in use now."
 	}
 	v.bloat, v.bloatConf = b, conf
+}
+
+// Answers of otherLink.
+const (
+	linkSame   = iota // the same connection, or the measurement doesn't say
+	linkOther         // another adapter or another kind of link
+	linkUnsure        // the connection in use now is unknown
+)
+
+// otherLink compares the connection a measurement ran on (kind, name; ""
+// unknown) with the one in use now.
+func (v *view) otherLink(kind, name string) int {
+	l := v.ev.Link
+	switch {
+	case l == nil:
+		return linkUnsure
+	case (l.Name != "" && name != "" && l.Name != name) || (l.Kind != "" && kind != "" && l.Kind != kind):
+		return linkOther
+	}
+	return linkSame
 }
 
 func (v *view) useTrace() {
@@ -451,6 +489,14 @@ func (v *view) useTrace() {
 	if !ok {
 		v.traceWhy = fmt.Sprintf("The last route trace is %s old.", ago(v.ev.At.Sub(t.FinishedAt)))
 		return
+	}
+	// A trace taken on Wi-Fi says nothing about the cable plugged in since.
+	switch v.otherLink(t.Link, t.Interface) {
+	case linkOther:
+		v.traceWhy = fmt.Sprintf("The last route trace ran on %s, not on the connection in use now.", linkWords(t.Link, t.Interface))
+		return
+	case linkUnsure:
+		conf = conf.lower()
 	}
 	if t.Stopped || t.Rounds < 100 {
 		conf = conf.lower()
@@ -488,8 +534,7 @@ func (v *view) homeLossHop() *TraceHop {
 	if t == nil || !t.Reached || t.LossFrom == nil || *t.LossFrom < 1 || *t.LossFrom > len(t.Hops) {
 		return nil
 	}
-	h := &t.Hops[*t.LossFrom-1]
-	if h.TTL == 1 || (h.Private && h.TTL <= 2) {
+	if h := &t.Hops[*t.LossFrom-1]; h.inHome() {
 		return h
 	}
 	return nil

@@ -93,6 +93,9 @@ export function Verdict() {
 
       {!d && !failed && <div className="bloat-empty muted">Reading the measurements…</div>}
       {!d && failed && <div className="note-warn bloat-note">— The verdict couldn't be loaded from the Lowpath service; it will try again.</div>}
+      {d && failed && (
+        <div className="note-warn bloat-note">The Lowpath service stopped answering, so this verdict may be out of date; it will try again.</div>
+      )}
 
       {v && d && (
         <>

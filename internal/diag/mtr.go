@@ -56,6 +56,9 @@ type TraceConfig struct {
 	// The persistence rule then uses it as the destination.
 	End   Prober
 	Names NameFunc // nil: no host names
+	// Route is the connection the trace runs on (zero: unknown), kept in
+	// the result so a later verdict can tell it from another connection.
+	Route Route
 
 	MaxHops  int           // 30
 	Count    int           // probes per hop (200)
@@ -138,6 +141,9 @@ type TraceResult struct {
 	Planned   int     `json:"planned"`            // Count
 	IntervalS float64 `json:"interval_s"`
 	MaxHops   int     `json:"max_hops"`
+	// Interface and Link are the connection the trace ran on ("" unknown).
+	Interface string `json:"interface,omitempty"`
+	Link      string `json:"link,omitempty"`
 
 	// Reached: the destination answered (in UDP mode: the relay's port).
 	Reached bool       `json:"reached"`
@@ -414,6 +420,7 @@ func (t *Trace) build(st *traceState, started time.Time, running, stopped bool) 
 		StartedAt: started, Running: running,
 		Target: cfg.Target.String(), Host: cfg.Host, Mode: cfg.Mode,
 		Planned: cfg.Count, IntervalS: cfg.Interval.Seconds(), MaxHops: cfg.MaxHops,
+		Interface: cfg.Route.Name, Link: cfg.Route.Kind,
 		Hops: []TraceHop{},
 	}
 	if !running {
@@ -663,7 +670,7 @@ func verdict(res *TraceResult, maxHops int) (string, []string) {
 		switch {
 		case *res.LossFrom == len(res.Hops) && res.End == nil:
 			v = fmt.Sprintf("Only the destination itself loses replies (%.1f%%). It may limit ping replies, so this doesn't prove your traffic is lost; a UDP trace to a relay can tell.", loss)
-		case h.TTL == 1 || (h.Private && h.TTL <= 2):
+		case h.inHome():
 			v += " That is inside your home network: try a cable instead of Wi-Fi, or restart the router."
 		}
 	}
@@ -723,6 +730,21 @@ func sendFailure(err error) string {
 }
 
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// inHome reports whether the hop is inside the home network: the first
+// router, or a private second one (a second router or a modem behind the
+// ISP's box). A second hop in the shared address space 100.64.0.0/10 is
+// the ISP's carrier-grade NAT (RFC 6598), not the home.
+func (h TraceHop) inHome() bool {
+	if h.TTL == 1 {
+		return true
+	}
+	if h.TTL != 2 || !h.Private {
+		return false
+	}
+	a, err := netip.ParseAddr(h.Addr)
+	return err != nil || !cgnat.Contains(a.Unmap())
+}
 
 func privateAddr(a netip.Addr) bool {
 	a = a.Unmap()

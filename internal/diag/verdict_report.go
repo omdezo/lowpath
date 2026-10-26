@@ -76,7 +76,7 @@ func (r DiagnosisReport) Text() string {
 
 	b.WriteString("\nMEASUREMENTS\n")
 	r.measurements(&b)
-	b.WriteString("\nAddresses are cut to their /24 (IPv4) or /48 (IPv6) network and host names are\nleft out. The full route trace is a separate export.\n")
+	b.WriteString("\nAddresses are cut to their /24 (IPv4) or /48 (IPv6) network and routers' host\nnames are left out. The full route trace is a separate export.\n")
 	return b.String()
 }
 

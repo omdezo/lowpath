@@ -299,20 +299,23 @@ func (ispRule) check(v *view) (Check, *Verdict) {
 			}
 			fact := fmt.Sprintf("The route trace to %s (%s ago) finds loss starting at hop %d%s, past your home network, that persists to the destination: %.1f%% of probes lost.",
 				traceHost(t), age, h.TTL, where, *t.DestLossPct)
-			vd := ispVerdict(v.traceConf, fact)
+			vd := ispVerdict(v.traceConf, fact, v.ev.Boost != nil)
 			c.Status, c.Facts, c.Summary = CheckFound, vd.Facts, vd.Title+"."
 			return c, vd
 		}
 	}
 	if p := v.path; p != nil && p.Direct != nil && p.Relay != nil && p.ServerMS != nil && p.Direct.Samples >= minPathSamples && p.Relay.Samples >= minPathSamples {
-		if p.Direct.LossPct >= routeLossPct && p.Relay.LossPct < cleanLossPct {
+		// A lossy relay->server leg means the loss is at the server's end,
+		// which both routes share: the server rule's case, not the ISP's.
+		legClean := p.ServerLossPct == nil || *p.ServerLossPct < routeLossPct
+		if p.Direct.LossPct >= routeLossPct && p.Relay.LossPct < cleanLossPct && legClean {
 			fact := fmt.Sprintf("%s: the direct route to the game server loses %.1f%% of pings, while the relay route loses %.1f%% and the relay reaches the server in %.0f ms.",
 				pathWords(p, v), p.Direct.LossPct, p.Relay.LossPct, *p.ServerMS)
 			conf := ConfidenceMedium
 			if p.Source == PathAnalysis {
 				conf = ConfidenceLow
 			}
-			vd := ispVerdict(conf, fact)
+			vd := ispVerdict(conf, fact, p.Source == PathBoost)
 			vd.Facts = append(vd.Facts, methodFact(p))
 			c.Status, c.Facts, c.Summary = CheckFound, vd.Facts, vd.Title+"."
 			return c, vd
@@ -343,11 +346,17 @@ func (ispRule) check(v *view) (Check, *Verdict) {
 	return c, nil
 }
 
-func ispVerdict(conf Confidence, fact string) *Verdict {
+// ispVerdict is the ISP route verdict; boosting: a boost is running, so the
+// advice is to keep it on rather than to start one.
+func ispVerdict(conf Confidence, fact string, boosting bool) *Verdict {
+	advice := "Boost the game through a relay and compare ping and loss with the direct route on the game page. If it keeps happening, send the exported report to your ISP."
+	if boosting {
+		advice = "Keep the boost on: the relay route avoids the loss on the direct one. If it keeps happening, send the exported report to your ISP."
+	}
 	return &Verdict{ID: VerdictISP, Segment: SegmentISP, Confidence: conf, LowpathHelps: true,
 		Title:  "Your ISP's route is losing traffic",
 		Detail: "Loss starts past your home network, on the way to the destination, and carries on to the end. This is what a relay can route around.",
-		Advice: "Boost the game through a relay and compare ping and loss with the direct route on the game page. If it keeps happening, send the exported report to your ISP.",
+		Advice: advice,
 		Facts:  []string{fact}}
 }
 
@@ -410,12 +419,18 @@ func (serverRule) check(v *view) (Check, *Verdict) {
 			return c, vd
 		}
 		if p.Source == PathBoost && p.ServerMS == nil && p.Direct != nil && p.Direct.Samples >= minPathSamples && p.Direct.LossPct >= routeLossPct {
-			// Two different routes, one shared end.
+			// Two different routes, one shared end. Only a hint: the relay
+			// reporting no time can also mean it can't ping at all (no ICMP
+			// rights, an older relay, a boost a few seconds old), and an ISP
+			// problem on the direct route would look the same.
 			vd.Confidence = ConfidenceLow
+			vd.Title = "The game server's end may be the problem"
+			vd.Detail = "The direct route to the game server loses pings while the route to your relay is clean, and the relay reports no time for its own leg to the server. The server's end is what both routes share, but this is a hint: a problem on your ISP's direct route would look the same."
+			vd.Advice = "Keep the boost on if the game feels better through the relay. Otherwise try another server or region in the game, or check the game's server status page."
 			vd.Facts = []string{
-				fmt.Sprintf("%s: the direct route loses %.1f%% of pings to the game server, and the relay gets no steady answer from it either, while the route to the relay is clean (%.1f%% loss).",
+				fmt.Sprintf("%s: the direct route loses %.1f%% of pings to the game server, the route to the relay is clean (%.1f%% loss), and the relay reports no time to the server.",
 					pathWords(p, v), p.Direct.LossPct, p.Relay.LossPct),
-				"Both routes only share the server's end. Servers may also limit ping, so this is a hint rather than proof.",
+				"The relay may be unable to ping the server, and servers often limit ping, so this is a hint rather than proof.",
 			}
 			c.Status, c.Facts, c.Summary = CheckFound, vd.Facts, vd.Title+"."
 			return c, vd

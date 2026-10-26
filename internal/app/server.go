@@ -234,7 +234,7 @@ func NewServer(cfg Config) (*Server, error) {
 		done:   func(r diag.BloatResult) { s.line.setLineRate(lineRate(&r)) },
 	}
 	s.trace = &traceRunner{
-		ping: cfg.PingTTL, names: cfg.Names, store: cfg.Store, log: cfg.Log.With("component", "trace"),
+		ping: cfg.PingTTL, names: cfg.Names, net: cfg.NetStats, store: cfg.Store, log: cfg.Log.With("component", "trace"),
 		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
 	s.recoverLeftover()

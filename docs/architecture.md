@@ -602,7 +602,8 @@ func (DiagnosisReport) Text() string
   and whether a relay can help. Rules, in order:
   1. *Home / Wi-Fi*: router loss > 0.5% (at least 2 pings) or p99 > 15 ms
      (a p95 above 15 ms implies it), or a trace whose persisting loss starts
-     at hop 1 or a private hop 2. On Wi-Fi, RSSI < −70 dBm or 2.4 GHz makes
+     at hop 1 or a private hop 2 (not one in 100.64.0.0/10: that is the
+     ISP's carrier-grade NAT, RFC 6598). On Wi-Fi, RSSI < −70 dBm or 2.4 GHz makes
      it `wifi` (high); a strong 5/6 GHz signal makes it `home`; no signal
      reading caps it at medium. Slow replies with no loss drop a step
      (routers answer ping at low priority). A router that answers no ping
@@ -611,21 +612,24 @@ func (DiagnosisReport) Text() string
   3. *ISP route*: a reached trace whose persisting loss starts past the
      home network (destination-only loss is not the route's); or, from a
      boost, direct loss ≥ 2% while the relay leg loses < 1% and the relay
-     reaches the server. A UDP trace losing only at the relay's port gives
+     reaches the server and its leg to the server isn't lossy. During a
+     boost the advice is to keep it on. A UDP trace losing only at the relay's port gives
      `relay` (segment `lowpath`).
   4. *Game server*: the relay leg is clean (< 1% loss, < 10 ms jitter) and
      the relay's leg to the server loses ≥ 2% or jitters ≥ 10 ms (relays
      don't report that leg's loss yet), or, low confidence, during a boost
-     direct loses ≥ 2% and the relay gets no steady answer from the server
-     either.
+     direct loses ≥ 2% and the relay reports no time to the server (a hint:
+     the relay may not be able to ping, and an ISP problem looks the same).
   5. *Already optimal*: direct RTT ≤ relay route + 2 ms and no lossier
      (≥ 20 samples each); medium while the two are measured differently
      (ICMP vs UDP probes), high once they are the same method.
   No rule found anything: `clean` (high with all four problem checks
   clear, medium with two or three, low with one) or `unknown`, plus `next`
   steps for the unmeasured checks. Evidence older than 1 h drops a step and
-  older than 24 h is ignored; a bufferbloat test from another adapter or
-  link kind is ignored. The app builds the evidence from what it stored
+  older than 24 h is ignored; a bufferbloat test or route trace from another
+  adapter or link kind is ignored (traces record the connection they ran
+  on). With no default route at all (`ErrNoRoute`) the verdict is
+  `offline` (high), ahead of every rule. The app builds the evidence from what it stored
   (the trace already redacted) and measures nothing itself, so
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.
@@ -710,8 +714,8 @@ polls while `state` is `loading` or `pinging` is true.
 | POST | /api/diag/trace | `{target_id}` or `{host}`, `mode: "icmp"\|"udp"` | 202 + the same; 400 `bad_target`; 409 `trace_running` or `bloat_running` |
 | DELETE | /api/diag/trace | | stops a running trace and keeps what it measured; the same view |
 | GET | /api/diag/trace/report | | the last trace as a text table (`lowpath-route-trace.txt`); 404 `no_trace` |
-| GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}]}`; measures nothing, answers at once |
-| GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, host names left out |
+| GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}]}`; measures nothing, answers at once |
+| GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, routers' host names left out |
 
 Live adds `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,

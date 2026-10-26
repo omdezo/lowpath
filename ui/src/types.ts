@@ -300,7 +300,7 @@ export interface TraceStatus {
 }
 
 // The verdict engine's answer to "why am I lagging?" (GET /api/diag/verdict).
-export type VerdictId = "wifi" | "home" | "line" | "isp" | "relay" | "server" | "optimal" | "clean" | "unknown";
+export type VerdictId = "wifi" | "home" | "line" | "isp" | "relay" | "server" | "optimal" | "clean" | "unknown" | "offline";
 export type Confidence = "low" | "medium" | "high";
 export type CheckStatus = "found" | "clear" | "unknown";
 
