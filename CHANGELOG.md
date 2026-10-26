@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Network simulator: Gilbert-Elliott burst loss (`p`, `r`, `1-k`, `1-h`,
+  stepped per packet or in time) and shared segments, so lanes behind one
+  bursty hop such as home Wi-Fi lose packets together; seeded random
+  choices make lab runs repeatable (#55).
 - Passive line-load detector: without a bufferbloat test, the line rate is
   now the most traffic seen in the last 10 minutes instead of since start,
   so a fast LAN copy no longer hides later downloads until a restart, and a
