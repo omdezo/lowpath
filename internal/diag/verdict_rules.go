@@ -30,7 +30,7 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 	c := Check{Rule: ruleHome, Name: "Wi-Fi and home network"}
 	g := v.gateway
 	var facts []string
-	if g != nil && g.Lost == g.Sent {
+	if g != nil && g.Lost == g.Sent && !g.Stopped {
 		// Many routers don't answer ping at all; that is no loss.
 		facts = append(facts, "Your router didn't answer any ping ("+g.Source+"): many routers ignore ping, so this says nothing about loss.")
 		g = nil
@@ -40,9 +40,9 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 	traced := v.trace != nil && v.trace.Reached
 	if g == nil && !traced {
 		c.Status, c.Facts = CheckUnknown, facts
-		c.Summary = "Run the bufferbloat test on this connection: it pings your router."
+		c.Summary = "Keep Diagnostics open for a minute while Lowpath pings your router, or run the bufferbloat test on this connection."
 		if v.ev.Bloat != nil && v.bloat == nil {
-			c.Summary = v.bloatWhy + " Run it again on this connection: it pings your router."
+			c.Summary = v.bloatWhy + " Keep Diagnostics open for a minute while Lowpath pings your router, or run the test again on this connection."
 		}
 		return c, nil
 	}
@@ -50,8 +50,15 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 	conf := ConfidenceLow
 	if g != nil {
 		facts = append(facts, gatewayFact(*g, v))
-		lossBad = g.lossPct() > gatewayLossPct && g.Lost >= 2
+		// A router that limits its replies drops pings, not traffic.
+		lossBad = !g.Limited && g.lossPct() > gatewayLossPct && g.Lost >= 2
 		tailBad = g.TailMS != nil && *g.TailMS > gatewayTailMS
+		if g.Limited {
+			facts = append(facts, "Your router limits how many pings it answers, so its lost pings aren't counted as loss.")
+		}
+		if g.Stopped {
+			facts = append(facts, "Your router answered at first and then stopped answering: every ping since was lost.")
+		}
 		conf = v.gatewayConf
 	}
 	if hop != nil {
@@ -130,10 +137,13 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 }
 
 // linkKind is the kind of the connection in use, or, when the system
-// didn't say, of the one the bufferbloat test ran on.
+// didn't say, of the one the router pings or the bufferbloat test ran on.
 func (v *view) linkKind() string {
 	if l := v.ev.Link; l != nil && l.Kind != LinkUnknown {
 		return l.Kind
+	}
+	if v.gateway != nil && v.gateway.Link != LinkUnknown {
+		return v.gateway.Link
 	}
 	if v.bloat != nil {
 		return v.bloat.Link
@@ -167,6 +177,9 @@ func gatewayFact(g GatewaySample, v *view) string {
 	s := fmt.Sprintf("Router: %d of %d pings lost (%.1f%%), median %s ms", g.Lost, g.Sent, g.lossPct(), msText(g.P50MS))
 	if g.TailPct > 0 {
 		s += fmt.Sprintf(", %d%% within %s ms", g.TailPct, msText(g.TailMS))
+	}
+	if g.Spikes > 0 {
+		s += fmt.Sprintf(", %d %s of %d ms or more", g.Spikes, plural(g.Spikes, "reply", "replies"), spikeMS)
 	}
 	return s + fmt.Sprintf(" (%s, %s ago).", g.Source, ago(v.ev.At.Sub(g.At)))
 }

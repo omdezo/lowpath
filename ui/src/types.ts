@@ -355,6 +355,73 @@ export interface Diagnosis {
   link: string;
   interface: string;
   next?: { id: "bloat" | "trace" | "measure"; text: string }[] | null;
+  // The route from this PC to the game server, part by part.
+  segments?: RouteSegment[] | null;
+}
+
+export type SegmentId = "home" | "isp" | "lowpath" | "server";
+export type SegmentStatus = "good" | "warn" | "bad" | "unknown" | "off";
+
+export interface RouteSegment {
+  id: SegmentId;
+  name: string;
+  status: SegmentStatus;
+  rtt_ms: number | null;
+  loss_pct: number | null;
+  source?: string;
+  summary: string;
+  blamed: boolean;
+}
+
+// GET /api/diag/gateway: the router pinger.
+export type GatewayState =
+  | "idle"
+  | "measuring"
+  | "on"
+  | "paused"
+  | "no_gateway"
+  | "offline"
+  | "no_reply"
+  | "no_permission"
+  | "cant_send"
+  | "unsupported";
+
+export interface GatewayStats {
+  window_s: number;
+  sent: number;
+  lost: number;
+  loss_pct: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+  min_ms: number | null;
+  max_ms: number | null;
+  jitter_ms: number | null;
+  spikes: number;
+  max_loss_run: number;
+  limited: boolean;
+}
+
+export interface GatewaySecond {
+  t: number;
+  sent: number;
+  lost: number;
+  p50_ms: number | null;
+  max_ms: number | null;
+}
+
+export interface GatewayView {
+  state: GatewayState;
+  message?: string;
+  note?: string;
+  running: boolean;
+  rate_hz: number;
+  gateway?: string;
+  interface?: string;
+  link?: string;
+  since: string;
+  stats: GatewayStats | null;
+  series: GatewaySecond[] | null;
 }
 
 export interface Settings {

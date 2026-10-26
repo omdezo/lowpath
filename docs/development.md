@@ -98,7 +98,7 @@ internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, ca
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
-internal/diag      bufferbloat test, passive detector, route trace (MTR), verdict engine, default route + NIC counters per OS
+internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
 internal/netsim    UDP hop with delay/jitter/loss/spike impairment
 internal/gamesim   echo game server
@@ -181,6 +181,16 @@ go test ./...
   anyway", the conflict before the admin prompt, warnings and proxy mode
   never blocking, a capture failure naming the conflict, and a hung or
   panicking scan failing open.
+- **Router pings:** the gateway pinger stepped on a fake clock: a clean
+  router, loss and spikes, one that ignores ping, no rights, no route, no
+  router address, a routing table that can't be read, Wi-Fi to Ethernet,
+  the bufferbloat test's pause, a boost holding it, idling after the last
+  look, a sleep gap, a rate-limiting router (2 Hz fallback), an IPv6
+  link-local router, a router so slow the in-flight cap holds; the
+  statistics (percentiles, jitter, loss runs, the limiter's shape against
+  Wi-Fi bursts), the route segments and the report; and the API on
+  `fakeplatform` (nothing pinged until the tab looks, the verdict and the
+  export using it, the pause during the bufferbloat test).
 - **Route trace:** the persistence rule against a simulated route (clean,
   a router limiting its replies, loss from one hop on, loss at home, only
   the destination losing, a destination that ignores ping, load balancing,
@@ -203,8 +213,8 @@ Google through a keyed relay and through the engine in capture mode,
 download the live SDR configs of CS2, Dota 2 and Deadlock and ping Dubai
 and Frankfurt, look up this PC's public IP and ISP with real STUN
 servers and RIPEstat, run a short real bufferbloat test against
-Cloudflare (about 100 MB of data), and trace the route to 1.1.1.1 for 20
-rounds. `go test -run TestInternet -v
+Cloudflare (about 100 MB of data), trace the route to 1.1.1.1 for 20
+rounds, and ping this PC's own router for 8 s with the real route reader. `go test -run TestInternet -v
 ./internal/diag` prints what they found.
 
 ### End-to-end UI test
