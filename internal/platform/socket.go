@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -16,14 +19,35 @@ import (
 // for the named pipe in tests.
 type SocketAPI struct {
 	path string
-	// mode is the socket file's permission bits once it listens. 0o666:
-	// every local user's window may drive the service, as Interactive
-	// Users may open the pipe on Windows.
+	// mode is the socket file's permission bits once it listens. 0o666 for
+	// the service: file modes can't say "signed in", so every account may
+	// connect and admit decides.
 	mode fs.FileMode
+	// admit decides which accounts the listener serves; nil serves whoever
+	// the file mode lets connect.
+	admit PeerPolicy
+	// serverUID, when not nil, is the only account Dial accepts at the
+	// other end (root for the installed service's socket).
+	serverUID *uint32
+	// peer reads the account at the other end of a connection
+	// (connPeerCred; tests play it).
+	peer func(net.Conn) (PeerCred, error)
 }
 
-func NewSocketAPI(path string, mode fs.FileMode) *SocketAPI {
-	return &SocketAPI{path: path, mode: mode}
+// NewSocketAPI makes the socket at path. admit, when not nil, decides which
+// local accounts the service serves: the others get a 403 answer and are
+// disconnected before the API sees their request.
+func NewSocketAPI(path string, mode fs.FileMode, admit PeerPolicy) *SocketAPI {
+	return &SocketAPI{path: path, mode: mode, admit: admit, peer: connPeerCred}
+}
+
+// WithServer makes Dial refuse a socket served by any account but uid,
+// with ErrNotService, as the window refuses a pipe served by any process
+// but the installed service on Windows. The socket's folder is root's
+// already; this still holds if someone loosened it.
+func (s *SocketAPI) WithServer(uid uint32) *SocketAPI {
+	s.serverUID = &uid
+	return s
 }
 
 func (s *SocketAPI) String() string { return s.path }
@@ -42,7 +66,7 @@ func (s *SocketAPI) Listen() (net.Listener, error) {
 			return nil, fmt.Errorf("service socket: %s exists and is not a socket", s.path)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		c, derr := s.Dial(ctx)
+		c, derr := s.dial(ctx)
 		cancel()
 		if derr == nil {
 			c.Close()
@@ -60,11 +84,32 @@ func (s *SocketAPI) Listen() (net.Listener, error) {
 			return nil, fmt.Errorf("service socket: %w", err)
 		}
 	}
-	return ln, nil
+	if s.admit == nil {
+		return ln, nil
+	}
+	return &peerListener{Listener: ln, admit: s.admit, peer: s.peer, reported: map[uint32]time.Time{}}, nil
 }
 
-// Dial connects to the socket; ErrServiceNotRunning when nothing listens.
+// Dial connects to the socket; ErrServiceNotRunning when nothing listens,
+// ErrNotService when another account than WithServer's serves it.
 func (s *SocketAPI) Dial(ctx context.Context) (net.Conn, error) {
+	c, err := s.dial(ctx)
+	if err != nil || s.serverUID == nil {
+		return c, err
+	}
+	p, err := s.peer(c)
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("service socket %s: can't tell who serves it: %w", s.path, err)
+	}
+	if p.UID != *s.serverUID {
+		c.Close()
+		return nil, fmt.Errorf("%w: %s is served by %s, the service runs as uid %d", ErrNotService, s.path, p, *s.serverUID)
+	}
+	return c, nil
+}
+
+func (s *SocketAPI) dial(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", s.path)
 	if err != nil {
@@ -94,4 +139,117 @@ func isNoListener(err error) bool {
 		}
 	}
 	return false
+}
+
+// RefusingListener is a service listener that turns some local accounts
+// away (the Unix socket's peer check). OnRefused reports them, for the
+// service's log: the first refusal of each account, then at most one a
+// minute, so a daemon that keeps trying can't fill the log.
+type RefusingListener interface {
+	net.Listener
+	OnRefused(fn func(peer PeerCred, err error))
+}
+
+// refusalReportEvery is how often one account's refusals are reported.
+const refusalReportEvery = time.Minute
+
+// peerListener hands Accept only the connections admit lets in.
+type peerListener struct {
+	net.Listener
+	admit PeerPolicy
+	peer  func(net.Conn) (PeerCred, error)
+
+	mu       sync.Mutex
+	report   func(PeerCred, error)
+	reported map[uint32]time.Time
+}
+
+func (l *peerListener) OnRefused(fn func(PeerCred, error)) {
+	l.mu.Lock()
+	l.report = fn
+	l.mu.Unlock()
+}
+
+func (l *peerListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		p, err := l.peer(c)
+		if err != nil {
+			// Fail closed: an account that can't be named isn't served.
+			p = PeerCred{UID: unknownUID}
+			err = fmt.Errorf("%w: can't tell which account connected: %w", ErrPeerRefused, err)
+		} else {
+			err = l.admit.Admit(p)
+		}
+		if err == nil {
+			return c, nil
+		}
+		l.refused(p, err)
+		go RefusePeer(c)
+	}
+}
+
+func (l *peerListener) refused(p PeerCred, err error) {
+	l.mu.Lock()
+	fn := l.report
+	now := time.Now()
+	last, seen := l.reported[p.UID]
+	due := fn != nil && (!seen || now.Sub(last) >= refusalReportEvery)
+	if due {
+		if len(l.reported) >= 1024 {
+			clear(l.reported) // accounts are few; this only bounds a flood
+		}
+		l.reported[p.UID] = now
+	}
+	l.mu.Unlock()
+	if due {
+		fn(p, err)
+	}
+}
+
+// refusal is what a turned-away client reads: an HTTP answer, so the
+// window can say why instead of reporting a dropped connection.
+var refusal = []byte("HTTP/1.1 403 Forbidden\r\n" +
+	"Content-Type: text/plain; charset=utf-8\r\n" +
+	"Connection: close\r\n" +
+	fmt.Sprintf("Content-Length: %d\r\n\r\n", len(ErrPeerRefused.Error())+1) +
+	ErrPeerRefused.Error() + "\n")
+
+// refuseWait bounds how long a refused client gets to read the answer.
+const refuseWait = 2 * time.Second
+
+// RefusePeer answers a connection the service won't serve with 403
+// Forbidden and closes it. What the client sent is read and dropped first:
+// closing a Unix socket with unread data resets the connection, and the
+// client could lose the answer. The fake service socket uses it too.
+func RefusePeer(c net.Conn) {
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(refuseWait))
+	if _, err := c.Write(refusal); err != nil {
+		return
+	}
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
+	}
+	io.Copy(io.Discard, io.LimitReader(c, 64<<10))
+}
+
+// controlConn runs fn on the connection's file descriptor.
+func controlConn(c net.Conn, fn func(fd int) error) error {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return fmt.Errorf("%T has no file descriptor", c)
+	}
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ferr error
+	if err := raw.Control(func(fd uintptr) { ferr = fn(int(fd)) }); err != nil {
+		return err
+	}
+	return ferr
 }

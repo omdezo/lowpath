@@ -41,5 +41,6 @@ func NewServiceRunner() ForegroundRunner { return ForegroundRunner{} }
 func (ForegroundRunner) Run(string, func(context.Context) error) (bool, error) { return false, nil }
 
 // ServiceAPIAt is the API socket at path, for a service run by hand on a
-// socket of its own (development and tests).
-func ServiceAPIAt(path string) ServiceAPI { return NewSocketAPI(path, 0o600) }
+// socket of its own (development and tests): only its own account and root
+// may connect (0600), and the window takes any account serving it.
+func ServiceAPIAt(path string) ServiceAPI { return NewSocketAPI(path, 0o600, NewSessionPolicy()) }

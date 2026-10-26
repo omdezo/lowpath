@@ -32,7 +32,7 @@ func testMode() os.FileMode {
 
 func TestSocketAPI(t *testing.T) {
 	path := filepath.Join(socketDir(t), "run", "api.sock")
-	api := NewSocketAPI(path, testMode())
+	api := NewSocketAPI(path, testMode(), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -73,7 +73,7 @@ func TestSocketAPI(t *testing.T) {
 	}
 
 	// A second copy can't take the socket from a running one.
-	if ln2, err := NewSocketAPI(path, testMode()).Listen(); err == nil {
+	if ln2, err := NewSocketAPI(path, testMode(), nil).Listen(); err == nil {
 		ln2.Close()
 		t.Fatal("a second listener took the socket of a running service")
 	}
@@ -93,7 +93,7 @@ func TestSocketAPIKeepsOtherFiles(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ln, err := NewSocketAPI(path, testMode()).Listen(); err == nil {
+	if ln, err := NewSocketAPI(path, testMode(), nil).Listen(); err == nil {
 		ln.Close()
 		t.Fatal("listen replaced a regular file")
 	}

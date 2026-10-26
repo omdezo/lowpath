@@ -118,6 +118,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- The background service's Unix socket on Linux and macOS no longer serves
+  every local account: root, the service's own account and accounts signed
+  in at the computer (a logind session, a utmpx session on macOS, or a
+  person's uid where the system keeps no session list) are served, and
+  daemon accounts such as `nobody` get `403 Forbidden`. The window refuses
+  a socket that root doesn't serve, and says why when it isn't served
+  (#163).
 - Settings → Network: a slow first RIPEstat reply no longer leaves the ISP
   unknown. A registry request with no answer after 2.5 s (or a 502) gets a
   second copy on a fresh connection and the first answer wins; a lookup
