@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -243,6 +244,20 @@ func TestServeAPI(t *testing.T) {
 		t.Errorf("status: %v, %q", err, c.out.String())
 	}
 
+	// An account the service turns away (the Unix socket's peer check)
+	// learns why, and the service's log says who it was.
+	fp.ServiceAPI.SetRefused(platform.PeerCred{UID: 65534, PID: 99}, fmt.Errorf("%w: uid 65534 has no login session", platform.ErrPeerRefused))
+	fe.Close() // the check runs on new connections: one already served stays
+	if _, err := fe.Check(t.Context()); !errors.Is(err, platform.ErrPeerRefused) {
+		t.Errorf("check while refused: %v, want ErrPeerRefused", err)
+	}
+	c.out.Reset()
+	if err := c.dispatch("status", nil); err == nil || !strings.Contains(err.Error(), "signed in at this computer") {
+		t.Errorf("status while refused: %v", err)
+	}
+	fp.ServiceAPI.SetRefused(platform.PeerCred{}, nil)
+	waitAnswer(t, fe)
+
 	// A second copy can't take the API from a running one.
 	if err := newService(fp.Platform(), runOptions{data: t.TempDir()}).serve(t.Context()); err == nil {
 		t.Error("a second service started on a taken API")
@@ -256,6 +271,10 @@ func TestServeAPI(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(data, "lowpath.log")); err != nil || fi.Size() == 0 {
 		t.Errorf("service log: %v", err)
+	}
+	log, _ := os.ReadFile(filepath.Join(data, "lowpath.log"))
+	if !strings.Contains(string(log), "refused a connection to the API") || !strings.Contains(string(log), "uid 65534 (process 99)") {
+		t.Errorf("the log doesn't name the refused account:\n%s", log)
 	}
 }
 

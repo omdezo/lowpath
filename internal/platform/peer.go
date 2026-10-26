@@ -250,7 +250,7 @@ func utmpxEntry(r []byte) (typ int16, user string) {
 type RegularUsers struct{ Min, Max uint32 }
 
 func (r RegularUsers) String() string {
-	return fmt.Sprintf("no session list on this system, so the accounts for people, uid %d to %d, are let in", r.Min, r.Max)
+	return fmt.Sprintf("no session list on this system: only uid %d to %d, the accounts for people", r.Min, r.Max)
 }
 
 func (r RegularUsers) SignedIn(uid uint32) (bool, error) { return uid >= r.Min && uid <= r.Max, nil }

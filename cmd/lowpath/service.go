@@ -96,12 +96,13 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		if !expected && errors.Is(err, platform.ErrServiceNotRunning) {
 			return nil, "", nil // nothing listens: the usual case without a service
 		}
+		if errors.Is(err, platform.ErrPeerRefused) {
+			logger.Warn("the Lowpath service doesn't serve this account; running the engine in this window", "api", api.String(), "err", err)
+			return nil, "it only serves accounts signed in at this computer, and this one isn't", nil
+		}
 		logger.Warn("the Lowpath service isn't answering; running the engine in this window", "api", api.String(), "err", err)
 		if errors.Is(err, platform.ErrNotService) {
 			return nil, "the program answering on its pipe is not the installed service, so Lowpath won't talk to it", nil
-		}
-		if errors.Is(err, platform.ErrPeerRefused) {
-			return nil, "it only serves accounts signed in at this computer, and this one isn't", nil
 		}
 		return nil, fmt.Sprintf("it isn't answering (%v)", err), nil
 	}

@@ -96,6 +96,12 @@ macOS `/var/run/lowpath/api.sock`) and
 `./lowpath` (window or `-headless`) uses it when it answers, before it
 would ask polkit or the administrator dialog for anything; there is no
 `install` there yet, and `lowpathsvc install` says so without a prompt.
+Like the pipe, the socket only serves accounts signed in at the computer:
+root, the service's own account, and accounts with a logind session (on
+macOS, a utmpx session). Without logind (WSL without systemd, Alpine) that
+is the people's uid range in `/etc/login.defs` (1000 to 60000 by default).
+Other accounts, such as `nobody` or a daemon's, get `403 Forbidden`, and
+the service logs who they were; their window runs the engine itself.
 
 ### Files on disk
 
@@ -289,7 +295,16 @@ go test ./...
   Users can't create instances, nobody remote or anonymous is listed), the
   server-process check refusing another process, a second server refused;
   the Unix socket (stale file taken over, a running one and a plain file
-  left alone); the service manager read for a service that isn't installed
+  left alone; the peer check on every OS with the peer played by a fake:
+  signed-in, root, `nobody` and an unknown peer, 403 before the API sees
+  the request, one log line per account a minute, a client that never
+  reads holding nobody up, the window refusing a socket root doesn't
+  serve; logind's session files, macOS utmpx records and `login.defs`
+  parsed from samples; on Linux and macOS the kernel's peer credentials
+  for this process, and as **root** on Linux, `go test -run PeerCheck -v
+  ./internal/platform` connects as `nobody` and as uid 1000 to 1002 from
+  child processes, against this system's sessions and a sample logind
+  list; WSL2 works); the service manager read for a service that isn't installed
   and for the event log, install and uninstall refused without rights, the
   service's and data folder's access lists, the data folder created with
   its access list in one call, only an admins-only folder kept and any
