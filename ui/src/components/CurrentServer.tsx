@@ -59,7 +59,8 @@ export function CurrentServer({ gameId, gameName }: { gameId: string; gameName: 
 
   const sv = view?.server ?? null;
   const live = view?.state === "live";
-  const watchNote = view && view.watch.state !== "on" && view.watch.state !== "idle" ? view.watch.message : undefined;
+  // Why the flow watch is off matters only when it is what's missing.
+  const watchNote = view && view.source !== "boost" && view.watch.state !== "on" && view.watch.state !== "idle" ? view.watch.message : undefined;
 
   return (
     <section className="card pops cur" aria-label="Current server">
@@ -74,7 +75,7 @@ export function CurrentServer({ gameId, gameName }: { gameId: string; gameName: 
             )}
             {view?.state === "last" && <span className="cur-badge cur-badge-last">Last time</span>}
           </span>
-          <div className="pops-sub">{view?.source ? SOURCE[view.source] : `The server ${gameName} is connected to, learned from its traffic.`}</div>
+          <div className="pops-sub">{view?.source ? SOURCE[view.source] : `Which server ${gameName} is on, where it is, and how the direct route to it behaves.`}</div>
         </div>
       </div>
 

@@ -445,6 +445,11 @@ func (c *currentServers) fillServer(sv *serverView) *youView {
 		g := catalog.CheckGeo(catalog.Geo{}, catalog.Geo{}, minRTT)
 		if minRTT > 0 {
 			sv.Geo = g
+			if sv.Network != nil && sv.Network.Country != "" {
+				// A country-only answer is common for anycast and cloud
+				// ranges, and may be where the owner is registered.
+				sv.Geo.Note = "The IP database knows only the country. " + g.Note
+			}
 		} else {
 			sv.Geo = catalog.GeoCheck{State: catalog.GeoCheckUnknown}
 		}

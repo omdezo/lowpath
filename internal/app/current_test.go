@@ -287,3 +287,31 @@ func TestGameRemoteFilter(t *testing.T) {
 		}
 	}
 }
+
+// An anycast address is known only by country; the card must not pretend
+// the country's center is the server's place, and says what the ping shows.
+func TestCurrentServerCountryOnly(t *testing.T) {
+	a := netip.MustParseAddrPort("198.51.100.77:19302")
+	lookup := &fakeLookup{nets: map[netip.Addr]diag.NetworkInfo{a.Addr(): {ASN: 64502, ISP: "Example Anycast", Country: "US"}}}
+	_, srv := newRealServer(t, newFake(t), func(c *Config) {
+		c.Locator, c.ServerLookup = &fakeLocator{loc: exampleLocation(), have: true}, lookup
+		c.Ping = func(netip.Addr, time.Duration) (time.Duration, error) { return 7 * time.Millisecond, nil }
+	})
+	g, _ := srv.game("cs2")
+	snap := &engine.Snapshot{Servers: []engine.ServerStatus{{Addr: a, Proto: "udp", PktsUp: 5, LastSeen: time.Now(), Primary: true}}}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		v := srv.current.view(g, snap)
+		if s := v.Server; s.Network != nil && s.Received > 0 {
+			if s.Geo.State != "unknown" || s.Geo.DistanceKM != nil || s.Geo.MaxKM == nil || *s.Geo.MaxKM != 714 ||
+				s.Geo.Note != "The IP database knows only the country. The ping puts it within 710 km of you." {
+				t.Fatalf("geo %+v", s.Geo)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no lookup or ping: %+v", v.Server)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
