@@ -215,6 +215,75 @@ export interface BloatStatus {
   error?: string;
 }
 
+export type TraceMode = "icmp" | "udp";
+
+// One row of a route trace: a TTL, or (probe "udp", ttl 0) the relay's own
+// UDP port. Null numbers were not measured.
+export interface TraceHop {
+  ttl: number;
+  addr: string;
+  others?: string[];
+  name?: string;
+  private: boolean;
+  probe: "icmp" | "udp";
+  sent: number;
+  recv: number;
+  loss_pct: number;
+  persist_pct: number | null;
+  limited: boolean;
+  loss_starts: boolean;
+  unreachable?: number;
+  error?: string;
+  best_ms: number | null;
+  avg_ms: number | null;
+  worst_ms: number | null;
+  last_ms: number | null;
+  stdev_ms: number | null;
+  persist_ms: number | null;
+}
+
+export interface TraceResult {
+  started_at: string;
+  finished_at: string;
+  running: boolean;
+  stopped: boolean;
+  target: string;
+  host: string;
+  mode: TraceMode;
+  end_name?: string;
+  rounds: number;
+  planned: number;
+  interval_s: number;
+  max_hops: number;
+  reached: boolean;
+  hops: TraceHop[] | null;
+  end?: TraceHop | null;
+  dest_loss_pct: number | null;
+  loss_from: number | null;
+  threshold_pct: number;
+  jump_ttl: number | null;
+  jump_ms: number | null;
+  verdict: string;
+  notes?: string[] | null;
+}
+
+export interface TraceTarget {
+  id: string;
+  label: string;
+  addr: string;
+  udp: boolean;
+  kind: "public" | "relay" | "server";
+}
+
+export interface TraceStatus {
+  running: boolean;
+  progress: TraceResult | null;
+  result: TraceResult | null;
+  error?: string;
+  targets: TraceTarget[] | null;
+  defaults: { count: number; interval_s: number };
+}
+
 export interface Settings {
   dup_level: 0 | 1 | 2 | 4;
   auto_switch: boolean;

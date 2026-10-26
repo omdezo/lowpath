@@ -205,3 +205,219 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Diagnostics: route trace (MTR) card */
+.trace {
+  margin-top: 14px;
+}
+
+.trace-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  margin-top: 14px;
+}
+
+.trace-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trace-field:first-child {
+  flex: 1 1 220px;
+}
+
+.trace-field .input {
+  height: 36px;
+  width: 100%;
+  min-width: 0;
+}
+
+.trace-host {
+  flex: 1 1 200px;
+}
+
+.trace-field .segmented {
+  height: 36px;
+}
+
+.trace-go {
+  margin-left: auto;
+}
+
+.trace-go .btn {
+  height: 36px;
+}
+
+.trace-hint {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.trace-progress {
+  margin-top: 14px;
+}
+
+.trace-progress .bar {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.trace-progress .bar div {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 600ms linear;
+}
+
+.trace-progress > span {
+  display: block;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.trace-progress b {
+  color: var(--text);
+}
+
+.trace-progress .spin {
+  vertical-align: -2px;
+}
+
+.trace-verdict {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: var(--panel);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.trace-verdict .t {
+  font-weight: 600;
+}
+
+.trace-verdict.t-good {
+  border-left-color: var(--good);
+}
+
+.trace-verdict.t-warn {
+  border-left-color: var(--warn);
+}
+
+.trace-verdict.t-bad {
+  border-left-color: var(--bad);
+}
+
+.trace-verdict.t-none {
+  border-left-color: var(--border-strong);
+}
+
+.trace-verdict ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.trace-verdict li + li {
+  margin-top: 3px;
+}
+
+.trace-table-wrap {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow-x: auto;
+}
+
+.trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.trace-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.trace-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.trace-table tr:last-child td {
+  border-bottom: none;
+}
+
+.trace-table .n {
+  width: 34px;
+  color: var(--faint);
+  text-align: right;
+}
+
+.trace-table .v {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.trace-table .host {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.trace-table .host .addr {
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-table .host .sub {
+  display: block;
+  font-size: 11.5px;
+}
+
+.trace-table .host .tag {
+  vertical-align: 1px;
+}
+
+.trace-table tr.starts td {
+  background: color-mix(in srgb, var(--bad) 7%, transparent);
+}
+
+.tag-bad {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+
+.trace-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.trace-foot span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
