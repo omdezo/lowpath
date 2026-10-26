@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -17,10 +19,10 @@ func waitForExit(pid int, timeout time.Duration) {
 	windows.WaitForSingleObject(h, uint32(timeout/time.Millisecond))
 }
 
-// showError tells the user why the app could not start: a GUI build has no
-// console to print to.
-func showError(title, msg string) {
-	t, _ := windows.UTF16PtrFromString(title)
-	m, _ := windows.UTF16PtrFromString(msg)
-	windows.MessageBox(0, m, t, windows.MB_OK|windows.MB_ICONERROR)
-}
+// stopSignals end the app cleanly: Ctrl+C, and the console closing or the
+// session ending (which Go delivers as SIGTERM).
+func stopSignals() []os.Signal { return []os.Signal{os.Interrupt, syscall.SIGTERM} }
+
+// handBack has nothing to do on Windows: the elevated copy runs as the same
+// user, so its files are the user's.
+func handBack(...string) {}

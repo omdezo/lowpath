@@ -28,7 +28,7 @@ func Native() *Platform {
 		OS:         runtime.GOOS,
 		Capture:    nativeCapture(owners),
 		Owners:     owners,
-		Privileges: NewRoot(),
+		Privileges: nativePrivileges(),
 		Games:      games,
 		Icons:      games,
 		Paths:      NewUnixPaths(),

@@ -34,7 +34,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       // bootstrap refresh after reconnect decides what to show.
       if (sawDown.current) return;
       setState("idle");
-      onError("Lowpath is still running without administrator rights. If you cancelled the administrator prompt, try again.", "Not restarted");
+      onError("Lowpath is still running without the rights route mode needs. If you cancelled the prompt, try again.", "Not restarted");
     }, RESTART_GRACE_MS);
     return () => window.clearTimeout(t);
   }, [state, onError]);
@@ -47,11 +47,14 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       setState("restarting");
     } catch (e) {
       setState("idle");
-      const d = describeError(e, "Couldn't restart as administrator");
+      const d = describeError(e, "Couldn't restart with more rights");
       onError(d.msg, d.title);
     }
   };
 
+  // The server words the restart for its OS (UAC, polkit, the macOS
+  // administrator dialog).
+  const elevateHint = platform.elevate_hint || "Restart Lowpath as administrator to fix this.";
   const reason = platform.capture.reason || (canElevate ? "administrator rights are needed" : "the capture driver isn't available");
 
   return (
@@ -61,12 +64,14 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
         <b>Route mode can't capture game traffic:</b> {reason}.{" "}
         {canElevate ? (
           platform.service?.state === "not_installed" ? (
+            // Only where `lowpathsvc install` works (Windows today): the
+            // other OSes report "unsupported".
             <>
-              Restart Lowpath as administrator to fix this, or install the background service once with{" "}
+              {elevateHint.replace(/\.$/, "")}, or install the background service once with{" "}
               <code className="inline-code">lowpathsvc install</code> so it never asks again.
             </>
           ) : (
-            "Restart Lowpath as administrator to fix this."
+            elevateHint
           )
         ) : (
           <>
@@ -81,7 +86,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       {canElevate && (
         <button className="btn btn-xs" onClick={elevate} disabled={state !== "idle"} style={{ flex: "none" }}>
           {state !== "idle" && <Loader2 size={13} className="spin" />}
-          {state === "restarting" ? "Restarting…" : "Restart as administrator"}
+          {state === "restarting" ? "Restarting…" : platform.elevate_action || "Restart as administrator"}
         </button>
       )}
     </div>

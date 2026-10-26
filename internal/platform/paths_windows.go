@@ -28,6 +28,9 @@ func NewWindowsPaths() *WindowsPaths {
 	}
 }
 
+// LogDir is the data folder, as it always was on Windows.
+func (p *WindowsPaths) LogDir() (string, error) { return p.DataDir() }
+
 func (p *WindowsPaths) DriverDirs(elevated bool) ([]string, []error) {
 	return driverDirs(elevated, p.programFiles, p.executable)
 }

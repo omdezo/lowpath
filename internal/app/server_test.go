@@ -156,6 +156,21 @@ func TestSessionRequired(t *testing.T) {
 	if p := srv.LaunchPath(); p != "/" {
 		t.Errorf("launch path after use %q, want /", p)
 	}
+
+	// A second start of the app gets a fresh one-time link for the window
+	// it opens; asking again before it is used gives the same link.
+	again := srv.NewLaunchPath()
+	if again == launch || !strings.HasPrefix(again, "/api/session?t=") || srv.NewLaunchPath() != again {
+		t.Fatalf("new launch path %q (first %q)", again, launch)
+	}
+	if res, err := noFollow.Get(ts.URL + again); err != nil {
+		t.Error(err)
+	} else if res.Body.Close(); res.StatusCode != http.StatusSeeOther {
+		t.Errorf("fresh launch link: %s, want it to sign in", res.Status)
+	}
+	if code, _ := do(t, ts, "GET", again, "", noCookie); code != 403 {
+		t.Errorf("fresh launch link reused: %d, want 403", code)
+	}
 }
 
 // Lowpath has no accounts, trials or plans: Boost works from the first run.

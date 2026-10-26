@@ -30,3 +30,18 @@ func TestCaptureReasons(t *testing.T) {
 		t.Errorf("captureErr(ErrNeedAdmin) = %s %v", e.kind, e.err)
 	}
 }
+
+// The restart button says what it does on each OS: on Linux it asks for a
+// password once and keeps running as the same user, so "administrator"
+// would be wrong.
+func TestElevateWording(t *testing.T) {
+	for os, want := range map[string]string{"windows": "Restart as administrator", "linux": "Allow route mode", "darwin": "Restart with administrator rights"} {
+		action, hint := elevateWording(os)
+		if action != want || hint == "" {
+			t.Errorf("%s: %q / %q", os, action, hint)
+		}
+	}
+	if _, hint := elevateWording("linux"); strings.Contains(hint, "administrator") || !strings.Contains(hint, "password") {
+		t.Errorf("linux hint %q", hint)
+	}
+}

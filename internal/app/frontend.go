@@ -103,6 +103,12 @@ func (f *Frontend) Handler() http.Handler {
 // LaunchPath is the window's first URL (see Server.LaunchPath).
 func (f *Frontend) LaunchPath() string { return f.auth.launchPath() }
 
+// NewLaunchPath is a launch path for one more window when the app is
+// started again while it runs (see Server.NewLaunchPath). The session lives
+// here, not in the service, so a second start signs in even while the
+// service restarts.
+func (f *Frontend) NewLaunchPath() string { return f.auth.newLaunchPath() }
+
 // Check asks the service for its version: whether it answers at all, and
 // whether it is the same build as this window.
 func (f *Frontend) Check(ctx context.Context) (string, error) {

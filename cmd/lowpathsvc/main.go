@@ -226,6 +226,14 @@ func (c *cli) uninstall(args []string) error {
 // elevate runs this command again with administrator rights (a UAC prompt
 // on Windows), in a window of its own.
 func (c *cli) elevate(args ...string) error {
+	// Without a service manager to install into (Linux and macOS today) a
+	// prompt would only lead to the same "not available" answer. On Linux
+	// it wouldn't even make this program root: the desktop app's prompt
+	// (polkit) gives the program file route mode's network capabilities and
+	// starts it again as the same user, which would ask again.
+	if _, err := c.plat.Service.State(); errors.Is(err, errors.ErrUnsupported) {
+		return fmt.Errorf("lowpathsvc %s is not available on this system yet (lowpathsvc run, started as root, serves the API): %w", args[0], err)
+	}
 	if !c.plat.Privileges.CanElevate() {
 		return fmt.Errorf("%s needs administrator rights: run it as root (sudo) or from an administrator terminal", args[0])
 	}

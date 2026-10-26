@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,9 +58,27 @@ func TestInstallElevatesOnce(t *testing.T) {
 }
 
 func TestInstallWithoutPrompt(t *testing.T) {
-	c := newTestCLI(t) // no way to ask (Linux, macOS)
+	c := newTestCLI(t) // no way to ask
 	if err := c.dispatch("install", nil); err == nil || !strings.Contains(err.Error(), "administrator") {
 		t.Fatalf("install without rights or prompt: %v", err)
+	}
+}
+
+// Linux and macOS can show a prompt (the desktop app's polkit and
+// administrator dialogs) but have no service manager to install into yet:
+// install and uninstall say so without prompting. On Linux the prompt
+// would restart the program as the same user, which would ask again.
+func TestInstallWithoutServiceManager(t *testing.T) {
+	for _, cmd := range []string{"install", "uninstall"} {
+		c := newTestCLI(t)
+		c.fp.Privileges.SetCanElevate(true)
+		c.fp.Service.Set(platform.ServiceState{}, errors.ErrUnsupported)
+		if err := c.dispatch(cmd, nil); !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "lowpathsvc run") {
+			t.Errorf("%s without a service manager: %v", cmd, err)
+		}
+		if runs := c.fp.Privileges.Relaunches(); len(runs) != 0 {
+			t.Errorf("%s prompted for rights: %q", cmd, runs)
+		}
 	}
 }
 

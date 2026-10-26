@@ -96,8 +96,9 @@ type FlowWatcher interface {
     Watch(onEvent func(detect.FlowEvent)) (detect.FlowWatch, error)
 }
 type Paths interface {
-    DataDir() (string, error)   // settings, relays, log
+    DataDir() (string, error)   // settings, relays, learned servers
     CacheDir() (string, error)  // rebuildable (window profile)
+    LogDir() (string, error)    // log, crash reports
     DriverDirs(elevated bool) ([]string, []error) // elevated: protected folders only
     ServiceDataDir() (string, error) // the service's state and log (machine-wide)
 }
@@ -121,9 +122,9 @@ type ServiceRunner interface { // platform.NewServiceRunner(); not part of Platf
 |---|---|---|
 | Capture | `capture.WinDivert` (64-bit only; `ErrNoDriver` on arm64) | Linux `capture.TUN`: TUN device + nftables mark + `ip rule` (root or `CAP_NET_ADMIN` and `CAP_NET_RAW`; see below). macOS `capture.Unavailable`: route mode says "packet capture isn't available on this system yet" (utun backend: #42) |
 | Owners | `owner.Windows`: `GetExtendedUdpTable(UDP_TABLE_OWNER_PID)` + Toolhelp32 | Linux `owner.Procfs`: `/proc/net/udp{,6}` inodes matched to `/proc/<pid>/fd` `socket:[inode]` links. macOS `owner.Darwin`: `kern.proc.all`, then `proc_pidinfo(PROC_PIDLISTFDS)` + `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` through the `proc_info` syscall (no cgo). Own user's processes only, no root. Other OSes: `owner.Unsupported` |
-| Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | `platform.Root`: euid 0; no prompt yet (#44) |
+| Privileges | `platform.UAC`: process token, `ShellExecute "runas"` | Linux `platform.Polkit`: one `pkexec setcap cap_net_admin,cap_net_raw+ep <program>` prompt, then the program starts again as the same user (a program file the user owns is made `0700` first; not offered on a `nosuid` or read-only filesystem, under `no_new_privs`, or without pkexec and setcap). macOS `platform.AdminPrompt`: `osascript` "do shell script ... with administrator privileges" restarts it as root (offered once route mode exists there, #42). Elevated = euid 0 |
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
-| Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
+| Paths | `%APPDATA%\Lowpath` (data and log), `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); log in `$XDG_STATE_HOME/Lowpath` (`~/.local/state`) or `~/Library/Logs/Lowpath`; no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
 | Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
 | Service | `platform.WindowsService` (service control manager, `svc/mgr`), `platform.Pipe` on `\\.\pipe\lowpath` (go-winio), `platform.SCMRunner` (`svc.Run`); data in `%ProgramData%\Lowpath` | `platform.NoServiceManager` (`ErrUnsupported`; systemd and launchd units later), `platform.SocketAPI` on `/run/lowpath/api.sock` (`/var/run/lowpath/api.sock` on macOS, which has no `/run`; 0666, in a root-only folder), data in `/var/lib/lowpath`; `lowpathsvc run` serves in the foreground |
@@ -134,6 +135,55 @@ turns that into an explanation (501 `unsupported`, or the capture reason),
 never an empty list presented as real. No package-level mutable state: each
 implementation is a type with a constructor, and its dependencies (owner
 resolver, privilege check, driver folders) are passed in.
+
+### Desktop shell
+
+`cmd/lowpath` puts the UI in front of the user through two more interfaces,
+which `main` builds next to `Native()` (`platform.NewDesktop`,
+`platform.NewInstance`); its tests pass fakes.
+
+```go
+type Desktop interface {
+    RunWindow(ctx context.Context, url string) error // until closed; ErrNoWindow at once
+    ShowWindow(url string) error  // a second start: raise, or open one more at url
+    OpenBrowser(url string) error
+    ShowError(title, msg string)
+    AddToAppMenu(exe string) error // Linux: a desktop entry; elsewhere nothing
+}
+type Instance interface {
+    Serve(onShow func()) (io.Closer, error) // the copy that runs
+    Signal() bool                          // a later start: "show your window"
+}
+```
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Window | `platform.WebView2`, in-process, on the main thread | `platform.AppWindows`: WebKitGTK through the system's Python and PyGObject (GTK 4 with WebKit 6.0, else GTK 3 with WebKit2 4.1 or 4.0; `webkitgtk.py`), else a Chromium-family browser in app mode (`--app`, a profile of this run's own, so its process is the window; a snap browser's profile goes in `~/snap/<name>/common`), else `xdg-open` | `platform.AppWindows`: a WKWebView window through `osascript -l JavaScript` (`wkwebview.js`, loading `localhost` so App Transport Security allows plain HTTP), else Chromium-family apps in `/Applications`, else `open` |
+| Second start | the running copy's window found by class and title, brought forward | a Unix socket per UI address in `$XDG_RUNTIME_DIR/lowpath` (else a 0700 folder in the temporary folder); the running copy opens another window with a fresh one-time launch link (`Server.NewLaunchPath`; the link never travels over the socket) | the same socket, in the per-user `$TMPDIR` |
+| Errors at start | message box | `zenity`, else `kdialog`, and stderr | `osascript` alert, and stderr |
+| One click | `Lowpath.exe` | the first windowed start writes `~/.local/share/applications/lowpath.desktop` and the hicolor icon; later starts are in the app menu | `Lowpath.app` (`scripts/macapp`: universal program, `Info.plist`, icon) |
+
+Window programs are child processes, so the app stays cgo-free and builds
+for every OS from any OS. A window kind whose program exits with an error
+within 2.5 s didn't open (no display, no toolkit) and the next is tried.
+The launch link reaches the WebKit helpers in their environment, which other
+users can't read, unlike a command line. When the last window closes,
+`RunWindow` returns and the app stops the session (capture off) before it
+exits; quitting the app sends the windows SIGTERM, then kills one that hangs
+after 3 s. SIGHUP (the terminal or session going away) stops the app like
+SIGTERM.
+
+Start-up order (`run` in `cmd/lowpath`): the log opens in `Paths.LogDir`;
+the UI port is bound, and if a copy already serves it, `Instance.Signal`
+asks that copy for its window and this start exits before any prompt; then
+the background service is tried (see Background service), and only without
+one does the app ask for rights (`Privileges.Relaunch`) and run the engine
+itself. Either way the same shell shows the window and answers later
+starts; in front of the service the fresh launch links come from
+`app.Frontend`, which holds the session, so a second start signs in even
+while the service restarts. The single-instance socket is the user's own
+and is never put in the service's socket folder (`/run/lowpath`,
+`/var/run/lowpath`), whose mode the service relies on.
 
 `internal/owner` is the socket-owner resolver:
 
@@ -925,7 +975,15 @@ Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (Loca
   doesn't answer is logged and the window runs the engine itself.
   `-service-pipe NAME` talks to a service run by hand (`lowpathsvc run
   -pipe NAME`, no PID check) and fails if it doesn't answer; the end-to-end
-  test uses it.
+  test uses it. On Linux and macOS there is no service manager yet
+  (`ErrUnsupported`), so the window checks the socket once: a service
+  started by hand as root (`lowpathsvc run`) is used, and nothing listening,
+  the usual case, costs no wait. Only after this step does the window ask
+  for rights (UAC, polkit or the macOS administrator dialog, see Desktop
+  shell). `lowpathsvc install` and `uninstall` say there that they aren't
+  available yet, without a prompt: polkit gives the program file network
+  capabilities and restarts it as the same user, which would never make
+  the installer root.
 - **Frontend**: a reverse proxy over `ServiceAPI.Dial` (3 s dial timeout, no
   environment proxy, Server-Sent Events flushed at once). `/api/session`
   and `/api/version` are answered locally, so a second launch finds the
@@ -1014,8 +1072,9 @@ Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (Loca
   engine.Send`, `engine.Deliver → capture.Inject`. Record primary servers per
   game every few seconds. Stop tears down capture first, then engine.
 - `build.ps1`: npm ci/build → go-winres → `dist\Lowpath.exe` (`-H windowsgui`),
-  `dist\lpcheck.exe`, `dist\relay-linux-amd64`, `dist\relay-linux-arm64`,
-  copy `deploy\`. Plus `go vet` + `go test`.
+  `dist\lowpathsvc.exe`, `dist\lowpath-linux-amd64` and `-arm64`,
+  `dist\Lowpath-macos.zip`, `dist\lpcheck.exe`, `dist\relay-linux-amd64`,
+  `dist\relay-linux-arm64`, copy `deploy\`. Plus `go vet` + `go test`.
 
 ### HTTP API
 

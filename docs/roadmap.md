@@ -59,7 +59,7 @@ The backlog in §5 follows four rules. They exist because earlier drafts got the
 | Measurement | ICMP before; probe RTT + egress ICMP leg after; says "server ignores ping" honestly | `internal/engine/baseline.go`, `internal/icmp` |
 | Catalog | 22 games: process names, Steam app id, install paths. **No server pools, regions, ports, prefixes or login hosts** | `internal/app/games.json`, `catalog.go` |
 | Server knowledge | Learned from live flows only; busiest flow is primary and remembered | `internal/engine/flows.go` |
-| App shell | `Lowpath.exe` (WebView2 + React), localhost API with per-launch secret. Without the service it runs the engine itself, elevated. With the dev-mode `LowpathSvc` (`lowpathsvc install`, one UAC, starts at boot) it stays unelevated and passes the API to the service over `\\.\pipe\lowpath` (#6). No tray, update, signing or installer | `cmd/lowpath`, `cmd/lowpathsvc`, `internal/app`, `internal/shell`, `ui/` |
+| App shell | `Lowpath.exe` (WebView2 + React), localhost API with per-launch secret. Without the service it runs the engine itself, elevated. With the dev-mode `LowpathSvc` (`lowpathsvc install`, one UAC, starts at boot) it stays unelevated and passes the API to the service over `\\.\pipe\lowpath` (#6). Linux: WebKitGTK or Chromium app window, polkit prompt that gives the binary its capabilities, app menu entry on first start. macOS: WKWebView window, `Lowpath.app` (#44). On both, a service run by hand (`lowpathsvc run`) is used over its Unix socket; installing it as a systemd unit or launchd daemon is still to come. No tray, update, signing or installer | `cmd/lowpath`, `cmd/lowpathsvc`, `internal/app`, `internal/shell`, `internal/platform`, `ui/` |
 | Licence | MIT, free, no accounts | `README.md` |
 
 ---

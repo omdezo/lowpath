@@ -140,6 +140,39 @@ func TestFrontendGuard(t *testing.T) {
 	}
 }
 
+// A second start of the app while the window runs in front of the service
+// gets a fresh one-time link from the window, which holds the session, so
+// it signs in even while the service is down.
+func TestFrontendNewLaunchPath(t *testing.T) {
+	fp := newFake(t)
+	svc := startService(t, fp)
+	ts, fe := newTestFrontend(t, fp)
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	signIn := func(path string) int {
+		res, err := noFollow.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	first := fe.LaunchPath()
+	if code := signIn(first); code != http.StatusSeeOther {
+		t.Fatalf("launch link: %d", code)
+	}
+	svc.kill()
+	again := fe.NewLaunchPath()
+	if again == first || !strings.HasPrefix(again, "/api/session?t=") || fe.NewLaunchPath() != again {
+		t.Fatalf("new launch path %q (first %q)", again, first)
+	}
+	if code := signIn(again); code != http.StatusSeeOther {
+		t.Errorf("fresh launch link with the service down: %d, want it to sign in", code)
+	}
+	if code, _ := do(t, ts, "GET", again, "", map[string]string{"Cookie": ""}); code != 403 {
+		t.Errorf("fresh launch link reused: %d, want 403", code)
+	}
+}
+
 // When the service dies the window says so (the UI shows "Lost connection
 // to the Lowpath service. Reconnecting…"), still answers the version check
 // a second launch uses, and picks up the restarted service by itself.

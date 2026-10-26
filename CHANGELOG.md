@@ -37,6 +37,18 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   service's data folder is created admins-only in one step and secured
   again at every start; a folder users could change is moved aside. On
   macOS the socket is `/var/run/lowpath/api.sock`.
+- Desktop shell on Linux and macOS: the UI opens in an app window
+  (WebKitGTK or a Chromium app window on Linux, WKWebView on macOS, the
+  default browser otherwise), and closing it quits and stops the boost. A
+  second start brings the running copy forward instead of starting another.
+  On Linux route mode asks for your password once (polkit) to give the
+  program file, made private to you, its two network capabilities, and
+  keeps running as you; the first start adds Lowpath to the app menu. A
+  background service started by hand (`lowpathsvc run` as root) is used
+  first, and then nothing is asked. The build makes a universal
+  `Lowpath.app` for macOS. Logs go to `~/.local/state/Lowpath` and
+  `~/Library/Logs/Lowpath` (`-logs` to choose), and SIGHUP stops the app
+  cleanly (#44).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements
