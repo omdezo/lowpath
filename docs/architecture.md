@@ -827,7 +827,10 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
 - **LAN split and top program** (`ConnWatch`, where `platform.Conns`
   works): each second, per-connection TCP byte deltas (`ID`: the socket
   cookie, so a reused port pair starts over; a connection new since the
-  last reading counts in full; counters that go backwards count nothing).
+  last reading counts in full, but one missing from a reading, such as an
+  IPv6 dump that failed, keeps its last counters for 10 s so it doesn't
+  come back as its whole lifetime; counters that go backwards count
+  nothing).
   A connection counts only when its local address is one of the default
   interface's own (VPN tunnels, container bridges, loopback and this PC's
   own addresses carry no bytes over the adapter); its peer is LAN when

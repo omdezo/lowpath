@@ -154,6 +154,35 @@ func TestConnWatchSplitsLANFromInternet(t *testing.T) {
 	}
 }
 
+// A connection missing from one reading (an IPv6 dump that failed) comes
+// back with only what it moved meanwhile, not its whole lifetime; one gone
+// for longer than the grace is forgotten.
+func TestConnWatchConnectionMissingFromAReading(t *testing.T) {
+	f := &fakeConns{owners: map[uint64]uint32{1: 300}}
+	w, _ := newTestConnWatch(f, map[uint32]string{300: "steam"})
+	at := time.Unix(0, 0)
+	big := conn(1, "[2001:db8:0:1::10]:50001", "[2001:db8:ffff::5]:443", 0, 20e9) // ten minutes of a download
+	f.conns = []TCPConn{big}
+	w.Sample(at, 7)
+	f.conns = nil
+	if s, ok := w.Sample(at.Add(time.Second), 7); !ok || len(s.Talkers) != 0 {
+		t.Fatalf("reading without it: %+v %v", s, ok)
+	}
+	big.Received += 4e6
+	f.conns = []TCPConn{big}
+	s, ok := w.Sample(at.Add(2*time.Second), 7)
+	if !ok || len(s.Talkers) != 1 || s.Talkers[0].Rx != 4e6 {
+		t.Fatalf("back after one reading: %+v %v; want 4 MB/s, not its lifetime", s.Talkers, ok)
+	}
+	f.conns = nil
+	for i := 3; i <= 3+int(connGrace/time.Second); i++ {
+		w.Sample(at.Add(time.Duration(i)*time.Second), 7)
+	}
+	if _, kept := w.prev[1]; kept {
+		t.Error("a connection gone longer than the grace is still remembered")
+	}
+}
+
 func TestConnWatchQuietLineLooksUpNoOwners(t *testing.T) {
 	f := &fakeConns{owners: map[uint64]uint32{1: 300}}
 	w, _ := newTestConnWatch(f, nil)

@@ -177,9 +177,18 @@ const (
 	// addrsRefresh is how often the interface's addresses are read again
 	// (DHCP renewals, IPv6 privacy addresses).
 	addrsRefresh = 10 * time.Second
+	// connGrace is how long a connection missing from the readings keeps
+	// its last counters: one dump that failed for a family, or a socket
+	// the kernel skipped, would otherwise count the connection's whole
+	// lifetime as new when it shows up again. IDs are never reused, so a
+	// remembered one can't be mistaken for a new socket.
+	connGrace = 10 * time.Second
 )
 
-type connBytes struct{ sent, recv uint64 }
+type connBytes struct {
+	sent, recv uint64
+	seen       time.Time // the last reading that listed it
+}
 
 // ConnWatch turns successive ConnStats readings into per-second LAN and
 // internet rates for the default interface. Not safe for concurrent use:
@@ -237,7 +246,12 @@ func (w *ConnWatch) Sample(now time.Time, index int) (ConnSample, bool) {
 	prev, prevAt := w.prev, w.prevAt
 	w.prev, w.prevAt = make(map[uint64]connBytes, len(conns)), now
 	for _, c := range conns {
-		w.prev[c.ID] = connBytes{c.Sent, c.Received}
+		w.prev[c.ID] = connBytes{c.Sent, c.Received, now}
+	}
+	for id, p := range prev {
+		if _, listed := w.prev[id]; !listed && now.Sub(p.seen) < connGrace {
+			w.prev[id] = p // what it moves meanwhile counts when it is back
+		}
 	}
 	dt := now.Sub(prevAt).Seconds()
 	if !w.linkOK || prev == nil || dt <= 0 {
@@ -259,7 +273,8 @@ func (w *ConnWatch) Sample(now time.Time, index int) (ConnSample, bool) {
 			}
 			sent, rx = c.Sent-p.sent, c.Received-p.recv
 		} else {
-			// New since the last reading: everything it moved is new.
+			// New since the last reading (or the grace): everything it
+			// moved is new.
 			sent, rx = c.Sent, c.Received
 		}
 		if sent == 0 && rx == 0 {
