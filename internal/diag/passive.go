@@ -87,7 +87,7 @@ type PassiveState struct {
 	LineUpMbps    *float64 `json:"line_up_mbps"`
 	// LineSource says where the line rate comes from: "test" (the last
 	// bufferbloat test) or "peak" (the most this PC has moved since
-	// Lowpath started, when that is higher or there was no test).
+	// Lowpath started, used only when there was no test).
 	LineSource string `json:"line_source,omitempty"`
 }
 
@@ -138,7 +138,11 @@ func (d *PassiveDetector) Observe(s PassiveSample) PassiveState {
 		d.peakDown, d.peakUp = max(d.peakDown, otherRx), max(d.peakUp, otherTx)
 		st.OtherDownMbps, st.OtherUpMbps = ptr(otherRx*8/1e6), ptr(otherTx*8/1e6)
 	}
-	lineDown, lineUp := max(d.test.DownBps, d.peakDown), max(d.test.UpBps, d.peakUp)
+	// A finished test measured the internet line itself and wins. The peak
+	// is only a stand-in without one: the adapter's counters also carry LAN
+	// traffic (a copy to a NAS, a game streamed to a TV), and a peak learned
+	// from that would hide every later internet download for good.
+	lineDown, lineUp := orPeak(d.test.DownBps, d.peakDown), orPeak(d.test.UpBps, d.peakUp)
 	if lineDown > 0 {
 		st.LineDownMbps = ptr(lineDown * 8 / 1e6)
 	}
@@ -146,7 +150,7 @@ func (d *PassiveDetector) Observe(s PassiveSample) PassiveState {
 		st.LineUpMbps = ptr(lineUp * 8 / 1e6)
 	}
 	switch {
-	case d.test.DownBps > 0 && d.test.DownBps >= d.peakDown:
+	case d.test.DownBps > 0:
 		st.LineSource = "test"
 	case lineDown > 0:
 		st.LineSource = "peak"
@@ -217,6 +221,14 @@ func (d *PassiveDetector) Observe(s PassiveSample) PassiveState {
 		st.Since = &since
 	}
 	return st
+}
+
+// orPeak is the test's rate when there is one, else the peak seen.
+func orPeak(test, peak float64) float64 {
+	if test > 0 {
+		return test
+	}
+	return peak
 }
 
 // pruneBase drops RTT samples older than the window, but always keeps the

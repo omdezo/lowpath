@@ -204,13 +204,15 @@ function Result({ r }: { r: BloatResult }) {
         <dd>{r.target || "—"}</dd>
         <dt>Home network</dt>
         <dd>
-          {gwIdle ? (
+          {gwIdle?.p50_ms != null ? (
             <>
               Router {fmtMs(gwIdle.p50_ms)} ms idle, {plus(gwRise("download"))} ms downloading, {plus(gwRise("upload"))} ms uploading
               <span className="faint"> · {r.gateway}</span>
             </>
-          ) : (
+          ) : r.gateway ? (
             "— (the router didn't answer ping)"
+          ) : (
+            "— (no router address found for this connection)"
           )}
         </dd>
         <dt>Connection</dt>

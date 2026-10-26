@@ -126,6 +126,31 @@ func TestPassiveLearnsLineRateWithoutATest(t *testing.T) {
 	}
 }
 
+// A LAN copy at gigabit speed passes through the same adapter counters.
+// It must not become the "line rate" when a test measured the real line,
+// or no internet download would ever count as filling it again.
+func TestPassiveLANBurstDoesNotHideLaterDownloads(t *testing.T) {
+	f := &feeder{d: NewPassiveDetector(PassiveConfig{}, LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8}), at: time.Unix(0, 0)}
+	for range 10 {
+		f.step(30, 1, 0.5, 0)
+	}
+	for range 5 { // copy to a NAS: 900 Mbit/s, the game's ping unaffected
+		if st := f.step(31, 900, 5, 0); st.Active {
+			t.Fatalf("fired on a LAN copy without a latency rise: %+v", st)
+		}
+	}
+	for range 10 {
+		f.step(30, 1, 0.5, 0)
+	}
+	var st PassiveState
+	for range 5 { // then a launcher download fills the 100 Mbit/s line
+		st = f.step(80, 92, 1, 0)
+	}
+	if !st.Active || st.LineSource != "test" || st.LineDownMbps == nil || *st.LineDownMbps != 100 {
+		t.Fatalf("download after a LAN burst not flagged: %+v", st)
+	}
+}
+
 func TestPassiveUnknownInputs(t *testing.T) {
 	d := NewPassiveDetector(PassiveConfig{}, LineRate{})
 	st := d.Observe(PassiveSample{At: time.Unix(1, 0), RateKnown: true, Rx: 1000})

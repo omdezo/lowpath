@@ -22,6 +22,14 @@ func TestRateHandlesWrapAndReset(t *testing.T) {
 	if !ok || tp.RxBps != 200 {
 		t.Fatalf("32-bit wrap = %+v %v", tp, ok)
 	}
+	// A small 32-bit value that went backwards: an adapter reset, not a
+	// wrap (that would invent about 4 GB of traffic in one second).
+	if tp, ok := Rate(Counters{At: t0, RxBytes: 1 << 30}, Counters{At: at(1), RxBytes: 5}); ok {
+		t.Fatalf("a reset from 1 GiB gave a rate: %+v", tp)
+	}
+	if tp, ok := Rate(Counters{At: t0, RxBytes: 3 << 30}, Counters{At: at(1), RxBytes: 1 << 30}); ok {
+		t.Fatalf("a 2 GiB 'wrap' gave a rate: %+v", tp)
+	}
 	// A 64-bit counter that went backwards: the adapter was reset.
 	if _, ok := Rate(Counters{At: t0, RxBytes: 1 << 40}, Counters{At: at(1), RxBytes: 5}); ok {
 		t.Fatal("a reset counter must not give a rate")

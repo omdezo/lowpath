@@ -251,6 +251,38 @@ func TestBloatTestCancel(t *testing.T) {
 	}
 }
 
+// Stopped mid-download, Run returns only once the load has stopped and the
+// progress reports are over: the app shows "not running" right after, and
+// a boost may start at once.
+func TestBloatTestCancelMidLoadLeavesNothingRunning(t *testing.T) {
+	t.Parallel()
+	f := &fakeLine{base: 5 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := fastConfig(f)
+	cfg.Phase = 2 * time.Second
+	var returned, late atomic.Bool
+	_, err := NewBloatTest(cfg).Run(ctx, func(p BloatProgress) {
+		if returned.Load() {
+			late.Store(true)
+		}
+		if p.Phase == PhaseDownload && p.LoadMbps != nil {
+			cancel()
+		}
+	})
+	returned.Store(true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if f.state.Load() != 0 {
+		t.Fatal("Run returned while the load was still running")
+	}
+	time.Sleep(600 * time.Millisecond) // more than two progress ticks
+	if late.Load() {
+		t.Fatal("progress was reported after Run returned")
+	}
+}
+
 func TestPercentile(t *testing.T) {
 	v := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	if percentile(v, 0.5) != 5 || percentile(v, 0.95) != 10 || percentile(v[:1], 0.95) != 1 {

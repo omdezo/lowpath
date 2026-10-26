@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"time"
 
@@ -157,7 +158,7 @@ func (b *bloatRunner) config(ctx context.Context) diag.BloatConfig {
 	}
 	n := 0
 	for _, p := range b.relays() {
-		a := p.Addr.Addr()
+		a := p.Addr.Addr().Unmap()
 		if a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || n == maxBloatRelays {
 			continue // a relay on this PC or LAN doesn't cross the internet line
 		}
@@ -166,7 +167,7 @@ func (b *bloatRunner) config(ctx context.Context) diag.BloatConfig {
 	}
 	cfg.Internet = append(cfg.Internet, diag.Candidate{Tier: 1, Prober: diag.NewICMPProber("Cloudflare", netip.MustParseAddr("1.1.1.1"), b.ping)})
 	if b.loader != nil {
-		if ap, ok := resolveEndpoint(ctx, b.loader.Endpoint()); ok {
+		for _, ap := range resolveEndpoint(ctx, b.loader.Endpoint()) {
 			cfg.Internet = append(cfg.Internet, diag.Candidate{Tier: 2, Prober: diag.NewTCPProber("Load server", ap)})
 		}
 	}
@@ -177,31 +178,50 @@ func (b *bloatRunner) config(ctx context.Context) diag.BloatConfig {
 }
 
 // resolveEndpoint looks host:port up once, with a short timeout so a slow
-// resolver can't stall the test.
-func resolveEndpoint(ctx context.Context, hostport string) (netip.AddrPort, bool) {
+// resolver can't stall the test. It returns the first IPv4 and the first
+// IPv6 address: on an IPv6-only network (or one whose IPv4 is broken) the
+// IPv4 address never answers while the load itself still flows over IPv6,
+// so both become candidates and the target pick keeps whichever answers.
+func resolveEndpoint(ctx context.Context, hostport string) []netip.AddrPort {
 	if ap, err := netip.ParseAddrPort(hostport); err == nil {
-		return ap, true
+		return []netip.AddrPort{netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
 	}
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
-		return netip.AddrPort{}, false
+		return nil
 	}
-	pn, err := net.LookupPort("tcp", port)
+	pn, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
-		return netip.AddrPort{}, false
+		return nil // Endpoint always gives a numeric port
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil || len(addrs) == 0 {
-		return netip.AddrPort{}, false
+	if err != nil {
+		return nil
 	}
-	for _, a := range addrs { // prefer IPv4: the ICMP fallbacks are IPv4 too
-		if a.Unmap().Is4() {
-			return netip.AddrPortFrom(a.Unmap(), uint16(pn)), true
+	return firstPerFamily(addrs, uint16(pn))
+}
+
+// firstPerFamily keeps the first IPv4 and the first IPv6 address, IPv4 first.
+func firstPerFamily(addrs []netip.Addr, port uint16) []netip.AddrPort {
+	var v4, v6 netip.Addr
+	for _, a := range addrs {
+		a = a.Unmap()
+		switch {
+		case a.Is4() && !v4.IsValid():
+			v4 = a
+		case a.Is6() && !v6.IsValid():
+			v6 = a
 		}
 	}
-	return netip.AddrPortFrom(addrs[0], uint16(pn)), true
+	var out []netip.AddrPort
+	for _, a := range []netip.Addr{v4, v6} {
+		if a.IsValid() {
+			out = append(out, netip.AddrPortFrom(a, port))
+		}
+	}
+	return out
 }
 
 // relayProber sends one overlay probe per sample to a relay and waits for
@@ -259,6 +279,11 @@ func (s *Server) handleBloat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStartBloat(w http.ResponseWriter, r *http.Request) {
+	// s.life orders this against a boost starting (apply holds it while it
+	// stops any test and brings the session up): the test either starts
+	// first and is stopped, or sees the session and is refused.
+	s.life.Lock()
+	defer s.life.Unlock()
 	s.mu.Lock()
 	busy, closed := s.sess != nil, s.closed
 	s.mu.Unlock()

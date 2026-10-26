@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"lowpath/internal/demo"
 	"lowpath/internal/diag"
 	"lowpath/internal/engine"
 	"lowpath/internal/relay"
@@ -176,6 +178,100 @@ func TestBloatRefusedDuringASession(t *testing.T) {
 	}
 }
 
+// newDemoBloatServer is a demo-mode server (apply works without admin or
+// relays) whose bufferbloat test runs against the fake home line.
+func newDemoBloatServer(t *testing.T, line *fakeHomeLine) (*httptest.Server, *Server) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	games, err := LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sim, err := demo.Start(ctx, demo.DefaultPaths(), demo.DirectProfile(), discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := NewServer(Config{
+		Store: openTestStore(t), Games: games, Network: DemoNetwork{N: sim}, Sim: sim, Capture: &fakeCapturer{}, Log: discard, Session: testSession,
+		NetStats: line, BloatLoader: line, Ping: line.ping,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.bloat.tune = func(c *diag.BloatConfig) { c.Phase = 5 * time.Second }
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { srv.Close(); ts.Close() })
+	return ts, srv
+}
+
+func TestBoostStopsARunningTest(t *testing.T) {
+	line := newFakeHomeLine()
+	ts, srv := newDemoBloatServer(t, line)
+	csrf := map[string]string{"X-Lowpath": "1"}
+	if code, body := do(t, ts, "POST", "/api/diag/bloat", "", csrf); code != 202 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if code, body := do(t, ts, "POST", "/api/apply", `{"game_id":"cs2","mode":"smart"}`, csrf); code != 200 {
+		t.Fatalf("apply: %d %s", code, body)
+	}
+	if v := srv.bloat.view(); v.Running || !strings.Contains(v.Error, "boost") {
+		t.Fatalf("after a boost started: %+v", v)
+	}
+	if line.loaded.Load() {
+		t.Fatal("the test's load is still running under the game")
+	}
+}
+
+// A test start racing a boost start must never leave both running: either
+// the test started first and the boost stopped it, or it was refused.
+func TestBloatStartRacingABoost(t *testing.T) {
+	line := newFakeHomeLine()
+	ts, srv := newDemoBloatServer(t, line)
+	csrf := map[string]string{"X-Lowpath": "1"}
+	for i := range 8 {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			do(t, ts, "POST", "/api/diag/bloat", "", csrf)
+		}()
+		go func() {
+			defer wg.Done()
+			if code, body := do(t, ts, "POST", "/api/apply", `{"game_id":"cs2","mode":"smart"}`, csrf); code != 200 {
+				t.Errorf("apply: %d %s", code, body)
+			}
+		}()
+		wg.Wait()
+		if srv.bloat.isRunning() {
+			t.Fatalf("round %d: a bufferbloat test is running during a boost", i)
+		}
+		if code, body := do(t, ts, "POST", "/api/stop", "", csrf); code != 200 {
+			t.Fatalf("stop: %d %s", code, body)
+		}
+	}
+}
+
+func TestFirstPerFamily(t *testing.T) {
+	addrs := []netip.Addr{
+		netip.MustParseAddr("2606:4700::6810:84e5"),
+		netip.MustParseAddr("::ffff:104.16.132.229"),
+		netip.MustParseAddr("2606:4700::6810:85e5"),
+		netip.MustParseAddr("104.16.133.229"),
+	}
+	got := firstPerFamily(addrs, 443)
+	if len(got) != 2 || got[0].String() != "104.16.132.229:443" || got[1].String() != "[2606:4700::6810:84e5]:443" {
+		t.Fatalf("got %v, want the first IPv4 then the first IPv6", got)
+	}
+	if got := firstPerFamily([]netip.Addr{netip.MustParseAddr("2001:db8::1")}, 443); len(got) != 1 || !got[0].Addr().Is6() {
+		t.Fatalf("IPv6 only: %v", got)
+	}
+	if got := resolveEndpoint(context.Background(), "[::ffff:192.0.2.1]:9"); len(got) != 1 || got[0].String() != "192.0.2.1:9" {
+		t.Fatalf("literal: %v", got)
+	}
+}
+
 func TestBloatTargetsSkipLocalRelays(t *testing.T) {
 	line := newFakeHomeLine()
 	b := &bloatRunner{
@@ -184,6 +280,7 @@ func TestBloatTargetsSkipLocalRelays(t *testing.T) {
 			return []engine.PathSpec{
 				{ID: "loop", Addr: netip.MustParseAddrPort("127.0.0.1:40000")},
 				{ID: "lan", Addr: netip.MustParseAddrPort("192.168.1.20:40000")},
+				{ID: "lan-mapped", Addr: netip.MustParseAddrPort("[::ffff:192.168.1.21]:40000")},
 				{ID: "dxb", Label: "Dubai", Addr: netip.MustParseAddrPort("203.0.113.7:40000")},
 			}
 		},

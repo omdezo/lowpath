@@ -81,13 +81,21 @@ func Rate(prev, cur Counters) (Throughput, bool) {
 
 // counterDelta is cur-prev for a counter that may be 32 bits wide (macOS
 // hands unsigned apps 32-bit values in 64-bit fields, and so do some old
-// drivers).
+// drivers). A counter that went backwards is taken as a 32-bit wrap only
+// when it was in the upper half of the 32-bit range and the wrapped delta
+// is under 2 GiB (far more than one reading apart at any real line rate).
+// Anything else is an adapter reset: counting it as a wrap would invent up
+// to 4 GiB of traffic, which the passive detector would learn as its line
+// rate.
 func counterDelta(prev, cur uint64) (uint64, bool) {
 	if cur >= prev {
 		return cur - prev, true
 	}
-	if prev <= math.MaxUint32 {
-		return cur + (1 << 32) - prev, true
+	const half = 1 << 31
+	if prev <= math.MaxUint32 && prev >= half {
+		if d := cur + (1 << 32) - prev; d < half {
+			return d, true
+		}
 	}
 	return 0, false
 }

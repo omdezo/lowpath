@@ -184,10 +184,16 @@ func (l *HTTPLoader) do(req *http.Request) (*http.Response, error) {
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		return nil, fmt.Errorf("load server answered HTTP %d", res.StatusCode)
+		return nil, statusError(res.StatusCode)
 	}
 	return res, nil
 }
+
+// statusError is a load server's refusal (429 rate limit, 403, 5xx). Bytes
+// an upload wrote before the refusal arrived don't make it a load.
+type statusError int
+
+func (e statusError) Error() string { return fmt.Sprintf("load server answered HTTP %d", int(e)) }
 
 // errNoLoad is returned when every transfer failed before moving a byte.
 var errNoLoad = errors.New("no data could be transferred")
@@ -205,6 +211,11 @@ func (l *HTTPLoader) run(ctx context.Context, streams int, limit int64, add func
 		wg      sync.WaitGroup
 		mu      sync.Mutex
 		lastErr error
+		// done counts transfers that finished cleanly, refused the ones the
+		// server turned down. Every transfer refused and none done means the
+		// server is refusing the test, even when upload bytes were written
+		// before each refusal arrived.
+		done, refused atomic.Int64
 	)
 	for range streams {
 		wg.Add(1)
@@ -226,12 +237,21 @@ func (l *HTTPLoader) run(ctx context.Context, streams int, limit int64, add func
 				if err == nil && !moved {
 					err = errors.New("load server sent nothing")
 				}
+				var se statusError
+				if errors.As(err, &se) {
+					refused.Add(1)
+				}
 				if err != nil {
 					mu.Lock()
 					lastErr = err
 					mu.Unlock()
+				} else {
+					done.Add(1)
 				}
-				if moved {
+				if moved && se == 0 {
+					// A transfer cut short after moving data (connection
+					// reset mid-download) still loaded the line; only a
+					// refusal counts against the stream.
 					fails = 0
 					continue
 				}
@@ -246,7 +266,9 @@ func (l *HTTPLoader) run(ctx context.Context, streams int, limit int64, add func
 		}()
 	}
 	wg.Wait()
-	if total.Load() == 0 {
+	// Streams that gave up while ctx was still running, with nothing but
+	// refusals behind them, never really loaded the line.
+	if total.Load() == 0 || (done.Load() == 0 && refused.Load() > 0 && ctx.Err() == nil) {
 		if lastErr != nil {
 			return fmt.Errorf("%w: %v", errNoLoad, lastErr)
 		}

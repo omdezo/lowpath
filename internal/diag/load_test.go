@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,6 +111,28 @@ func TestHTTPLoaderReportsRefusal(t *testing.T) {
 	err := l.Download(ctx, func(int64) {})
 	if !errors.Is(err, errNoLoad) {
 		t.Fatalf("err = %v, want errNoLoad", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("a refusing server must fail fast, not run to the deadline")
+	}
+}
+
+// An upload writes body bytes before the server's refusal comes back (Go's
+// server even drains them). Those bytes must not turn a refused test into
+// a "loaded" one.
+func TestHTTPLoaderReportsRefusedUploads(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	l, _ := NewHTTPLoader(HTTPLoaderConfig{BaseURL: srv.URL, UpStreams: 2, UpChunk: 1 << 20})
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := l.Upload(ctx, func(int64) {})
+	if !errors.Is(err, errNoLoad) || !strings.Contains(err.Error(), "429") {
+		t.Fatalf("err = %v, want errNoLoad with the 429", err)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("a refusing server must fail fast, not run to the deadline")

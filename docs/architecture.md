@@ -247,10 +247,13 @@ func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDete
   timeout (later = lost). The internet target is picked first (3 probes
   each, ≤ 2 s): the fastest answering of the user's relays (overlay probe;
   loopback and LAN relays skipped), else ICMP to 1.1.1.1, else a TCP
-  handshake with the load server. Load: 6 parallel HTTP/1.1 downloads
-  (`GET /__down?bytes=25e6`) and 4 uploads (`POST /__up`, 10 MB), one TCP
-  connection each, capped at 750 MB down / 250 MB up per phase. The first
-  1 s of a loaded phase is not graded (TCP ramp-up). Increase = loaded p50 −
+  handshake with the load server (its first IPv4 and first IPv6 address,
+  so IPv6-only networks still get a target). Load: 6 parallel HTTP/1.1
+  downloads (`GET /__down?bytes=25e6`) and 4 uploads (`POST /__up`,
+  10 MB), one TCP connection each, capped at 750 MB down / 250 MB up per
+  phase; a server that refuses every transfer (429, 403) counts as not
+  loaded, even when upload bytes left before the refusal. The first 1 s of
+  a loaded phase is not graded (TCP ramp-up). Increase = loaded p50 −
   idle p50 per direction; grade from the worse direction: A+ < 5 ms, A < 30,
   B < 60, C < 200, D < 400, else F. Half the pings lost under load counts as
   ≥ the timeout. A direction that couldn't be loaded, or no target, gives no
@@ -260,8 +263,9 @@ func NewPassiveDetector(PassiveConfig, LineRate) *PassiveDetector; (*PassiveDete
   RTT (`after.rtt_ms − after.server_ms`) is ≥ 20 ms above its baseline
   (minimum over 2 min of seconds when the line wasn't full) while non-game
   traffic (adapter bytes − the engine's `wire_bytes_*`) is ≥ 70% of the line
-  rate (last test, or the peak seen, whichever is higher) and ≥ 2 Mbit/s,
-  for 3 of 5 seconds. Clears after 5 clean seconds.
+  rate (the last test; the peak seen only when there was none, since the
+  adapter counters also carry LAN traffic) and ≥ 2 Mbit/s, for 3 of 5
+  seconds. Clears after 5 clean seconds.
 - The app keeps the last result in `state.json` (`bloat`), refuses the test
   during a session (409 `session_active`) and stops a running test when a
   boost starts.

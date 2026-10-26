@@ -8,6 +8,7 @@
 package diag
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -254,6 +255,18 @@ func (t *BloatTest) Run(ctx context.Context, progress func(BloatProgress)) (Bloa
 		t.probeLoop(runCtx, st, start, end, target, &probes)
 	}()
 	stopProgress := t.progressLoop(runCtx, st, start, total, res.Target)
+	// Nothing the run started may outlive it, also when ctx ends early: a
+	// late progress report would show a stopped test as running, and a
+	// load still draining would hit the game a boost is starting.
+	var once sync.Once
+	finish := func() {
+		once.Do(func() {
+			stopProgress()
+			cancel()
+			probes.Wait()
+		})
+	}
+	defer finish()
 
 	for i, name := range phaseOrder() {
 		pr, err := t.runPhase(ctx, runCtx, st, name, start.Add(time.Duration(i)*cfg.Phase))
@@ -262,9 +275,7 @@ func (t *BloatTest) Run(ctx context.Context, progress func(BloatProgress)) (Bloa
 		}
 		res.Phases = append(res.Phases, pr)
 	}
-	stopProgress()
-	cancel()
-	probes.Wait()
+	finish()
 	if ctx.Err() != nil {
 		return res, ctx.Err()
 	}
@@ -310,17 +321,23 @@ func (t *BloatTest) runPhase(ctx, runCtx context.Context, st *runState, name str
 
 	pr := PhaseResult{Phase: name}
 	lctx, lcancel := context.WithDeadline(runCtx, pEnd)
-	defer lcancel()
 	var loadDone chan error
+	defer func() {
+		lcancel()
+		if loadDone != nil {
+			<-loadDone // the load has stopped before the phase returns
+		}
+	}()
 	switch {
 	case loaded && cfg.Loader != nil:
-		loadDone = make(chan error, 1)
+		ch := make(chan error, 1)
+		loadDone = ch
 		add := func(n int64) { st.moved.Add(n); st.total.Add(n) }
 		go func() {
 			if name == PhaseDownload {
-				loadDone <- cfg.Loader.Download(lctx, add)
+				ch <- cfg.Loader.Download(lctx, add)
 			} else {
-				loadDone <- cfg.Loader.Upload(lctx, add)
+				ch <- cfg.Loader.Upload(lctx, add)
 			}
 		}()
 	case loaded:
@@ -349,9 +366,10 @@ func (t *BloatTest) runPhase(ctx, runCtx context.Context, st *runState, name str
 			}
 		}
 	}
-	if loadDone != nil {
+	if ch := loadDone; ch != nil {
 		lcancel()
-		if lerr := <-loadDone; lerr != nil {
+		loadDone = nil
+		if lerr := <-ch; lerr != nil {
 			pr.LoadError = lerr.Error()
 		} else if b1 == 0 {
 			pr.LoadError = "the load server sent almost nothing"
@@ -556,7 +574,7 @@ func pickTarget(ctx context.Context, cands []Candidate, budget, timeout time.Dur
 		if a.tier != b.tier {
 			return a.tier - b.tier
 		}
-		return int(a.rtt - b.rtt)
+		return cmp.Compare(a.rtt, b.rtt)
 	})
 	return best[0].p, nil
 }
