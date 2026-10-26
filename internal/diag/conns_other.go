@@ -16,9 +16,10 @@ package diag
 // per-socket byte counts, in private xnu layouts that change between
 // releases.
 //
-// Until those land the detector counts LAN traffic as other traffic and
-// names no program; its line rate is the last bufferbloat test's, or a
-// peak that ages out (PassiveConfig.PeakWindow).
+// Until those land (#198 for elevated Windows sessions, #199 for macOS),
+// the detector counts LAN traffic as other traffic and names no program;
+// its line rate is the last bufferbloat test's, or a peak that ages out
+// (PassiveConfig.PeakWindow).
 func newPlatformConnStats() ConnStats { return noConnStats{} }
 
 type noConnStats struct{}

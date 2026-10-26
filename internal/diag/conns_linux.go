@@ -16,7 +16,8 @@ import (
 // counters, and their owners from /proc/<pid>/fd. No root is needed: the
 // kernel answers every user's dump with tcp_info filled in, and this
 // user's processes' fd folders are readable. Other users' sockets are
-// counted but have no owner.
+// counted but have no owner. UDP has no per-socket byte counters, so UDP
+// LAN traffic still counts as other traffic (#200).
 type sockDiag struct {
 	procfs *owner.Procfs
 	uid    uint32
