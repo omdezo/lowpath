@@ -12,6 +12,7 @@ import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { AddGameModal } from "./components/AddGame";
 import { CaptureBanner } from "./components/CaptureBanner";
 import { LineBanner } from "./components/LineBanner";
+import { LineTestHint, lineTestHintDismissed } from "./components/LineTestHint";
 import { FailsafeBanner } from "./components/FailsafeBanner";
 import { ConflictBanner } from "./components/Conflicts";
 import { Toasts, type Toast } from "./components/Toasts";
@@ -41,6 +42,7 @@ export function App() {
   // The fail-open notice the user closed (by its time): hidden here at once,
   // while the service forgets it for reloads and other windows.
   const [failsafeSeen, setFailsafeSeen] = useState("");
+  const [lineHintOff, setLineHintOff] = useState(lineTestHintDismissed);
   const dismissFailsafe = useCallback((at: string) => {
     setFailsafeSeen(at);
     // If the service can't be reached, the notice stays hidden in this window.
@@ -336,6 +338,11 @@ export function App() {
         {live?.line?.active && (
           <div className="main-banner">
             <LineBanner line={live.line} />
+          </div>
+        )}
+        {live?.line?.needs_test && !live.line.active && !lineHintOff && !boot.demo && (
+          <div className="main-banner">
+            <LineTestHint onOpen={() => setShowSettings("diagnostics")} onDismiss={() => setLineHintOff(true)} />
           </div>
         )}
         {game && live ? (

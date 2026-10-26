@@ -20,6 +20,8 @@ import (
 // mode captures through a TUN device on Linux (nativeCapture); on macOS it
 // reports that capture isn't available yet (issue #42). The Wi-Fi signal
 // comes from /proc/net/wireless on Linux; macOS has no Wi-Fi reader yet.
+// Per-connection byte counters come from sock_diag on Linux; macOS has
+// none yet.
 func Native() *Platform {
 	owners := owner.NewTable()
 	home, _ := os.UserHomeDir() // none: no game folders to look in
@@ -41,5 +43,6 @@ func Native() *Platform {
 		// signed in at the computer (NewSessionPolicy).
 		ServiceAPI: NewSocketAPI(DefaultSocketPath, 0o666, NewSessionPolicy()).WithServer(0),
 		WiFi:       diag.NewWLAN(),
+		Conns:      diag.NewConnStats(),
 	}
 }

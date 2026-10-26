@@ -1,12 +1,12 @@
 // Package netlink encodes and decodes Linux netlink messages, the kernel
-// interface for routing (rtnetlink) and packet filtering (nftables), without
-// cgo or a library.
+// interface for routing (rtnetlink), packet filtering (nftables) and socket
+// statistics (sock_diag), without cgo or a library.
 //
 // Building and parsing messages is plain byte work and is portable, so it is
 // tested on every OS; only Conn, which talks to the kernel, is Linux-only
 // (conn_linux.go). The subpackages build the messages: rtnl for links,
 // addresses, routes and policy-routing rules, nft for nftables tables,
-// chains, sets and rules.
+// chains, sets and rules, sockdiag for the TCP socket table.
 package netlink
 
 import (

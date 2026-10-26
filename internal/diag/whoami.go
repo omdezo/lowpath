@@ -69,6 +69,11 @@ type NetworkInfo struct {
 	transient bool
 }
 
+// Transient reports whether Partial is only down to a timeout or a busy
+// registry, so asking again in a few seconds may fill the missing part in.
+// A part the registry has no data for (a 404) is not transient.
+func (n NetworkInfo) Transient() bool { return n.transient }
+
 // NetworkLookup maps a public address to its network.
 type NetworkLookup interface {
 	LookupNetwork(ctx context.Context, a netip.Addr) (NetworkInfo, error)
@@ -85,6 +90,11 @@ type Endpoint struct {
 	// because the registry was busy, not because of the address.
 	transient bool
 }
+
+// Transient reports whether LookupError or Partial is only down to a
+// timeout or a busy registry. It hides NetworkInfo.Transient, which knows
+// nothing of a failed lookup.
+func (e Endpoint) Transient() bool { return e.transient }
 
 // Location states.
 const (
@@ -366,7 +376,7 @@ func (l *Locator) endpoint(ctx context.Context, f Family) (*Endpoint, error) {
 		ni, err := l.lookup.LookupNetwork(ctx, e.IP)
 		if err != nil {
 			e.LookupError = describe(err)
-			e.transient = transient(err)
+			e.transient = Transient(err)
 		} else {
 			e.NetworkInfo = ni
 			e.transient = ni.transient

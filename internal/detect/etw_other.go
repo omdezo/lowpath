@@ -18,3 +18,6 @@ func NewKernelNetwork() *KernelNetwork { return &KernelNetwork{} }
 func (*KernelNetwork) Watch(func(FlowEvent)) (FlowWatch, error) {
 	return nil, fmt.Errorf("watching game flows without a boost is not available on %s yet: %w", runtime.GOOS, errors.ErrUnsupported)
 }
+
+// Reset has nothing to stop: no watch here outlives its process.
+func (*KernelNetwork) Reset() (bool, error) { return false, nil }

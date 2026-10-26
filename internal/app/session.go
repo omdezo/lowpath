@@ -147,10 +147,7 @@ func (s *Server) apply(req applyReq) error {
 	s.stopSessionLocked() // applying a new game replaces the current one
 	s.mu.Lock()
 	s.status = "applying"
-	var seed map[string]engine.Stats
-	if a, ok := s.analysis[req.GameID]; ok && time.Since(a.At) < time.Minute {
-		seed = a.Paths
-	}
+	seed := s.seedLocked(req.GameID)
 	s.mu.Unlock()
 
 	st := s.store.Settings()
@@ -360,4 +357,15 @@ func (s *Server) stopSessionLocked() {
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.stopSession()
 	writeJSON(w, 200, s.live())
+}
+
+// seedLocked is the route ranking a new session for gameID starts from: a
+// fresh analysis (under a minute old), but never one taken while the
+// bufferbloat test filled the line, which would rank the routes by how
+// they cope with a full line. s.mu must be held.
+func (s *Server) seedLocked(gameID string) map[string]engine.Stats {
+	if a, ok := s.analysis[gameID]; ok && !a.Loaded && time.Since(a.At) < time.Minute {
+		return a.Paths
+	}
+	return nil
 }

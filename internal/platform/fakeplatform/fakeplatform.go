@@ -41,6 +41,7 @@ type Fake struct {
 	Service    *Service
 	ServiceAPI *ServiceAPI
 	WiFi       *WiFi
+	Conns      *Conns
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -60,6 +61,7 @@ func New(dir string) *Fake {
 		Service:    &Service{},
 		ServiceAPI: NewServiceAPI(),
 		WiFi:       &WiFi{linkErr: diag.ErrNoWiFi, surveyErr: diag.ErrNoWiFi, tuneErr: diag.ErrNoWiFi},
+		Conns:      &Conns{},
 	}
 }
 
@@ -68,8 +70,49 @@ func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
 		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory, WiFi: f.WiFi,
-		Service: f.Service, ServiceAPI: f.ServiceAPI,
+		Service: f.Service, ServiceAPI: f.ServiceAPI, Conns: f.Conns,
 	}
+}
+
+// Conns is a TCP connection table the test fills in. It starts empty and
+// readable, like a Linux PC with nothing open.
+type Conns struct {
+	mu     sync.Mutex
+	conns  []diag.TCPConn
+	owners map[uint64]uint32
+	err    error
+}
+
+// Set replaces the connections and their owners (by connection ID).
+func (c *Conns) Set(conns []diag.TCPConn, owners map[uint64]uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conns, c.owners = slices.Clone(conns), maps.Clone(owners)
+}
+
+// SetErr makes TCPConns fail with err (errors.ErrUnsupported plays Windows
+// and macOS; nil: work again).
+func (c *Conns) SetErr(err error) { c.mu.Lock(); c.err = err; c.mu.Unlock() }
+
+func (c *Conns) TCPConns() ([]diag.TCPConn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return nil, c.err
+	}
+	return slices.Clone(c.conns), nil
+}
+
+func (c *Conns) Owners(conns []diag.TCPConn) map[uint64]uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[uint64]uint32{}
+	for _, x := range conns {
+		if pid, ok := c.owners[x.ID]; ok {
+			out[x.ID] = pid
+		}
+	}
+	return out
 }
 
 // WiFi is a Wi-Fi adapter the test describes. It starts with no adapter
@@ -641,6 +684,11 @@ type Flows struct {
 	onEvent func(detect.FlowEvent)
 	watch   *flowWatch
 	starts  int
+
+	resets    int
+	resetErr  error
+	leftover  bool          // a watch an earlier run left behind, for Reset
+	resetGate chan struct{} // Reset waits on it while set
 }
 
 // SetErr makes Watch fail with err (detect.ErrNeedAdmin to play an
@@ -680,6 +728,53 @@ func (f *Flows) Watching() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.onE
 
 // Starts counts the watches opened so far.
 func (f *Flows) Starts() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
+
+// SetLeftover plays a watch an earlier run left behind (a crashed Lowpath's
+// ETW session): the next Reset stops it and reports true.
+func (f *Flows) SetLeftover(on bool) { f.mu.Lock(); f.leftover = on; f.mu.Unlock() }
+
+// Leftover reports whether the left-behind watch is still there.
+func (f *Flows) Leftover() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.leftover }
+
+// SetResetErr makes Reset fail with err (detect.ErrNeedAdmin to play an
+// unelevated Windows; nil: work again).
+func (f *Flows) SetResetErr(err error) { f.mu.Lock(); f.resetErr = err; f.mu.Unlock() }
+
+// HoldReset makes Reset wait, as a slow OS would, until the returned
+// release is called.
+func (f *Flows) HoldReset() (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.resetGate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
+}
+
+// Resets counts the Reset calls so far.
+func (f *Flows) Resets() int { f.mu.Lock(); defer f.mu.Unlock(); return f.resets }
+
+// Reset stops the left-behind watch, like the ETW watcher: never the open
+// one.
+func (f *Flows) Reset() (bool, error) {
+	f.mu.Lock()
+	gate := f.resetGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resets++
+	switch {
+	case f.resetErr != nil:
+		return false, f.resetErr
+	case f.onEvent != nil || !f.leftover:
+		return false, nil
+	}
+	f.leftover = false
+	return true, nil
+}
 
 // Emit delivers ev to the open watch, as the OS would; false when none is
 // open.
