@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -295,22 +296,26 @@ func TestRefusePeer(t *testing.T) {
 		// head is how many parts make the request head: before each of
 		// them nothing may be answered. The rest are written while the
 		// answer is read, as net/http's client does.
-		head       int
-		closeWrite bool // the client ends its side after the parts
-		unixOnly   bool // net.Pipe can't half-close
+		head int
+		// closeWrite: the client ends its side after the parts (a Unix
+		// socket only: net.Pipe can't half-close).
+		closeWrite bool
 	}{
-		{"request", []string{"GET /version HTTP/1.1\r\nHost: lowpath\r\n\r\n"}, 1, false, false},
-		{"head in pieces", []string{"GET /version HTTP/1.1\r\n", "Host: lowpath\r", "\n", "\r\n"}, 4, false, false},
-		{"empty line first", []string{"\r\n", "GET / HTTP/1.1\r\n\r\n"}, 2, false, false},
-		{"body after the head", []string{"POST /api/stop HTTP/1.1\r\nHost: lowpath\r\nContent-Length: 4096\r\n\r\n", strings.Repeat("x", 4096)}, 1, false, false},
-		{"head over the limit", []string{"GET / HTTP/1.1\r\nX: " + strings.Repeat("a", maxRefusedRead)}, 0, false, false},
-		{"client stops mid-head", []string{"GET / HTTP/1.1\r\n"}, 1, true, true},
+		{"request", []string{"GET /version HTTP/1.1\r\nHost: lowpath\r\n\r\n"}, 1, false},
+		{"head in pieces", []string{"GET /version HTTP/1.1\r\n", "Host: lowpath\r", "\n", "\r\n"}, 4, false},
+		{"empty line first", []string{"\r\n", "GET / HTTP/1.1\r\n\r\n"}, 2, false},
+		{"body after the head", []string{"POST /api/stop HTTP/1.1\r\nHost: lowpath\r\nContent-Length: 4096\r\n\r\n", strings.Repeat("x", 4096)}, 1, false},
+		{"head over the limit", []string{"GET / HTTP/1.1\r\nX: " + strings.Repeat("a", maxRefusedRead)}, 0, false},
+		{"client stops mid-head", []string{"GET / HTTP/1.1\r\n"}, 1, true},
 	} {
 		for _, kind := range []struct {
 			name  string
 			conns conns
 		}{{"pipe", pipe}, {"unix", unix}} {
-			if tc.unixOnly && kind.name != "unix" {
+			if tc.closeWrite && (kind.name != "unix" || runtime.GOOS == "windows") {
+				// Windows' AF_UNIX doesn't always end a pending read when
+				// the other side shuts down its writes (about 6 runs in
+				// 100); the socket only stands in for the named pipe there.
 				continue
 			}
 			t.Run(kind.name+"/"+tc.name, func(t *testing.T) {
