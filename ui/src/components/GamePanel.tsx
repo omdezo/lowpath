@@ -504,6 +504,11 @@ export function GamePanel(props: Props) {
                   <span>
                     Capture: <b>{captureMode === "route" ? "Route mode" : "Proxy mode"}</b>
                   </span>
+                  {sess && live.wifi && (
+                    <span title={live.wifi.message || live.wifi.notes?.join(" ") || undefined}>
+                      Wi-Fi scans: <b>{WIFI_TUNE[live.wifi.state]}</b>
+                    </span>
+                  )}
                   <span className="spacer" />
                   <button className="btn btn-sm" onClick={analyze} disabled={analyzing || !game.routable || !!snap}>
                     {analyzing ? <Loader2 size={14} className="spin" /> : <RotateCw size={14} />}
@@ -518,6 +523,15 @@ export function GamePanel(props: Props) {
     </div>
   );
 }
+
+// The boost's Wi-Fi scan pause, for the facts row.
+const WIFI_TUNE: Record<NonNullable<Live["wifi"]>["state"], string> = {
+  applying: "Pausing…",
+  on: "Paused",
+  partial: "Partly paused",
+  failed: "Not paused",
+  off: "Normal",
+};
 
 function BoostButton({ state, gameName, onClick }: { state: string; gameName: string; onClick: () => void }) {
   const on = state === "on" || state === "waiting" || state === "down";

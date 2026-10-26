@@ -584,3 +584,19 @@
   padding: 0 8px;
   font-size: 12.5px;
 }
+
+/* Diagnostics: Wi-Fi link card */
+.wifi {
+  margin-top: 14px;
+}
+
+.wifi .bloat-grade {
+  font-size: 22px;
+}
+
+.wifi-notes {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+}

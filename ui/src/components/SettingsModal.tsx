@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wrench, X } from "lucide-react";
+import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wifi, Wrench, X } from "lucide-react";
 import { api } from "../api";
 import type { CaptureMode, Platform, RelayView, Settings } from "../types";
 import { cap } from "../util";
@@ -10,6 +10,7 @@ import { RelaysPane } from "./RelaysPane";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
 import { Verdict } from "./Verdict";
+import { WiFiCard } from "./WiFiCard";
 
 export type SettingsTab = "general" | "network" | "relays" | "diagnostics" | "optimization" | "advanced";
 
@@ -171,6 +172,7 @@ export function SettingsModal(props: Props) {
                 Is the lag on your side of the connection? Run the tests on Wi-Fi and again on a cable to compare.
               </div>
               <Verdict />
+              <WiFiCard tuningEnabled={settings.wifi_tuning ?? true} />
               <BloatTest onError={onError} />
               <RouteTrace onError={onError} />
             </>
@@ -179,6 +181,13 @@ export function SettingsModal(props: Props) {
           {tab === "optimization" && (
             <>
               <h3>Optimization</h3>
+              <Row
+                t="Pause Wi-Fi scans while boosting"
+                d="Wi-Fi adapters leave the channel every so often to look for other networks, which shows up as regular lag spikes. While a game is boosted over Wi-Fi, Lowpath pauses those scans and turns on the adapter's streaming mode; both go back to normal when the boost ends, the Wi-Fi reconnects or Lowpath closes."
+                icon={<Wifi size={18} />}
+              >
+                <Toggle label="Pause Wi-Fi scans while boosting" checked={settings.wifi_tuning ?? true} onChange={(v) => set({ wifi_tuning: v })} />
+              </Row>
               <Row t="Traffic Shaper" d="Prioritize game packets over downloads and streams on this PC." soon icon={<Gauge size={18} />}>
                 <Toggle label="Traffic Shaper" checked={false} disabled onChange={() => {}} />
               </Row>
