@@ -116,7 +116,7 @@ export function Connection() {
             <AlertTriangle size={14} />
             <span>
               {reason}
-              {again && " Trying again…"}
+              {again && (/[.!?…]$/.test(reason) ? " " : ". ") + "Trying again…"}
             </span>
           </div>
         )}
