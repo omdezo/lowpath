@@ -299,6 +299,39 @@ export interface TraceStatus {
   defaults: { count: number; interval_s: number };
 }
 
+// The verdict engine's answer to "why am I lagging?" (GET /api/diag/verdict).
+export type VerdictId = "wifi" | "home" | "line" | "isp" | "relay" | "server" | "optimal" | "clean" | "unknown";
+export type Confidence = "low" | "medium" | "high";
+export type CheckStatus = "found" | "clear" | "unknown";
+
+export interface Verdict {
+  id: VerdictId;
+  segment?: "home" | "isp" | "lowpath" | "server";
+  title: string;
+  detail: string;
+  advice?: string;
+  confidence: Confidence;
+  lowpath_helps: boolean;
+  facts?: string[] | null;
+}
+
+export interface VerdictCheck {
+  rule: "home" | "line" | "isp" | "server" | "optimal";
+  name: string;
+  status: CheckStatus;
+  summary: string;
+  facts?: string[] | null;
+}
+
+export interface Diagnosis {
+  at: string;
+  verdict: Verdict;
+  checks: VerdictCheck[] | null;
+  link: string;
+  interface: string;
+  next?: { id: "bloat" | "trace" | "measure"; text: string }[] | null;
+}
+
 export interface Settings {
   dup_level: 0 | 1 | 2 | 4;
   auto_switch: boolean;

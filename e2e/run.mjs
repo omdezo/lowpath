@@ -433,6 +433,29 @@ async function main() {
     await page.getByRole("button", { name: "Trace again" }).waitFor({ timeout: 5000 }).catch(() => {});
     await page.locator(".trace-foot").scrollIntoViewIfNeeded();
     await shot(page, "trace-icmp", `Route trace result: ICMP to Cloudflare, ${rt?.hops?.length ?? 0} hops`);
+
+    // 4d. The verdict reads the tests above (it refreshes every 4 s).
+    await scrollTop(page);
+    await page.locator(".verdict").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(4500);
+    const vd = (await api(page, "GET", "/diag/verdict")).body;
+    const vchk = (rule) => vd?.checks?.find((c) => c.rule === rule);
+    const shown = (await page.locator(".verdict-main .t").textContent().catch(() => "")) ?? "";
+    check(
+      "Verdict reads the bufferbloat test and the route trace",
+      vd?.checks?.length === 5 && vchk("home")?.status !== "unknown" && vchk("isp")?.summary && shown === vd.verdict.title,
+      vd ? `${vd.verdict.id} (${vd.verdict.confidence}): ${vd.verdict.title}; ${vd.checks.map((c) => `${c.rule} ${c.status}`).join(", ")}` : "no answer",
+    );
+    const diagText = await page.evaluate(async () => (await fetch("/api/diag/verdict/report")).text());
+    // Shared reports keep only the network part of public addresses.
+    const privateV4 = (a) => /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a);
+    const fullAddrs = (diagText.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) ?? []).filter((a) => !a.endsWith(".0") && !privateV4(a));
+    check(
+      "Diagnosis report exports as text without full public addresses",
+      diagText.startsWith("Lowpath diagnosis") && diagText.includes("VERDICT: ") && diagText.includes("CHECKS") && fullAddrs.length === 0,
+      `${diagText.split("\n").length} lines${fullAddrs.length ? `; full addresses: ${fullAddrs.length}` : ""}`,
+    );
+    await shot(page, "verdict", `Diagnostics verdict: ${vd?.verdict?.title ?? "—"}`);
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.

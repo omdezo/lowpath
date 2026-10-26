@@ -3,6 +3,7 @@ import type {
   BloatStatus,
   Bootstrap,
   CurrentServer,
+  Diagnosis,
   Game,
   Live,
   Mapping,
@@ -86,6 +87,7 @@ export const api = {
   startTrace: (target: { target_id: string } | { host: string }, mode: TraceMode) =>
     call<TraceStatus>("POST", "/diag/trace", { ...target, mode }),
   stopTrace: () => call<TraceStatus>("DELETE", "/diag/trace"),
+  verdict: () => call<Diagnosis>("GET", "/diag/verdict"),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need
