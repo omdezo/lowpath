@@ -106,10 +106,16 @@ func TestSharedSegmentCorrelatesLanes(t *testing.T) {
 		})
 	}
 
-	// The L2 acceptance needs ≥ 5x less loss than simultaneous copies; on
-	// this segment a shift of about 2.5 mean bursts gets there.
-	if r := simultaneous / g.JointLoss(20); r < 5 {
-		t.Errorf("20 ms shift is only %.1fx better than simultaneous copies", r)
+	// The L2 acceptance needs ≥ 5x less loss than simultaneous copies. A
+	// shift of one mean burst (8 ms) gives under 3x; 13 ms is the shortest
+	// that gets there on this segment (#196).
+	for _, tc := range []struct {
+		steps    int
+		min, max float64
+	}{{8, 2.8, 2.9}, {12, 4.6, 4.7}, {13, 5.2, 5.3}, {20, 10.9, 11}} {
+		if r := simultaneous / g.JointLoss(tc.steps); r < tc.min || r > tc.max {
+			t.Errorf("%d ms shift: %.2fx better than simultaneous copies, want %.1f to %.1f", tc.steps, r, tc.min, tc.max)
+		}
 	}
 }
 

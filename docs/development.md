@@ -198,7 +198,7 @@ go test ./...
   probabilities) over 2 million packets per model with fixed seeds, per
   packet and time stepped; two lanes behind one shared Wi-Fi-like segment
   (3% loss in 8 ms bursts) losing both copies together, and how much a time
-  shift between them helps (about 3x at 8 ms, 11x at 20 ms); real links on
+  shift between them helps (under 3x at 8 ms, 5x from 13 ms, 11x at 20 ms); real links on
   IPv4 and IPv6 loopback behind a segment that fades and heals.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
