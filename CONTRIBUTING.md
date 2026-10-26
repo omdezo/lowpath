@@ -28,6 +28,19 @@ cd lowpath
 See [docs/development.md](docs/development.md) for the project layout, the
 test suites and how to run the app while working on it.
 
+### UI build output stays out of git
+
+`npm run build` writes the UI to `ui/dist/app`, which git ignores, and the Go
+programs embed it from there. The only tracked file under `ui/dist` is
+`ui/dist/placeholder/index.html`: it lets `go vet ./...` and `go test ./...`
+work on a fresh clone without Node.js, and it is the page a program built
+before the UI shows instead, with how to build it. So building the UI never
+shows up in `git status`; if it does, something writes outside
+`ui/dist/app`, and the local CI's `ui` stage fails on it. Don't commit build
+output, and only edit the placeholder on purpose. A clone from before this
+layout should delete its old `ui/dist/assets` folder once: it is never
+served any more, but it is still embedded while it is there.
+
 ## Pull request process
 
 Every change, including maintainers' own, goes through a pull request.

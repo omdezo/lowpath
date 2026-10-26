@@ -12,8 +12,15 @@
 ```powershell
 .\build.ps1                 # UI, go vet + go test, then dist\ and bin\lowpath.exe
 .\build.ps1 -SkipTests      # faster
-.\build.ps1 -SkipUI         # keep the UI already in ui\dist
+.\build.ps1 -SkipUI         # keep the UI already built in ui\dist\app
 ```
+
+The UI build (`npm run build` in `ui\`) goes to `ui\dist\app`, which git
+ignores; the programs embed it from there through `ui.FS`. Until it exists
+(a fresh clone) they embed the tracked `ui\dist\placeholder\index.html`
+instead, so `go vet`/`go test` and Go builds work without Node.js, and the
+window shows a page that says how to build the UI; `lowpath` logs a warning
+then, and `build.ps1` warns too.
 
 Outputs:
 
