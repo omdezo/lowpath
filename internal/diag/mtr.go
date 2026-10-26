@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -452,7 +453,9 @@ func (t *Trace) build(st *traceState, started time.Time, running, stopped bool) 
 		if res.End.Recv > 0 {
 			dest = res.End
 		}
-	case reachedICMP && len(res.Hops) > 0:
+	case reachedICMP && len(res.Hops) > 0 && res.Hops[len(res.Hops)-1].Recv > 0:
+		// A destination that only answers "unreachable" (a firewall on it
+		// refusing ping) was found, not reached: nothing measured its loss.
 		dest = &res.Hops[len(res.Hops)-1]
 	}
 	res.Reached = dest != nil
@@ -623,8 +626,16 @@ func verdict(res *TraceResult, maxHops int) (string, []string) {
 			return "The relay didn't answer on its UDP port, so loss on the way can't be confirmed. Check that the relay runs and that its key is right.", notes
 		}
 		n := len(res.Hops)
+		last := res.Hops[n-1]
+		if last.Recv == 0 && last.Unreachable > 0 {
+			who := fmt.Sprintf("Hop %d (%s)", last.TTL, last.Addr)
+			if last.Addr == res.Target {
+				who = "The destination"
+			}
+			notes = append(notes, who+` answered every probe with "unreachable": a firewall there refuses them.`)
+		}
 		v := fmt.Sprintf("The destination didn't answer ping, so loss on the way can't be confirmed: many game servers ignore ping. Raw loss per hop is shown; the last hop that answered is hop %d.", n)
-		if n < maxHops {
+		if n < maxHops && last.Addr != res.Target {
 			notes = append(notes, fmt.Sprintf("Hops %d to %d didn't answer.", n+1, maxHops))
 		}
 		return v, notes
@@ -736,11 +747,30 @@ func (r TraceResult) Redacted() TraceResult {
 		}
 		return h
 	}
+	// The verdict names the hop where loss starts by its host name, and a
+	// name often spells out the address it belongs to
+	// ("198-51-100-2.dyn.example.net"), so names in the text become the
+	// cut address too.
+	type named struct{ name, addr string }
+	var names []named
+	for _, h := range append(slices.Clone(r.Hops), endRows(r.End)...) {
+		if h.Name != "" {
+			names = append(names, named{h.Name, cut(h.Addr)})
+		}
+	}
+	// Longest first, so a name inside another one doesn't break it up.
+	slices.SortFunc(names, func(a, b named) int { return len(b.name) - len(a.name) })
+	text := func(s string) string {
+		for _, n := range names {
+			s = strings.ReplaceAll(s, n.name, n.addr)
+		}
+		return redactText(s)
+	}
 	r.Target, r.Host = cut(r.Target), redactText(r.Host)
-	r.EndName, r.Verdict = redactText(r.EndName), redactText(r.Verdict)
+	r.EndName, r.Verdict = redactText(r.EndName), text(r.Verdict)
 	r.Notes = slices.Clone(r.Notes)
 	for i := range r.Notes {
-		r.Notes[i] = redactText(r.Notes[i])
+		r.Notes[i] = text(r.Notes[i])
 	}
 	hops := make([]TraceHop, len(r.Hops))
 	for i, h := range r.Hops {

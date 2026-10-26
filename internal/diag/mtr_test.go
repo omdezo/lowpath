@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"lowpath/internal/icmp"
 )
@@ -485,5 +486,66 @@ func TestTraceReportAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(red.EndName, "203.0.113.50") {
 		t.Fatalf("relay address left in %q", red.EndName)
+	}
+}
+
+func TestTraceDestinationRefusesPing(t *testing.T) {
+	t.Parallel()
+	// A firewall on the destination answers every echo with "unreachable"
+	// (administratively prohibited): found, but nothing measures loss.
+	f := testRoute()
+	ping := func(dst netip.Addr, ttl int, timeout time.Duration) (icmp.Reply, error) {
+		r, err := f.ping(dst, ttl, timeout)
+		if err == nil && r.Kind == icmp.Echo {
+			r.Kind = icmp.Unreachable
+		}
+		return r, err
+	}
+	res := runTrace(t, fastTrace(f, func(c *TraceConfig) { c.Ping = ping }))
+	if res.Reached || res.DestLossPct != nil || res.LossFrom != nil {
+		t.Fatalf("a destination that only refuses isn't reached: reached=%v loss=%v from=%v verdict %q", res.Reached, res.DestLossPct, res.LossFrom, res.Verdict)
+	}
+	if len(res.Hops) != 5 || res.Hops[4].Unreachable == 0 {
+		t.Fatalf("want 5 hops ending at the refusing destination, got %+v", res.Hops)
+	}
+	if !strings.Contains(res.Verdict, "didn't answer ping") || !strings.Contains(strings.Join(res.Notes, " "), `"unreachable"`) {
+		t.Fatalf("verdict %q, notes %q", res.Verdict, res.Notes)
+	}
+}
+
+func TestTraceRedactedVerdictDropsHostNames(t *testing.T) {
+	t.Parallel()
+	// Reverse DNS names often spell out the address they belong to; the
+	// verdict names the hop where loss starts by its name.
+	f := testRoute()
+	f.hops[2].lossPct = 5
+	res := runTrace(t, fastTrace(f, func(c *TraceConfig) {
+		c.Names = func(ctx context.Context, a netip.Addr) string {
+			if a == netip.MustParseAddr("198.51.100.2") {
+				return "198-51-100-2.dyn.example.net"
+			}
+			return ""
+		}
+	}))
+	if !strings.Contains(res.Verdict, "198-51-100-2.dyn.example.net") {
+		t.Fatalf("verdict %q should name the hop", res.Verdict)
+	}
+	red := res.Redacted()
+	for _, s := range append([]string{red.Verdict}, red.Notes...) {
+		if strings.Contains(s, "198-51-100-2") || strings.Contains(s, "example.net") {
+			t.Fatalf("host name left in the redacted text %q", s)
+		}
+	}
+	if !strings.Contains(red.Verdict, "hop 3 (198.51.100.0)") {
+		t.Fatalf("redacted verdict %q", red.Verdict)
+	}
+}
+
+func TestTraceReportCutsLongNamesByCharacter(t *testing.T) {
+	t.Parallel()
+	label := strings.Repeat("é", 50)
+	rep := TraceResult{Mode: TraceUDP, EndName: label, End: &TraceHop{Probe: "udp", Sent: 1, Recv: 1}}.Report()
+	if !utf8.ValidString(rep) || !strings.Contains(rep, strings.Repeat("é", 43)+"~") {
+		t.Fatalf("report:\n%s", rep)
 	}
 }

@@ -120,7 +120,7 @@ func (t *traceRunner) start(parent context.Context, cfg diag.TraceConfig) error 
 	t.running, t.err, t.cancel = true, "", cancel
 	t.progress = &diag.TraceResult{Running: true, Target: cfg.Target.String(), Host: cfg.Host, Mode: cfg.Mode, StartedAt: time.Now(), Hops: []diag.TraceHop{}}
 	t.finished = make(chan struct{})
-	go t.run(ctx, tr, t.finished)
+	go t.run(ctx, cancel, tr, t.finished)
 	return nil
 }
 
@@ -136,8 +136,11 @@ func (t *traceRunner) stop() {
 	}
 }
 
-func (t *traceRunner) run(ctx context.Context, tr *diag.Trace, finished chan struct{}) {
+func (t *traceRunner) run(ctx context.Context, cancel context.CancelFunc, tr *diag.Trace, finished chan struct{}) {
 	defer close(finished)
+	// A trace that ends on its own releases its context too, else each one
+	// stays registered on the server's lifetime until Lowpath exits.
+	defer cancel()
 	defer func() {
 		t.mu.Lock()
 		t.running, t.progress, t.cancel = false, nil, nil

@@ -45,8 +45,9 @@ func (r TraceResult) Report() string {
 		if h.Name != "" {
 			host = fmt.Sprintf("%s [%s]", h.Name, host)
 		}
-		if len(host) > 44 {
-			host = host[:43] + "~"
+		if rs := []rune(host); len(rs) > 44 {
+			// Cut by character: a relay label may not be ASCII.
+			host = string(rs[:43]) + "~"
 		}
 		fmt.Fprintf(&b, head, nr, host, fmt.Sprintf("%.1f", h.LossPct), optPct(h.PersistPct), fmt.Sprint(h.Sent), fmt.Sprint(h.Recv),
 			optMS(h.BestMS), optMS(h.AvgMS), optMS(h.WorstMS), optMS(h.LastMS), optMS(h.StDevMS))

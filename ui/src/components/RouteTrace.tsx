@@ -265,11 +265,15 @@ function HopTable({ r }: { r: TraceResult }) {
 
 function HopRow({ h, r, noDest }: { h: TraceHop; r: TraceResult; noDest: boolean }) {
   const udp = h.probe === "udp";
-  const silent = h.recv === 0;
+  // A hop that only answered "unreachable" (a firewall refusing the
+  // probes) is known, but none of its answers count as replies.
+  const refuses = h.recv === 0 && (h.unreachable ?? 0) > 0 && h.addr !== "";
+  const silent = h.recv === 0 && !refuses;
   const lossBad = h.persist_pct != null && h.persist_pct >= r.threshold_pct;
   const host = udp ? "Relay's UDP port" : h.name || h.addr;
   const local = h.addr.startsWith("127.") || h.addr === "::1";
-  const sub = udp ? (r.end_name ?? "") : h.name ? h.addr : local ? "this PC" : h.private ? "private address" : "";
+  const where = h.name ? h.addr : local ? "this PC" : h.private ? "private address" : "";
+  const sub = udp ? (r.end_name ?? "") : refuses ? "refuses the probes (unreachable)" : where;
   const persistWhy = noDest ? "The destination didn't answer, so no loss can be confirmed" : r.running ? "Known when the trace finishes" : undefined;
   return (
     <tr className={`${h.loss_starts ? "starts" : ""}${silent ? " silent" : ""}`}>
