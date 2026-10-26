@@ -147,15 +147,19 @@ UDP port and prints the **address** and **key** to paste into
 
 | Component | Windows | Linux | macOS |
 |---|:---:|:---:|:---:|
-| Desktop client | ✅ | 🧪 headless, route mode over TUN | 🛠️ planned |
+| Desktop client | ✅ | 🧪 app window, route mode over TUN | 🧪 app window; route mode planned |
 | Relay server | builds | ✅ | builds |
 | `lpcheck` route checker | ✅ | ✅ | ✅ |
 
-On Linux, `lowpath -headless` runs the same engine and UI in a browser, and
-route mode captures through a TUN device (root, or `CAP_NET_ADMIN` and
-`CAP_NET_RAW`; see [docs/development.md](docs/development.md#on-linux)). The
-Linux window and packages and the macOS client are on the
-[roadmap](docs/roadmap.md).
+On Linux, `lowpath-linux-amd64` (or `-arm64`) opens the same UI in an app
+window (WebKitGTK, or Chromium in app mode) and adds itself to the app menu
+on its first start, so later starts are one click. Route mode captures
+through a TUN device; the first start asks for your password once (polkit)
+to give the program the `CAP_NET_ADMIN` and `CAP_NET_RAW` capabilities, and
+Lowpath keeps running as you (see
+[docs/development.md](docs/development.md#on-linux)). On macOS, `Lowpath.app`
+(from `Lowpath-macos.zip`, macOS 12 or later) opens the UI in a native
+window; route mode there is on the [roadmap](docs/roadmap.md).
 
 ## Supported games
 

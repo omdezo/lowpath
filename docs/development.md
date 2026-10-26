@@ -20,6 +20,8 @@ Outputs:
 | File | What it is |
 |---|---|
 | `dist\Lowpath.exe` | The desktop app (GUI subsystem, UI and driver embedded) |
+| `dist\lowpath-linux-amd64`, `-arm64` | The desktop app for Linux |
+| `dist\Lowpath-macos.zip` | `Lowpath.app` for macOS 12+, one universal program for Apple silicon and Intel (`scripts/macapp`) |
 | `dist\lpcheck.exe` | STUN check that shows which public IP the internet sees |
 | `dist\relay-linux-amd64`, `-arm64` | The relay server |
 | `dist\deploy\` | Relay deploy scripts |
@@ -46,9 +48,10 @@ degrade or cut routes — no servers or admin rights needed.
 | `-demo` | Simulated relays, game server and game client. |
 | `-headless` | No window; stop with Ctrl+C. |
 | `-open` | Use the default browser instead of the app window. |
-| `-no-elevate` | Don't ask for administrator rights at start. |
+| `-no-elevate` | Don't ask for the rights route mode needs at start (UAC on Windows, polkit on Linux). |
 | `-addr 127.0.0.1:7878` | UI/API address (loopback only). |
-| `-data DIR` | State and log folder (default `%APPDATA%\Lowpath`). |
+| `-data DIR` | State folder (default `%APPDATA%\Lowpath`, `~/.config/Lowpath`, `~/Library/Application Support/Lowpath`); the log goes there too when it is given. |
+| `-logs DIR` | Log and crash report folder (default: the data folder on Windows, `~/.local/state/Lowpath` on Linux, `~/Library/Logs/Lowpath` on macOS). |
 | `-relays file.json` | Also use a read-only relay list ([example](../relays.example.json)). |
 | `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
 | `-trace-count N`, `-trace-interval 200ms` | Shorter route traces, for tests (default 200 probes per hop, one per second). |
@@ -67,6 +70,18 @@ degrade or cut routes — no servers or admin rights needed.
 | `C:\Program Files\Lowpath\driver\` | WinDivert driver files (written when elevated) |
 | `%LOCALAPPDATA%\Lowpath\WebView2*` | App window data |
 
+On Linux and macOS the same files are in the per-user folders: settings,
+art and server lists in `~/.config/Lowpath` (`$XDG_CONFIG_HOME`) or
+`~/Library/Application Support/Lowpath`; `lowpath.log` and `crash.log` in
+`~/.local/state/Lowpath` (`$XDG_STATE_HOME`) or `~/Library/Logs/Lowpath`
+(Console.app shows them); the window's profile in `~/.cache/Lowpath/window`
+or `~/Library/Caches/Lowpath/window` (a Chromium window's is removed when it
+closes). On Linux the first windowed start also writes the app menu entry
+`~/.local/share/applications/lowpath.desktop` and its icon
+`~/.local/share/icons/hicolor/256x256/apps/lowpath.png` (delete both to
+remove it), and a running copy listens on
+`$XDG_RUNTIME_DIR/lowpath/ui-<address>.sock` for later starts.
+
 ### Local API security
 
 The UI/API port is reachable by every program on the PC, so the API answers
@@ -78,12 +93,12 @@ header. This is local security, not a login.
 ## Project layout
 
 ```
-cmd/lowpath        desktop app: API + embedded UI + window + elevation
+cmd/lowpath        desktop app: API + embedded UI, wired to the desktop shell
 cmd/relay          relay server (egress or forwarding hop)
 cmd/lpcheck        STUN check for verifying routes
 internal/app       game list, local store, relays, sessions, game art, HTTP API
 internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
-internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
+internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths, desktop shell (window, single instance, app menu)
 internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
 internal/compat    conflict detector: other boosters, WinpkFilter/WinDivert drivers, full-tunnel VPNs
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
@@ -145,6 +160,21 @@ go test ./...
   `cmd/lowpath`'s) run unchanged on Windows, Linux and macOS.
 - **Platform:** each OS implementation is complete, and what isn't built
   for an OS yet reports `errors.ErrUnsupported` instead of empty results.
+- **Desktop shell:** on every OS, with programs played by a fake: window
+  kinds that fail at start (the next one opens), close, hang on quit
+  (killed after SIGTERM) or are opened again by a second start; the
+  WebKitGTK, Chromium (snap and not) and WKWebView commands, with the
+  launch link only in the environment; the app menu entry and its Exec
+  quoting; the polkit prompt dismissed, refused, failing or leaving no
+  capabilities, `nosuid` and read-only filesystems; the macOS
+  administrator prompt and its quoting; log folders; `Lowpath.app` as a
+  universal program with its icon, and its zip keeping the program
+  executable. On Linux and macOS the single-instance socket for real
+  (a second start, a killed copy's socket, a folder open to others). In
+  `cmd/lowpath`, the whole app on `fakeplatform`: closing the window stops
+  a route-mode boost and the app, a second start brings the window
+  forward with a fresh launch link, and with no window the browser opens
+  signed in.
 - **Owners and detection on Linux and macOS:** `/proc` fixtures (IPv4,
   IPv6, v4-mapped, a Proton game, another user's process, no `/proc`),
   libproc reply layouts, Wine name and path rules, and a home folder with
@@ -245,13 +275,27 @@ and prints RTT, jitter, loss and that public IP.
 
 ### On Linux
 
-Route mode needs root, or two capabilities on the binary:
+Route mode needs root, or two capabilities on the binary. Started from the
+desktop, Lowpath asks for them itself: the polkit password dialog runs
+`setcap cap_net_admin,cap_net_raw+ep` on the program file (once; a new
+version asks again), and the program starts again as the same user, so its
+window and files stay yours. Cancel it and the banner offers **Allow route
+mode** later, or proxy mode. By hand:
 
 ```sh
 go build -o lowpath ./cmd/lowpath && go build -o lpcheck ./cmd/lpcheck
 sudo setcap cap_net_admin,cap_net_raw+ep ./lowpath
-./lowpath -headless              # prints the launch link; or: sudo ./lowpath -headless
+./lowpath                        # app window; -headless prints the launch link instead
 ```
+
+The window is a WebKitGTK view run by the system's Python (`python3-gi`
+and the WebKitGTK typelib, on Ubuntu `gir1.2-webkit2-4.1`, on Fedora
+`webkitgtk6.0` or `webkit2gtk4.1`; GNOME desktops have them), else Chrome,
+Chromium, Edge, Brave or Vivaldi in app mode, else the default browser.
+Closing it quits Lowpath and stops the boost. A file downloaded with a
+browser isn't executable yet: `chmod +x lowpath-linux-amd64`, or tick
+*Allow executing file as program* in its properties, then open it; from
+then on it is in the app menu.
 
 Add `lpcheck` as a game (Add game lists it while it runs) and Boost it, then
 run `./lpcheck -for 30s`: through a real relay it shows the relay's IP. While
@@ -259,3 +303,13 @@ it runs, `ip rule` shows `5100: from all fwmark 0x4c50 lookup 19536` and
 `ip link` a `lowpath0` device. After Stop neither is left. After `kill -9`
 of Lowpath the device is gone at once, so the rule routes nothing; it is
 removed at the next start.
+
+### On macOS
+
+Unzip `Lowpath-macos.zip` and open `Lowpath.app`. It isn't signed yet, so
+the first time macOS asks: right-click it, **Open**, then **Open** (on macOS
+15, *System Settings → Privacy & Security → Open Anyway*). The UI opens in a
+WKWebView window; closing it, or Cmd-Q, quits Lowpath. Route mode isn't
+available on macOS yet (#42), so the app offers proxy mode; once it is, the
+banner's **Restart with administrator rights** shows the system's password
+dialog.
