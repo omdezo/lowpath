@@ -251,3 +251,23 @@ func TestGilbertTimeStepChange(t *testing.T) {
 		t.Errorf("after the step change %d loss bursts in %d steps, want about %.0f", runs, n, n*coarse.P)
 	}
 }
+
+// TestGilbertFirstPacketIsStationary: a fresh chain starts in its
+// stationary state, so its first packet is lost at the mean rate and short
+// runs aren't biased toward Good.
+func TestGilbertFirstPacketIsStationary(t *testing.T) {
+	for _, g := range []GilbertElliott{Gilbert(0.10, 8), GilbertTime(0.10, 8*time.Millisecond, 0)} {
+		rng := newRand(5)
+		const n = 100_000 // fresh chains, independent trials
+		lost := 0
+		for range n {
+			var c geChain
+			if c.drop(g, 3*time.Second, rng) {
+				lost++
+			}
+		}
+		if got, tol := float64(lost)/n, 5*math.Sqrt(0.1*0.9/n); !near(got, 0.10, tol) {
+			t.Errorf("step %v: first packets lost %.4f, want 0.10 ± %.4f", g.Step, got, tol)
+		}
+	}
+}
