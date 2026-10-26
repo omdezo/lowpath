@@ -9,6 +9,9 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Desktop shell on Linux and macOS: the UI opens in an app window, a second
+  start brings the running copy forward, route mode asks for its rights
+  once, and logs live in the per-user folders of each OS (#44).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements
