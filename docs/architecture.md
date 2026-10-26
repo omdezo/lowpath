@@ -695,8 +695,9 @@ catalog entry or not:
   already stopping and missing rights are not errors (an elevated start
   cleans up), and the session of this process's open watch is never
   stopped. A leftover met later by `StartTraceW` (`ERROR_ALREADY_EXISTS`)
-  is stopped and replaced too. Unelevated it fails with
-  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`), retried every 5 min. A
+  is stopped and replaced too. Unelevated, opening the session fails with
+  `ERROR_ACCESS_DENIED` (`detect.ErrNeedAdmin`) and is retried every 5 min
+  (the reset is not retried). A
   session stopped from outside closes `FlowWatch.Done()`; the card then
   shows `watch.state: "error"` and the watch is retried after 30 s. The
   callback only looks the PID up in a map of game PIDs (refreshed every 2 s
