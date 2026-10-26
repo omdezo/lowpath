@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  The page a Lowpath build shows when it was built without the UI: a fresh
+  clone, or build.ps1 -SkipUI before the first npm run build. It is tracked
+  so //go:embed always has a file to embed; the real UI goes to ui/dist/app,
+  which git ignores. Self-contained: no scripts, no requests.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="lowpath-ui" content="placeholder" />
+    <title>Lowpath</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230E1116'/%3E%3Cpath d='M6 22c5 0 6-12 10-12s5 8 10 8' stroke='%2319E3B4' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <style>
+      :root { --bg: #0e1116; --fg: #e6e8eb; --muted: #9aa3ad; --code: #1a1f27; --accent: #19e3b4; }
+      @media (prefers-color-scheme: light) {
+        :root { --bg: #f6f7f9; --fg: #14181f; --muted: #555f6b; --code: #e7eaee; --accent: #0a8f70; }
+      }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+        font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 34rem; padding: 2rem 1rem; }
+      h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+      h1 span { color: var(--accent); }
+      p { margin: 0 0 1rem; color: var(--muted); }
+      pre, code { background: var(--code); color: var(--fg); border-radius: 6px; }
+      code { padding: 0 0.3em; }
+      pre { padding: 0.75rem 1rem; overflow-x: auto; margin: 0 0 1rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><span>Lowpath</span> was built without its interface</h1>
+      <p>This copy has the engine and the local API, but its interface was never built, so there is nothing to show here yet. Build the UI, then build Lowpath again:</p>
+      <pre>cd ui
+npm ci
+npm run build
+cd ..
+.\build.ps1 -SkipUI</pre>
+      <p>On Linux or macOS, run <code>go build ./cmd/lowpath</code> after <code>npm run build</code>. See <code>docs/development.md</code>.</p>
+    </main>
+  </body>
+</html>

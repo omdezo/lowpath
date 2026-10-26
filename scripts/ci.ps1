@@ -12,7 +12,8 @@
       cross     app + relay + lpcheck build for linux/amd64, linux/arm64,
                 darwin/arm64, darwin/amd64 and windows/arm64; the whole module
                 (tests included) vets for linux and darwin
-      ui        npm ci (when needed) + typecheck + production build
+      ui        npm ci (when needed) + typecheck + production build to
+                ui\dist\app; fails if the build changed what git status shows
       build     dist\Lowpath.exe, dist\lowpathsvc.exe and dist\lpcheck.exe
       e2e       end-to-end UI test (only with -E2E)
 
@@ -82,11 +83,11 @@ function Get-StageList {
 # Get-ReportTarget returns the GitHub repo and commit a -Report run describes,
 # or $null (after saying why) when the result can't honestly describe exactly
 # one commit: uncommitted or untracked files would be built but not pushed.
-# ui/dist is build output (the ui stage rewrites it), not source, so it
-# doesn't count.
+# The UI build goes to ui/dist/app, which git ignores, so it needs no
+# exception here, and an edited ui/dist/placeholder counts like any source.
 function Get-ReportTarget {
     try {
-        if (git -C $root status --porcelain -- . ':(exclude)ui/dist') {
+        if (git -C $root status --porcelain) {
             Write-Host 'Not reporting: the working tree has uncommitted or untracked changes.' -ForegroundColor Yellow
             return $null
         }
@@ -159,6 +160,19 @@ function Invoke-WithEnv([hashtable]$Vars, [scriptblock]$Command) {
     }
 }
 
+# Get-TreeState is what git status shows, as one string ('' when clean), or
+# $null outside a git work tree (a source archive), where nothing is compared.
+# Only git's exit code decides: with 'Stop', Windows PowerShell turns any
+# line git writes to stderr (a warning, GIT_TRACE) into an error, which
+# would switch the check off without a word.
+function Get-TreeState {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $null }
+    $ErrorActionPreference = 'Continue'
+    $lines = git -C $root status --porcelain --untracked-files=all 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (@($lines) -join "`n")
+}
+
 # With -Report, check up front that the result can be published, so a dirty
 # tree is caught before the run instead of after it.
 $reportTarget = if ($Report) { Get-ReportTarget } else { $null }
@@ -166,7 +180,7 @@ $reportTarget = if ($Report) { Get-ReportTarget } else { $null }
 Push-Location $root
 try {
     Invoke-Stage 'format' {
-        $files = gofmt -l cmd internal scripts
+        $files = gofmt -l cmd internal scripts @(Get-ChildItem ui -Filter *.go -File | ForEach-Object FullName)
         if ($files) { Write-Host "Not gofmt'd:`n$files" -ForegroundColor Red; $global:LASTEXITCODE = 1 } else { $global:LASTEXITCODE = 0 }
     }
 
@@ -203,11 +217,25 @@ try {
 
     if (-not $Quick) {
         Invoke-Stage 'ui' {
+            # The build must leave git status as it found it: its output goes
+            # to ui\dist\app, which git ignores, never to a tracked file.
+            $before = Get-TreeState
             Push-Location (Join-Path $root 'ui')
             try {
                 if (-not (Test-Path 'node_modules')) { npm ci; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } }
                 npm run build
+                if ($LASTEXITCODE -ne 0) { throw 'npm run build failed' }
             } finally { Pop-Location }
+            if (-not (Test-Path (Join-Path $root 'ui\dist\app\index.html'))) { throw 'npm run build wrote no ui\dist\app\index.html' }
+            $after = Get-TreeState
+            if ($null -eq $before) {
+                Write-Host 'Not a git work tree: not checking that the build left git status as it was.' -ForegroundColor Yellow
+            } elseif ($after -ne $before) {
+                $was = $before -split "`n"
+                $new = @($after -split "`n" | Where-Object { $_ -and $was -notcontains $_ })
+                throw "npm run build changed what git status shows (build output belongs in ui\dist\app):`n$($new -join "`n")"
+            }
+            $global:LASTEXITCODE = 0
         }
     }
 

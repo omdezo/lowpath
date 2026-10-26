@@ -2,7 +2,7 @@
 /dist/
 /ui/node_modules/
 /ui/dist/*
-!/ui/dist/index.html
+!/ui/dist/placeholder/
 /.claude/devdata/
 *.exe
 launch.json
