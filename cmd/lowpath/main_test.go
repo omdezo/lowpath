@@ -26,8 +26,8 @@ func TestChildArgsReplaceWaitPID(t *testing.T) {
 	defer func() { os.Args = saved }()
 	os.Args = []string{"Lowpath.exe", "-headless", "-wait-pid", "5", "--wait-pid=6", "-addr", "127.0.0.1:7879"}
 
-	got := childArgs(options{data: `C:\Users\p\AppData\Roaming\Lowpath`})
-	want := []string{"-headless", "-addr", "127.0.0.1:7879", "-data", `C:\Users\p\AppData\Roaming\Lowpath`, "-wait-pid", strconv.Itoa(os.Getpid())}
+	got := childArgs(options{data: `C:\Users\p\AppData\Roaming\Lowpath`, logs: `C:\Users\p\AppData\Local\Lowpath`})
+	want := []string{"-headless", "-addr", "127.0.0.1:7879", "-data", `C:\Users\p\AppData\Roaming\Lowpath`, "-logs", `C:\Users\p\AppData\Local\Lowpath`, "-wait-pid", strconv.Itoa(os.Getpid())}
 	if !slices.Equal(got, want) {
 		t.Errorf("childArgs = %q, want %q", got, want)
 	}
@@ -200,15 +200,38 @@ func TestNoElevateWithoutPrompt(t *testing.T) {
 	}
 }
 
-func TestWebViewDirPerElevation(t *testing.T) {
+func TestWindowProfilePerElevation(t *testing.T) {
 	fp := fakeplatform.New(t.TempDir())
 	plat := fp.Platform()
-	user := webViewDir(plat)
+	user := windowProfile(plat)
 	fp.Privileges.SetElevated(true)
-	admin := webViewDir(plat)
+	admin := windowProfile(plat)
 	cache, _ := plat.Paths.CacheDir()
 	if user == admin || filepath.Dir(user) != cache || filepath.Dir(admin) != cache {
-		t.Errorf("webview folders %q and %q, want two folders under %q", user, admin, cache)
+		t.Errorf("window profiles %q and %q, want two folders under %q", user, admin, cache)
+	}
+	// Windows keeps the folder names of earlier versions.
+	fp.OS = "windows"
+	if got := filepath.Base(windowProfile(fp.Platform())); got != "WebView2-admin" {
+		t.Errorf("elevated profile on Windows: %q, want WebView2-admin", got)
+	}
+}
+
+func TestLogDir(t *testing.T) {
+	paths := fakeplatform.New(t.TempDir()).Paths
+	osLogs, _ := paths.LogDir()
+	for _, c := range []struct {
+		o    options
+		want string
+	}{
+		{options{data: "d"}, osLogs},
+		{options{data: "d", dataFromArg: true}, "d"},
+		{options{data: "d", dataFromArg: true, logs: "l", logsFromArg: true}, "l"},
+		{options{data: "d", logs: "l", logsFromArg: true}, "l"},
+	} {
+		if got := logDir(c.o, paths); got != c.want {
+			t.Errorf("logDir(%+v) = %q, want %q", c.o, got, c.want)
+		}
 	}
 }
 

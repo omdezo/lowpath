@@ -79,6 +79,19 @@ func (s *Server) LaunchPath() string {
 	return pathSession + "?t=" + s.auth.launch
 }
 
+// NewLaunchPath is a launch path for one more window, when the user starts
+// the app again while it runs: the unused launch token if there is one,
+// else a new one, which works once like the first. Only the shell asks for
+// it, and hands it straight to the window or browser it opens.
+func (s *Server) NewLaunchPath() string {
+	s.auth.mu.Lock()
+	defer s.auth.mu.Unlock()
+	if s.auth.launch == "" {
+		s.auth.launch = randToken()
+	}
+	return pathSession + "?t=" + s.auth.launch
+}
+
 // handleSession trades the launch token for the session cookie.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if !s.auth.redeem(r.URL.Query().Get("t")) {

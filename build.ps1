@@ -1,10 +1,13 @@
 <#
 .SYNOPSIS
-    Builds Lowpath: the UI, the Windows app, lpcheck and the Linux relays.
+    Builds Lowpath: the UI, the Windows, Linux and macOS apps, lpcheck and the
+    Linux relays.
 
 .DESCRIPTION
     Output in dist\:
       Lowpath.exe              the desktop app (GUI subsystem, UI embedded)
+      lowpath-linux-amd64/arm64 the desktop app for Linux
+      Lowpath-macos.zip        Lowpath.app for macOS 12+ (Apple silicon and Intel)
       lpcheck.exe              STUN check that shows which public IP the internet sees
       relay-linux-amd64/arm64  the relay server, for deploy\deploy-relay.ps1
       deploy\                  the deploy scripts
@@ -107,8 +110,22 @@ try {
     foreach ($arch in @('amd64', 'arm64')) {
         Invoke-WithEnv @{ GOOS = 'linux'; GOARCH = $arch; CGO_ENABLED = '0' } {
             Invoke-Native "dist\relay-linux-$arch" { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist "relay-linux-$arch") ./cmd/relay }
+            Invoke-Native "dist\lowpath-linux-$arch" { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist "lowpath-linux-$arch") ./cmd/lowpath }
         }
     }
+    # macOS: one universal Lowpath.app for Apple silicon and Intel Macs.
+    $macBins = @()
+    foreach ($arch in @('arm64', 'amd64')) {
+        $out = Join-Path $root "bin\lowpath-darwin-$arch"
+        Invoke-WithEnv @{ GOOS = 'darwin'; GOARCH = $arch; CGO_ENABLED = '0' } {
+            Invoke-Native "bin\lowpath-darwin-$arch" { go build -trimpath -ldflags '-s -w' -o $out ./cmd/lowpath }
+        }
+        $macBins += $out
+    }
+    $version = (Select-String -Path (Join-Path $root 'internal\app\server.go') -Pattern 'Version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+    # A zip keeps the program's executable mode, which a folder copied from
+    # Windows loses.
+    Invoke-Native 'dist\Lowpath-macos.zip (Lowpath.app)' { go run ./scripts/macapp -out (Join-Path $dist 'Lowpath-macos.zip') -version $version @macBins }
 
     Write-Host '==> dist\deploy' -ForegroundColor Cyan
     $deployOut = Join-Path $dist 'deploy'

@@ -498,6 +498,7 @@ type Paths struct{ dir string }
 
 func (p *Paths) DataDir() (string, error)  { return filepath.Join(p.dir, "data"), nil }
 func (p *Paths) CacheDir() (string, error) { return filepath.Join(p.dir, "cache"), nil }
+func (p *Paths) LogDir() (string, error)   { return filepath.Join(p.dir, "logs"), nil }
 func (p *Paths) DriverDirs(bool) ([]string, []error) {
 	return []string{filepath.Join(p.dir, "driver")}, nil
 }

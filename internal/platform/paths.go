@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // appDir is the folder name under the per-user config and cache folders.
@@ -50,4 +51,23 @@ func driverDirs(elevated bool, protected, executable func() (string, error)) (di
 		}
 	}
 	return dirs, errs
+}
+
+// logBase is the per-user folder logs go under on goos (Linux and macOS;
+// Windows keeps the log with the data).
+func logBase(goos string, getenv func(string) string, home func() (string, error)) (string, error) {
+	if goos != "darwin" {
+		// The XDG Base Directory spec: a relative $XDG_STATE_HOME is ignored.
+		if d := getenv("XDG_STATE_HOME"); strings.HasPrefix(d, "/") {
+			return d, nil
+		}
+	}
+	h, err := home()
+	if err != nil {
+		return "", err
+	}
+	if goos == "darwin" {
+		return filepath.Join(h, "Library", "Logs"), nil
+	}
+	return filepath.Join(h, ".local", "state"), nil
 }

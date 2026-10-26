@@ -37,8 +37,8 @@ func TestNativeIsComplete(t *testing.T) {
 		if p.Capture.Name() != "tun" || (err != nil && !errors.Is(err, capture.ErrNeedAdmin) && !errors.Is(err, capture.ErrNoTUN)) {
 			t.Errorf("capture on linux: %s, %v; want tun, available or needing rights", p.Capture.Name(), err)
 		}
-		if p.ElevationHelps() {
-			t.Error("ElevationHelps without a prompt to show")
+		if want := p.Privileges.CanElevate() && !p.Privileges.Elevated() && errors.Is(err, capture.ErrNeedAdmin); p.ElevationHelps() != want {
+			t.Errorf("ElevationHelps = %v, want %v", p.ElevationHelps(), want)
 		}
 	default:
 		if !errors.Is(err, errors.ErrUnsupported) {
@@ -55,11 +55,18 @@ func TestNativeIsComplete(t *testing.T) {
 			t.Errorf("owner lookup on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
 		}
 	}
-	if p.Privileges.CanElevate() {
-		t.Error("CanElevate without a prompt to show")
-	}
-	if err := p.Privileges.Relaunch(nil); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Relaunch: %v, want errors.ErrUnsupported", err)
+	// Linux (pkexec) and macOS (osascript) have a prompt, which a test must
+	// not show; elsewhere there is none yet.
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		t.Logf("can elevate: %v", p.Privileges.CanElevate())
+	default:
+		if p.Privileges.CanElevate() {
+			t.Error("CanElevate without a prompt to show")
+		}
+		if err := p.Privileges.Relaunch(nil); !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("Relaunch: %v, want errors.ErrUnsupported", err)
+		}
 	}
 	if _, err := p.Flows.Watch(nil); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("flow watch on %s: %v, want errors.ErrUnsupported", runtime.GOOS, err)
@@ -91,6 +98,7 @@ func newUnixLikePaths() Paths { return fakePaths{} }
 type fakePaths struct{ userDirs }
 
 func (fakePaths) DriverDirs(bool) ([]string, []error) { return nil, nil }
+func (fakePaths) LogDir() (string, error)             { return "", nil }
 
 func TestUserDirs(t *testing.T) {
 	u := userDirs{

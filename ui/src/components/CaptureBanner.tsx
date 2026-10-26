@@ -34,7 +34,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       // bootstrap refresh after reconnect decides what to show.
       if (sawDown.current) return;
       setState("idle");
-      onError("Lowpath is still running without administrator rights. If you cancelled the administrator prompt, try again.", "Not restarted");
+      onError("Lowpath is still running without the rights route mode needs. If you cancelled the prompt, try again.", "Not restarted");
     }, RESTART_GRACE_MS);
     return () => window.clearTimeout(t);
   }, [state, onError]);
@@ -47,7 +47,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       setState("restarting");
     } catch (e) {
       setState("idle");
-      const d = describeError(e, "Couldn't restart as administrator");
+      const d = describeError(e, "Couldn't restart with more rights");
       onError(d.msg, d.title);
     }
   };
@@ -60,7 +60,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       <span style={{ flex: 1 }}>
         <b>Route mode can't capture game traffic:</b> {reason}.{" "}
         {canElevate ? (
-          "Restart Lowpath as administrator to fix this."
+          platform.elevate_hint || "Restart Lowpath as administrator to fix this."
         ) : (
           <>
             Use{" "}
@@ -74,7 +74,7 @@ export function CaptureBanner({ platform, down, onOpenNetwork, onError }: Props)
       {canElevate && (
         <button className="btn btn-xs" onClick={elevate} disabled={state !== "idle"} style={{ flex: "none" }}>
           {state !== "idle" && <Loader2 size={13} className="spin" />}
-          {state === "restarting" ? "Restarting…" : "Restart as administrator"}
+          {state === "restarting" ? "Restarting…" : platform.elevate_action || "Restart as administrator"}
         </button>
       )}
     </div>

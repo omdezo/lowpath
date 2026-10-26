@@ -20,8 +20,12 @@ type platformView struct {
 	// CanElevate: POST /api/elevate can restart the app with the rights
 	// route mode needs, and those rights are all capture lacks (the UI shows
 	// the button only then; a restart can't fix a missing driver).
-	CanElevate bool        `json:"can_elevate"`
-	Capture    captureInfo `json:"capture"`
+	CanElevate bool `json:"can_elevate"`
+	// ElevateAction and ElevateHint word the restart for this OS: the button,
+	// and the sentence that says what it does.
+	ElevateAction string      `json:"elevate_action"`
+	ElevateHint   string      `json:"elevate_hint"`
+	Capture       captureInfo `json:"capture"`
 }
 
 type captureInfo struct {
@@ -38,12 +42,27 @@ func (s *Server) platform() platformView {
 		CanElevate: s.elevate != nil && !admin && platform.NeedsElevation(avail),
 		Capture:    captureInfo{Backend: s.plat.Capture.Name()},
 	}
+	v.ElevateAction, v.ElevateHint = elevateWording(s.plat.OS)
 	if err := avail; err != nil {
 		v.Capture.Reason = captureReason(err)
 	} else {
 		v.Capture.Available = true
 	}
 	return v
+}
+
+// elevateWording is how the UI offers the restart with more rights on os.
+func elevateWording(os string) (action, hint string) {
+	switch os {
+	case "linux":
+		// platform.Polkit: one password prompt gives the program file the
+		// two network capabilities, and it restarts as the same user.
+		return "Allow route mode", "Lowpath asks for your password once to give itself the network rights route mode needs, then restarts."
+	case "darwin":
+		return "Restart with administrator rights", "Restart Lowpath with administrator rights to fix this."
+	default:
+		return "Restart as administrator", "Restart Lowpath as administrator to fix this."
+	}
 }
 
 func captureReason(err error) string {

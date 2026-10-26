@@ -101,6 +101,10 @@ type Paths interface {
 	// CacheDir holds what can be rebuilt, such as the window's browser
 	// profile (per user).
 	CacheDir() (string, error)
+	// LogDir holds the log and crash reports (per user): the data folder on
+	// Windows, $XDG_STATE_HOME/Lowpath (~/.local/state/Lowpath) on Linux,
+	// ~/Library/Logs/Lowpath on macOS.
+	LogDir() (string, error)
 	// DriverDirs lists where capture driver files may go, best first, and
 	// why a usual folder is missing. An elevated process only gets folders
 	// that ordinary users can't write to.

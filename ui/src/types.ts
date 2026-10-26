@@ -391,6 +391,9 @@ export interface Platform {
   admin: boolean;
   /** The app can restart itself with the rights route mode needs. */
   can_elevate: boolean;
+  /** The restart button and the sentence that says what it does, for this OS. */
+  elevate_action?: string;
+  elevate_hint?: string;
   capture: { backend: string; available: boolean; reason: string };
 }
 
