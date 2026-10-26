@@ -20,9 +20,16 @@ import (
 // current_connection only on Windows versions without the realtime opcode,
 // which have no location rule either. Survey reads the scan cache with
 // WlanGetNetworkBssList and is only called when the user asks.
-type winWLAN struct{ api *wlanAPI }
+type winWLAN struct {
+	api *wlanAPI
+	// build is the Windows build number: from the location rule on, Link
+	// never falls back to current_connection (see pollsMayQueryConnection).
+	build uint32
+}
 
-func newPlatformWLAN() WLAN { return &winWLAN{api: newWLANAPI()} }
+func newPlatformWLAN() WLAN {
+	return &winWLAN{api: newWLANAPI(), build: windows.RtlGetVersion().BuildNumber}
+}
 
 // WLAN_INTF_OPCODE values.
 const (
@@ -252,9 +259,17 @@ func (w *winWLAN) Link(index int) (WiFiLink, error) {
 		l.Source = "WlanQueryInterface(realtime_connection_quality)"
 	case errors.Is(rtErr, ErrWiFiDisconnected):
 		return l, rtErr
+	case !pollsMayQueryConnection(w.build):
+		// The realtime query failed on a Windows with the location rule:
+		// current_connection would show the location prompt from a
+		// background poll, so only the location-free opcodes are read.
+		l.Source = "WlanQueryInterface(channel_number, rssi)"
+		l.note("Windows didn't report the link's details (%v); band and link rate are unknown.", rtErr)
+		w.channelFallback(c, &g, &l, 0)
 	default:
-		// Before Windows 11 24H2: current_connection, which has no
-		// location rule on those versions; channel_number for the channel.
+		// Before the location rule (Windows 11 24H2): current_connection,
+		// which needs no location access there; channel_number for the
+		// channel.
 		l.Source = "WlanQueryInterface(current_connection)"
 		if b, err := c.queryRaw(&g, opCurrentConnection); err == nil {
 			if a, err := decodeConnAttributes(b); err == nil {
@@ -375,9 +390,12 @@ func (w *winWLAN) Tune(index int) (WiFiTuning, error) {
 
 // winTuning holds this client's two votes: background scan off, media
 // streaming on. The Wi-Fi service ORs the votes of every client (scans
-// stay off while any client wants them off) and drops a client's votes
-// when its handle closes, which also happens when the process dies. A
-// disconnect resets both, so Refresh applies them again.
+// stay off while any client wants them off; documented) and resets both on
+// a disconnect (documented), so Refresh applies them again. That it drops
+// a client's votes when its handle closes, as on a crash, isn't in
+// Microsoft's documentation: the maintainer's real Wi-Fi check confirms it.
+// At worst a crash leaves scans paused until the next disconnect, which
+// slows roaming but never breaks the connection.
 type winTuning struct {
 	mu       sync.Mutex
 	c        *wlanClient

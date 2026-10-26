@@ -75,11 +75,13 @@ type WiFi struct {
 	linkErr   error
 	survey    diag.WiFiSurvey
 	surveyErr error
-	tuneErr   error
-	tuneState diag.WiFiTuningState
-	hang      chan struct{}
-	indexes   []int
-	tunings   []*Tuning
+	// surveyCalls counts Survey calls as they start.
+	surveyCalls int
+	tuneErr     error
+	tuneState   diag.WiFiTuningState
+	hang        chan struct{}
+	indexes     []int
+	tunings     []*Tuning
 }
 
 // SetLink makes Link return l (err nil) or fail with err.
@@ -127,7 +129,13 @@ func (w *WiFi) Link(index int) (diag.WiFiLink, error) {
 	return w.link, w.linkErr
 }
 
+// SurveyCalls counts Survey calls, hung ones included.
+func (w *WiFi) SurveyCalls() int { w.mu.Lock(); defer w.mu.Unlock(); return w.surveyCalls }
+
 func (w *WiFi) Survey(index int) (diag.WiFiSurvey, error) {
+	w.mu.Lock()
+	w.surveyCalls++
+	w.mu.Unlock()
 	w.wait()
 	w.mu.Lock()
 	defer w.mu.Unlock()

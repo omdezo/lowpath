@@ -795,18 +795,21 @@ type WLAN interface {                   // per OS, behind diag.NewWLAN(); platfo
   `wlan_intf_opcode_rssi`. Both are location-free: since Windows 11 24H2
   `current_connection` and `WlanGetNetworkBssList` return
   `ERROR_ACCESS_DENIED` without location consent and the first call shows
-  Windows' location prompt, so `Link` uses `current_connection` only where
-  the realtime opcode doesn't exist (older Windows, which has no location
-  rule), with `channel_number` for the channel. `Survey` is only called
+  Windows' location prompt, so `Link` falls back to `current_connection` only on builds before
+  the rule (below 25976, read with `RtlGetVersion`), with `channel_number`
+  for the channel; from the rule on, a failed realtime query leaves only
+  `channel_number` and `rssi`, so a background poll never shows the prompt. `Survey` is only called
   when the user presses *Check channel*: it reads the connected BSSID and
   the scan cache (no `WlanScan`), parses the AP's BSS Load element (ID 11:
   station count, channel utilization /255, admission capacity) and counts
   the other networks on its channel (and the overlapping ones on 2.4 GHz).
   `Tune` sets `background_scan_enabled=FALSE` and
   `media_streaming_mode=TRUE` on its own handle; the Wi-Fi service keeps a
-  setting while any client asks for it, drops a client's request when its
-  handle closes (so a crash reverts it) and resets both on a disconnect,
-  which is why `Refresh` sets them again. The structures are decoded from
+  setting while any client asks for it and resets both on a disconnect
+  (both documented), which is why `Refresh` sets them again; that it also
+  drops a client's request when the handle closes (so a crash reverts it)
+  is observed behaviour, not documented, and is part of the maintainer's
+  real Wi-Fi check. The structures are decoded from
   copied bytes with every 64-bit SDK offset written out (`wifi_native.go`),
   so their layouts are tested on every OS. Units the docs contradict are
   decided by size: rates under 1000 are Mbit/s (no Wi-Fi rate is below 1
@@ -820,7 +823,10 @@ type WLAN interface {                   // per OS, behind diag.NewWLAN(); platfo
   readings are shared for 2 s. A boost over Wi-Fi with Settings
   `wifi_tuning` on (default) starts a tuner: `Tune` off the boost's path,
   `Refresh` every 10 s, `Close` on stop (a `Tune` that answers after its
-  time limit is closed when it does). The verdict gets `Evidence.WiFi` from
+  time limit is closed when it does; one that fails because the Wi-Fi is
+  reconnecting is tried again every 10 s). The AP's load joins the verdict
+  when its primary channel lies inside the link's channel (`OnChannel`:
+  the link may give the center of a 40 to 320 MHz channel). The verdict gets `Evidence.WiFi` from
   a reading of the adapter that carries the default route (≤ 30 s old) and
   the AP's channel load from a survey of the same channel (≤ 15 min old):
   a channel the AP reports busy more than 60% of the time counts as weak,

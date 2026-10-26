@@ -257,11 +257,43 @@ func ChannelOf(mhz int) (int, string) {
 		return 2, "6"
 	case mhz >= 5955 && mhz <= 7115:
 		return (mhz - 5950) / 5, "6"
-	case mhz >= 4910 && mhz <= 5925:
+	case mhz >= 4910 && mhz < 5000:
+		// 4.9 GHz (Japan): channels 182 to 196 count from 4000 MHz.
+		return (mhz - 4000) / 5, "5"
+	case mhz >= 5000 && mhz <= 5925:
 		return (mhz - 5000) / 5, "5"
 	}
 	return 0, ""
 }
+
+// OnChannel says whether a network heard on primaryMHz (a scan entry gives
+// the primary 20 MHz channel) is on the link's channel. The link may give
+// the center of its whole 40 to 320 MHz channel instead, which lies between
+// primary channels, so an exact match could miss its own access point.
+// widthMHz nil counts as 20 MHz.
+func OnChannel(linkMHz int, widthMHz *int, primaryMHz int) bool {
+	if linkMHz <= 0 || primaryMHz <= 0 {
+		return false
+	}
+	w := 20
+	if widthMHz != nil && *widthMHz > 20 {
+		w = *widthMHz
+	}
+	// The primary channels of a w MHz channel sit within w/2 - 10 MHz of
+	// its center; 2 MHz of slack for rounding.
+	return absInt(primaryMHz-linkMHz) <= w/2-10+2
+}
+
+// locationRuleBuild is the first Windows build (Insider 25976; Windows 11
+// 24H2 is 26100) on which wlan_intf_opcode_current_connection and the scan
+// list need location access: their first use can show Windows' location
+// prompt, and every use lights the location-in-use icon.
+const locationRuleBuild = 25976
+
+// pollsMayQueryConnection says whether a background poll may use the
+// current_connection query on Windows build: only before the location rule
+// (and when the build is known). From then on only a user action calls it.
+func pollsMayQueryConnection(build uint32) bool { return build > 0 && build < locationRuleBuild }
 
 // phyStandard names a Windows DOT11_PHY_TYPE (the 802.11 PHY) and its Wi-Fi
 // generation; 6 GHz turns Wi-Fi 6 into Wi-Fi 6E.

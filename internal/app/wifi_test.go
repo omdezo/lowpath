@@ -348,3 +348,82 @@ func TestWiFiTuningSettingDefaultsOn(t *testing.T) {
 		t.Error("a new store has the scan pause off")
 	}
 }
+
+// A boost that starts while the Wi-Fi reconnects gets the pause once the
+// link is back; Stop reverts the one tuning it got.
+func TestWiFiScanPauseRetriedAfterReconnect(t *testing.T) {
+	fp := newFake(t)
+	fp.WiFi.SetTune(diag.WiFiTuningState{}, diag.ErrWiFiDisconnected)
+	srv, api := newTuneServer(t, fp, nil)
+	boostLP(t, fp, api)
+	if v := waitTune(t, srv, tuneFailed); !strings.Contains(v.Message, "tries again") {
+		t.Errorf("failed tuning: %+v", v)
+	}
+	fp.WiFi.SetTune(diag.WiFiTuningState{ScanPaused: true, Streaming: true}, nil)
+	waitTune(t, srv, tuneOn)
+	api("POST", "/api/stop", "", nil)
+	if tu := fp.WiFi.Tunings(); len(tu) != 1 || tu[0].Closes() != 1 {
+		t.Errorf("%d tunings, want one reverted once", len(tu))
+	}
+
+	// Without the feature on this OS there is nothing to wait for.
+	fp = newFake(t)
+	fp.WiFi.SetTune(diag.WiFiTuningState{}, fmt.Errorf("pausing Wi-Fi scans: %w", diag.ErrUnsupported))
+	srv, api = newTuneServer(t, fp, nil)
+	boostLP(t, fp, api)
+	if v := waitTune(t, srv, tuneFailed); strings.Contains(v.Message, "tries again") || !strings.Contains(v.Message, "isn't available") {
+		t.Errorf("unsupported: %+v", v)
+	}
+}
+
+// Presses of Check channel while the Wi-Fi service hangs don't start more
+// blocked calls; once it answers, a press reads the channel again.
+func TestWiFiSurveyHungService(t *testing.T) {
+	fp := newFake(t)
+	fp.WiFi.SetLink(exampleLink(-58), nil)
+	release := make(chan struct{})
+	fp.WiFi.Hang(release)
+	_, api := newWiFiServer(t, fp, nil)
+	var v wifiView
+	for i := 0; i < 3; i++ {
+		api("POST", "/api/diag/wifi/survey", &v)
+		if v.Survey == nil || v.Survey.State != wifiError || !strings.Contains(v.Survey.Message, "didn't answer in time") {
+			t.Fatalf("press %d: %+v", i, v.Survey)
+		}
+	}
+	if n := fp.WiFi.SurveyCalls(); n != 1 {
+		t.Errorf("%d survey calls behind a hung service, want 1", n)
+	}
+	fp.WiFi.SetSurvey(diag.WiFiSurvey{At: time.Now(), FreqMHz: 5180, Networks: 4}, nil)
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		api("POST", "/api/diag/wifi/survey", &v)
+		if v.Survey != nil && v.Survey.State == wifiOK && v.Survey.Survey.Networks == 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no survey after the service answered: %+v", v.Survey)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The link may give the center of an 80 MHz channel (5210 MHz for 36-48)
+// while the scan gives the access point's primary channel (5180): the load
+// still counts as the link's.
+func TestWiFiSurveyLoadOnWideChannel(t *testing.T) {
+	fp := newFake(t)
+	l := exampleLink(-58)
+	l.FreqMHz, l.Channel = ip(5210), ip(42)
+	fp.WiFi.SetLink(l, nil)
+	fp.WiFi.SetSurvey(diag.WiFiSurvey{At: time.Now(), FreqMHz: 5180, Networks: 6, Load: &diag.BSSLoad{Stations: 3, BusyPct: 64}}, nil)
+	srv, api := newWiFiServer(t, fp, nil)
+	var v wifiView
+	if code := api("POST", "/api/diag/wifi/survey", &v); code != 200 || v.Survey == nil || v.Survey.State != wifiOK {
+		t.Fatalf("survey: %d %+v", code, v.Survey)
+	}
+	if ev := srv.evidence(time.Now()); ev.WiFi == nil || ev.WiFi.BusyPct == nil || *ev.WiFi.BusyPct != 64 {
+		t.Errorf("load on the 80 MHz channel not used: %+v", ev.WiFi)
+	}
+}

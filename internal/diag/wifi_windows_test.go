@@ -15,7 +15,15 @@ func TestWLANWindowsNoAdmin(t *testing.T) {
 	switch {
 	case errors.Is(err, ErrNoWiFi), errors.Is(err, ErrWiFiDisconnected):
 		t.Logf("no connected Wi-Fi: %v", err)
-		if _, err := w.Tune(0); !errors.Is(err, ErrNoWiFi) && !errors.Is(err, ErrWiFiDisconnected) {
+		tu, err := w.Tune(0)
+		if tu != nil {
+			// The adapter connected in between: withdraw the votes at once.
+			if err := tu.Close(); err != nil {
+				t.Errorf("revert: %v", err)
+			}
+			t.Skip("the Wi-Fi connected during the test")
+		}
+		if !errors.Is(err, ErrNoWiFi) && !errors.Is(err, ErrWiFiDisconnected) {
 			t.Errorf("Tune without a connected Wi-Fi: %v", err)
 		}
 		if _, err := w.Survey(0); !errors.Is(err, ErrNoWiFi) && !errors.Is(err, ErrWiFiDisconnected) {

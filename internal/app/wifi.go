@@ -253,8 +253,10 @@ func (w *wifiWatch) signal() *diag.WiFiSignal {
 	w.mu.Lock()
 	sv := w.survey
 	w.mu.Unlock()
+	// The survey has the access point's primary channel; the link may give
+	// the center of its whole (40 to 320 MHz) channel.
 	if sv != nil && sv.Survey != nil && sv.Survey.Load != nil && time.Since(sv.At) < wifiSurveyFreshFor &&
-		v.Link.FreqMHz != nil && sv.Survey.FreqMHz == *v.Link.FreqMHz {
+		v.Link.FreqMHz != nil && diag.OnChannel(*v.Link.FreqMHz, v.Link.WidthMHz, sv.Survey.FreqMHz) {
 		b := sv.Survey.Load.BusyPct
 		s.BusyPct = &b
 	}
@@ -272,7 +274,17 @@ func (w *wifiWatch) runSurvey() *wifiSurveyView {
 	w.surveying = true
 	w.mu.Unlock()
 	index, _ := w.routeIndex()
-	s, err := withTimeout(w.surveyTimeout, func() (diag.WiFiSurvey, error) { return w.wlan.Survey(index) }, nil)
+	// surveying stays set until the system call itself returns, not just
+	// until the time limit: presses while the Wi-Fi service hangs don't
+	// pile up more blocked calls.
+	s, err := withTimeout(w.surveyTimeout, func() (diag.WiFiSurvey, error) {
+		defer func() {
+			w.mu.Lock()
+			w.surveying = false
+			w.mu.Unlock()
+		}()
+		return w.wlan.Survey(index)
+	}, nil)
 	sv := &wifiSurveyView{At: time.Now(), State: wifiOK}
 	if err != nil {
 		sv.State, sv.Message = wifiState(err)
@@ -283,7 +295,7 @@ func (w *wifiWatch) runSurvey() *wifiSurveyView {
 		sv.Survey = &s
 	}
 	w.mu.Lock()
-	w.survey, w.surveying = sv, false
+	w.survey = sv
 	w.mu.Unlock()
 	return sv
 }
@@ -370,20 +382,42 @@ func (t *wifiTuner) run() {
 			t.w.log.Warn("revert Wi-Fi scan pause", "err", err)
 		}
 	}
-	tu, err := withTimeout(t.w.callTimeout, func() (diag.WiFiTuning, error) { return t.w.wlan.Tune(t.index) }, revert)
-	if err != nil {
+	tune := func() (diag.WiFiTuning, error) {
+		return withTimeout(t.w.callTimeout, func() (diag.WiFiTuning, error) { return t.w.wlan.Tune(t.index) }, revert)
+	}
+	tick := time.NewTicker(t.w.refreshEvery)
+	defer tick.Stop()
+	tu, err := tune()
+	// A boost that starts while the Wi-Fi reconnects or roams gets the
+	// pause once the link is back: Tune is tried again on every tick.
+	logged := ""
+	for err != nil {
 		_, msg := wifiState(err)
-		if errors.Is(err, diag.ErrUnsupported) {
+		again := retryTune(err)
+		switch {
+		case errors.Is(err, diag.ErrUnsupported):
 			msg = "Pausing Wi-Fi scans isn't available on this system yet."
+		case again:
+			msg += " Lowpath tries again while the boost runs."
 		}
 		t.set(wifiTuneView{State: tuneFailed, Message: msg})
-		t.w.log.Info("Wi-Fi scan pause not applied", "err", err)
-		return
+		if err.Error() != logged { // a retry that fails the same way isn't logged again
+			t.w.log.Info("Wi-Fi scan pause not applied", "err", err, "retry", again)
+			logged = err.Error()
+		}
+		if !again {
+			return
+		}
+		select {
+		case <-t.stopCh:
+			t.set(wifiTuneView{State: tuneOff})
+			return
+		case <-tick.C:
+			tu, err = tune()
+		}
 	}
 	t.set(tuneView(tu.State()))
 	t.w.log.Info("Wi-Fi scans paused for the boost", "state", tu.State())
-	tick := time.NewTicker(t.w.refreshEvery)
-	defer tick.Stop()
 	for {
 		select {
 		case <-t.stopCh:
@@ -395,6 +429,14 @@ func (t *wifiTuner) run() {
 			t.set(tuneView(tu.Refresh()))
 		}
 	}
+}
+
+// retryTune says whether a failed Tune may succeed later in the boost: a
+// disconnect or a refusal can pass, an OS without the feature or a route
+// that isn't Wi-Fi can't, and after a timeout the hung call still holds a
+// goroutine, so no second one is started behind it.
+func retryTune(err error) bool {
+	return !errors.Is(err, diag.ErrUnsupported) && !errors.Is(err, diag.ErrNoWiFi) && !errors.Is(err, errWiFiTimeout)
 }
 
 // stop reverts the pause, waiting a little for it so the next boost

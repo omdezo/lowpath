@@ -19,12 +19,45 @@ func TestChannelOf(t *testing.T) {
 	}{
 		{2412, 1, "2.4"}, {2437, 6, "2.4"}, {2472, 13, "2.4"}, {2484, 14, "2.4"},
 		{5180, 36, "5"}, {5500, 100, "5"}, {5825, 165, "5"}, {5885, 177, "5"},
+		{4920, 184, "5"}, {4980, 196, "5"},
 		{5935, 2, "6"}, {5955, 1, "6"}, {6115, 33, "6"}, {7115, 233, "6"},
 		{0, 0, ""}, {2300, 0, ""}, {60480, 0, ""},
 	} {
 		ch, band := ChannelOf(c.mhz)
 		if ch != c.ch || band != c.band {
 			t.Errorf("ChannelOf(%d) = %d, %q; want %d, %q", c.mhz, ch, band, c.ch, c.band)
+		}
+	}
+}
+
+// A link may give its whole channel's center (5210 MHz for channels 36 to
+// 48 at 80 MHz) where a scan gives the primary channel (5180).
+func TestOnChannel(t *testing.T) {
+	w := func(v int) *int { return &v }
+	for _, c := range []struct {
+		link    int
+		width   *int
+		primary int
+		want    bool
+	}{
+		{5180, nil, 5180, true}, {5180, w(20), 5200, false}, {2437, nil, 2438, true},
+		{5210, w(80), 5180, true}, {5210, w(80), 5240, true}, {5210, w(80), 5260, false},
+		{5180, w(80), 5180, true}, {5190, w(40), 5180, true}, {5190, w(40), 5220, false},
+		{6185, w(160), 6115, true}, {6185, w(160), 6275, false},
+		{0, nil, 5180, false}, {5180, nil, 0, false},
+	} {
+		if got := OnChannel(c.link, c.width, c.primary); got != c.want {
+			t.Errorf("OnChannel(%d, %v, %d) = %v", c.link, c.width, c.primary, got)
+		}
+	}
+}
+
+// From the location rule's build on, a background poll never uses the
+// current_connection query (it would show Windows' location prompt).
+func TestPollsMayQueryConnection(t *testing.T) {
+	for build, want := range map[uint32]bool{0: false, 19045: true, 22631: true, 25975: true, 25976: false, 26100: false, 26200: false} {
+		if got := pollsMayQueryConnection(build); got != want {
+			t.Errorf("build %d: %v, want %v", build, got, want)
 		}
 	}
 }
