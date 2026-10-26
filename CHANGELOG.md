@@ -49,10 +49,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 
 ### Fixed
 - Settings → Network: a slow first RIPEstat reply no longer leaves the ISP
-  unknown. A `network-info` request with no answer after 2.5 s gets a second
-  copy on a fresh connection (first answer wins), a lookup spoiled by a
-  timeout isn't cached, and the pane asks once more a few seconds later
-  (#112).
+  unknown. A registry request with no answer after 2.5 s (or a 502) gets a
+  second copy on a fresh connection and the first answer wins; a lookup
+  spoiled by a timeout is kept for 3 s instead of 30 s, and the pane asks
+  once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
   the generated `ui/dist` output doesn't count as an uncommitted change.
 

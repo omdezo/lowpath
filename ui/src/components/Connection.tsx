@@ -29,33 +29,63 @@ export function network(e?: Endpoint | null): string {
   return name ? `${name} (AS${e.asn})` : `AS${e.asn}`;
 }
 
+// The longest wait for an automatic second lookup; a larger hint is ignored.
+const MAX_RETRY_S = 30;
+
 // Connection shows where the user is on the internet: the place, ISP and AS
 // of their public address, looked up when the pane opens. It never guesses:
 // anything unknown is shown as "—" with the reason.
+//
+// When the ISP is unknown only because the registry was slow (the server
+// sets retry_after_s), the card asks once more by itself after that wait,
+// without refresh so the server's cache decides. It does that at most once
+// per lookup the user started, so a registry that stays down is not polled.
 export function Connection() {
   const [loc, setLoc] = useState<NetLocation | null>(null);
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [err, setErr] = useState("");
   const alive = useRef(true);
+  const retryTimer = useRef<number | undefined>(undefined);
 
-  const load = useCallback(async (refresh: boolean) => {
-    setBusy(true);
-    setErr("");
-    try {
-      const l = await api.location(refresh);
-      if (alive.current) setLoc(l);
-    } catch (e) {
-      if (alive.current) setErr(e instanceof Error && e.message ? e.message : "The lookup failed.");
-    } finally {
-      if (alive.current) setBusy(false);
-    }
+  const cancelRetry = useCallback(() => {
+    window.clearTimeout(retryTimer.current);
+    retryTimer.current = undefined;
+    setRetrying(false);
   }, []);
+
+  const load = useCallback(
+    async (refresh: boolean, auto = false) => {
+      cancelRetry();
+      setBusy(true);
+      setErr("");
+      try {
+        const l = await api.location(refresh);
+        if (!alive.current) return;
+        setLoc(l);
+        const wait = l.retry_after_s ?? 0;
+        if (!auto && wait > 0 && wait <= MAX_RETRY_S) {
+          setRetrying(true);
+          retryTimer.current = window.setTimeout(() => {
+            retryTimer.current = undefined;
+            if (alive.current) load(false, true);
+          }, wait * 1000 + 500);
+        }
+      } catch (e) {
+        if (alive.current) setErr(e instanceof Error && e.message ? e.message : "The lookup failed.");
+      } finally {
+        if (alive.current) setBusy(false);
+      }
+    },
+    [cancelRetry],
+  );
 
   useEffect(() => {
     alive.current = true;
     load(false);
     return () => {
       alive.current = false;
+      window.clearTimeout(retryTimer.current);
     };
   }, [load]);
 
@@ -65,9 +95,10 @@ export function Connection() {
   const isp = network(main);
   const headline = !loc ? (busy ? "Looking up your connection…" : "—") : where || isp ? [where, isp].filter(Boolean).join(" · ") : "—";
   const reason = err || (loc && loc.state !== "ok" ? loc.message : "") || (main?.partial ? cap(main.partial) + "." : "");
+  const again = retrying || (busy && !!loc?.retry_after_s);
 
   return (
-    <div className="setting connection" aria-busy={busy} data-testid="connection">
+    <div className="setting connection" aria-busy={busy || retrying} data-testid="connection">
       <span className="muted">
         <Globe size={18} />
       </span>
@@ -83,7 +114,10 @@ export function Connection() {
         {reason && (
           <div className="note-warn">
             <AlertTriangle size={14} />
-            <span>{reason}</span>
+            <span>
+              {reason}
+              {again && " Trying again…"}
+            </span>
           </div>
         )}
         <div className="d">
