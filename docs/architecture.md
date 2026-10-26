@@ -52,6 +52,17 @@ next is in the [roadmap](roadmap.md).
   number `dedup.RestartGap` (4 × window) or more behind its newest one as a
   new sender (relay restart, egress failover) and starts over instead of
   rejecting it as too old.
+- `TStats` (type 4, egress → client, `internal/tstats`): about once a second
+  the egress sends each live return address of a flow that settled new
+  numbers a report of the flow's upstream lanes (header: the data flow's
+  id and token, `seq` = report counter, `ts` = relay clock, `addr` = game
+  server). Payload (version 1, big endian): `self` (the lane this copy went
+  down, so the client maps lanes to its paths), direction, cumulative
+  `seqs` / `lost` (numbers no lane delivered), per lane `{index, id,
+  expected, lost, late, n00, n01, n10, n11, jitter_us}` and per lane pair
+  `{a, b, both, lost_a, lost_b, joint}`; at most 813 bytes. Counters are
+  cumulative, as in RTCP receiver reports, so a lost report loses nothing;
+  `tstats.Stats.Since` takes a window. Older clients ignore the type.
 
 ## Platform layer — `internal/platform`, `internal/owner`
 
@@ -588,6 +599,28 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   (first ping immediately, then every PingInterval ≈ 1 s) while it is in use
   (forget after 30 s idle); smoothed RTT (EWMA); unknown after 3 misses.
 - Probe replies carry `proto.AppendServerRTT`.
+- Lane statistics (`internal/tstats`, roadmap L1): each return address of a
+  flow is a lane (slot 0..7; a slot freed by a forgotten address gets a new
+  lane id). A `tstats.Tracker` per flow keeps a 1024-number delivery
+  bitmap of which lanes delivered each upstream copy, duplicates included.
+  A number settles 250 ms after its first copy (or, if none came, after a
+  later number's), once every lane has moved past it or been silent for
+  1 s. A lane counts as carrying the numbers from its first copy to its
+  newest one, so a lane the client adds or drops isn't charged for numbers
+  it was never sent; a lane silent for more than 1 s is taken as dropped,
+  not as losing (the relay can't tell, until protocol v3's `path_id`).
+  From that come per-lane loss `p_A`, joint loss `p_AB` and `ρ = p_AB /
+  (p_A·p_B)` per pair (the redundancy policy's ρ: 1 = independent, above 5
+  = shared loss), Pearson `φ`, the Gilbert estimates `p01 = n01/(n00+n01)`
+  and `p10 = n10/(n10+n11)` (mean burst `1/p10`), late copies (more
+  than 250 ms after their number's first copy, even while settling waits
+  for a lane; counted lost), and RFC 3550 interarrival jitter per lane
+  (`J += (|D| − J)/16`, in arrival order; the client stamps whole
+  milliseconds, so a steady path still reads a few hundred microseconds).
+  `Options.StatsInterval` (default 1 s, negative = off) paces the `TStats`
+  reports; a quiet flow sends none. `Stats` adds `seqs_settled`,
+  `seqs_missing` and `tstats_sent`. Downstream lanes are the client's to
+  measure with the same `Tracker` (L11).
 - `cmd/relay` flags: `-listen :40000`, `-key` (or env `LOWPATH_RELAY_KEY`),
   `-forward host:port` (forwarder hop), `-allow-private`, `-stats 60s`
   (periodic log of flows/packets/drops).
@@ -607,7 +640,9 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   Windows' built-in `ssh`/`scp`; uploads `dist/relay-linux-amd64` or
   `-arm64`; prints the address + key to paste into Lowpath).
 - Tests: wrong token dropped, private destination blocked, probe reply carries
-  the (fake) pinger's RTT, open relay still works, the limits above.
+  the (fake) pinger's RTT, open relay still works, the limits above, and
+  `TStats` counts through two netsim lanes on IPv4 and IPv6 loopback
+  matching the links' seeded losses.
 
 ## Location and ISP — `internal/stun`, `internal/diag`
 

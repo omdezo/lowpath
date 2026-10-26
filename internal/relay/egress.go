@@ -4,7 +4,9 @@
 // replies back down every path the client is currently using.
 //
 // It also pings every game server it delivers to and answers path probes with
-// that relay->server RTT, so clients can show the full route latency.
+// that relay->server RTT, so clients can show the full route latency, and
+// keeps per-lane delivery statistics of each flow (which return address
+// delivered which sequence numbers), sent to the client once a second.
 //
 // Forwarder is the other kind of relay: a hop in front of an egress that
 // gives clients another route to it.
@@ -24,6 +26,7 @@ import (
 	"lowpath/internal/dedup"
 	"lowpath/internal/icmp"
 	"lowpath/internal/proto"
+	"lowpath/internal/tstats"
 )
 
 // A return address gets replies while it is no more than this much older than
@@ -34,6 +37,9 @@ const pathTTL = 3 * time.Second
 // is capped: unbounded, one client could aim the relay at any number of
 // spoofed sources. A client sends at most 4 copies of a packet.
 const maxPaths = 8
+
+// Each return address is a lane of the flow's statistics.
+var _ [tstats.MaxLanes - maxPaths]struct{} // maxPaths <= tstats.MaxLanes
 
 // Flows without upstream packets for this long are torn down.
 const flowTTL = 60 * time.Second
@@ -69,6 +75,9 @@ type Options struct {
 	Ping func(dst netip.Addr, timeout time.Duration) (time.Duration, error)
 	// PingInterval is the time between pings to one server (default 1s).
 	PingInterval time.Duration
+	// StatsInterval is the time between a flow's lane statistics reports
+	// (TStats) to its client (default 1s; negative = never).
+	StatsInterval time.Duration
 }
 
 // Stats are cumulative counters since the relay started (Flows and Servers
@@ -85,6 +94,11 @@ type Stats struct {
 	LimitDrops  uint64 `json:"limit_drops"`  // data refused because maxFlows was reached
 	TooBig      uint64 `json:"too_big"`      // game server packets over maxDatagram, dropped
 	Malformed   uint64 `json:"malformed"`    // not a valid overlay packet
+	// Upstream lane statistics: sequence numbers settled (some lane was
+	// carrying them), the ones no lane delivered, and TStats reports sent.
+	Settled uint64 `json:"seqs_settled"`
+	Missing uint64 `json:"seqs_missing"`
+	Reports uint64 `json:"tstats_sent"`
 }
 
 type Egress struct {
@@ -92,6 +106,7 @@ type Egress struct {
 	log          *slog.Logger
 	token        uint64 // expected header token; 0 = open relay
 	allowPrivate bool
+	statsEvery   time.Duration // 0 = no TStats reports
 	mon          *monitor
 	self         atomic.Pointer[addrSet]
 
@@ -105,6 +120,7 @@ type Egress struct {
 
 	packetsUp, packetsDown, duplicates, probes          atomic.Uint64
 	tokenDrops, policyDrops, limitDrops, tooBig, broken atomic.Uint64
+	settled, missing, reports                           atomic.Uint64
 }
 
 type flow struct {
@@ -119,6 +135,13 @@ type flow struct {
 	paths    map[netip.AddrPort]time.Time // client-side return addresses
 	lastSeen time.Time                    // last upstream packet
 	lastDown time.Time                    // last packet from the game server; zero = never
+
+	// Upstream lane statistics: each return address is a lane.
+	lanes    map[netip.AddrPort]int
+	used     uint8 // lane slots taken
+	lanesUp  tstats.Tracker
+	reports  uint32 // TStats reports sent (their header seq)
+	reported tstats.Stats
 }
 
 // ListenEgress binds an open egress relay on addr (e.g. ":40000") that may
@@ -150,11 +173,19 @@ func ListenEgressOpts(addr string, o Options, log *slog.Logger) (*Egress, error)
 	if interval <= 0 {
 		interval = time.Second
 	}
+	statsEvery := o.StatsInterval
+	switch {
+	case statsEvery == 0:
+		statsEvery = time.Second
+	case statsEvery < 0:
+		statsEvery = 0
+	}
 	e := &Egress{
 		conn:         c,
 		log:          log,
 		token:        proto.TokenFromKey(o.Key),
 		allowPrivate: o.AllowPrivate,
+		statsEvery:   statsEvery,
 		mon:          newMonitor(ping, interval),
 		flows:        map[uint64]*flow{},
 		start:        time.Now(),
@@ -194,6 +225,9 @@ func (e *Egress) Stats() Stats {
 		LimitDrops:  e.limitDrops.Load(),
 		TooBig:      e.tooBig.Load(),
 		Malformed:   e.broken.Load(),
+		Settled:     e.settled.Load(),
+		Missing:     e.missing.Load(),
+		Reports:     e.reports.Load(),
 	}
 }
 
@@ -206,6 +240,9 @@ func (e *Egress) Serve(ctx context.Context) error {
 		e.Close()
 	}()
 	go e.gcLoop(ctx)
+	if e.statsEvery > 0 {
+		go e.statsLoop(ctx)
+	}
 
 	buf := make([]byte, 65535)
 	out := make([]byte, 0, 65535)
@@ -274,9 +311,14 @@ func (e *Egress) data(h proto.Header, payload []byte, src netip.AddrPort) {
 		return
 	}
 	f.mu.Lock()
-	f.addPath(src, now)
+	lane := f.addPath(src, now)
 	f.lastSeen = now
 	first := f.up.Accept(h.Seq)
+	if lane >= 0 {
+		// Every copy counts here, duplicates included: which lanes
+		// delivered a number is what the statistics are about.
+		f.lanesUp.Add(lane, h.Seq, h.TS, now.Sub(e.start))
+	}
 	f.mu.Unlock()
 	if !first {
 		e.duplicates.Add(1)
@@ -326,8 +368,10 @@ func (e *Egress) getFlow(id, token uint64, dst netip.AddrPort, now time.Time) *f
 		id: id, token: token, dst: dst, upstream: up,
 		// A random start keeps a restarted relay's numbers clear of the ones
 		// the client's dedup window still holds from before the restart.
-		downSeq: rand.Uint32(),
-		paths:   map[netip.AddrPort]time.Time{}, lastSeen: now,
+		downSeq:  rand.Uint32(),
+		paths:    map[netip.AddrPort]time.Time{},
+		lanes:    map[netip.AddrPort]int{},
+		lastSeen: now,
 	}
 	e.flows[id] = f
 	e.log.Info("flow open", "flow", id, "dst", dst)
@@ -364,21 +408,42 @@ func (e *Egress) reclaimLocked(now time.Time) {
 	}
 }
 
-// addPath records src as a return address for the flow. Past maxPaths, stale
-// addresses make room; if none is stale, src still reaches the game server
-// but gets no replies. f.mu must be held.
-func (f *flow) addPath(src netip.AddrPort, now time.Time) {
-	if _, ok := f.paths[src]; !ok && len(f.paths) >= maxPaths {
-		for a, t := range f.paths {
-			if now.Sub(t) >= pathTTL {
-				delete(f.paths, a)
+// addPath records src as a return address for the flow and returns its
+// lane. Past maxPaths, stale addresses make room; if none is stale, src
+// still reaches the game server but gets no replies and no lane (-1).
+// f.mu must be held.
+func (f *flow) addPath(src netip.AddrPort, now time.Time) int {
+	if _, ok := f.paths[src]; !ok {
+		if len(f.paths) >= maxPaths {
+			for a, t := range f.paths {
+				if now.Sub(t) >= pathTTL {
+					f.dropPath(a)
+				}
+			}
+			if len(f.paths) >= maxPaths {
+				return -1
 			}
 		}
-		if len(f.paths) >= maxPaths {
-			return
+		for i := range maxPaths {
+			if f.used&(1<<i) == 0 {
+				f.used |= 1 << i
+				f.lanes[src] = i
+				break
+			}
 		}
 	}
 	f.paths[src] = now
+	return f.lanes[src]
+}
+
+// dropPath forgets a return address and its lane. f.mu must be held.
+func (f *flow) dropPath(a netip.AddrPort) {
+	delete(f.paths, a)
+	if i, ok := f.lanes[a]; ok {
+		delete(f.lanes, a)
+		f.used &^= 1 << i
+		f.lanesUp.Close(i)
+	}
 }
 
 // replyTargets appends the addresses that get the flow's replies: the ones
@@ -471,7 +536,7 @@ func (e *Egress) expireFlows(now time.Time) {
 		idle := quiet > flowTTL || f.lastDown.IsZero() && quiet > quietTTL
 		for a, seen := range f.paths {
 			if now.Sub(seen) > flowTTL {
-				delete(f.paths, a)
+				f.dropPath(a)
 			}
 		}
 		f.mu.Unlock()
@@ -479,6 +544,60 @@ func (e *Egress) expireFlows(now time.Time) {
 			f.upstream.Close()
 			delete(e.flows, id)
 			e.log.Info("flow closed", "flow", id)
+		}
+	}
+}
+
+// statsLoop sends every flow's upstream lane statistics to its client.
+func (e *Egress) statsLoop(ctx context.Context) {
+	t := time.NewTicker(e.statsEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			e.sendStats(now)
+		}
+	}
+}
+
+// sendStats sends each flow that settled new numbers since its last
+// report a TStats packet down every live return address. Each copy names
+// the lane it goes down, which is how the client learns which of its
+// paths each lane is: the relay only knows the addresses they come from.
+func (e *Egress) sendStats(now time.Time) {
+	e.mu.Lock()
+	flows := make([]*flow, 0, len(e.flows))
+	for _, f := range e.flows {
+		flows = append(flows, f)
+	}
+	e.mu.Unlock()
+	at := now.Sub(e.start)
+	var targets []netip.AddrPort
+	var buf []byte
+	for _, f := range flows {
+		f.mu.Lock()
+		s := f.lanesUp.Report(at)
+		if s.Seqs == f.reported.Seqs {
+			f.mu.Unlock()
+			continue // nothing new: a quiet flow sends nothing
+		}
+		e.settled.Add(uint64(s.Seqs - f.reported.Seqs))
+		e.missing.Add(uint64(s.Lost - f.reported.Lost))
+		f.reported = s
+		f.reports++
+		h := proto.Header{Type: proto.TStats, Token: f.token, Flow: f.id, Seq: f.reports, TS: uint32(at.Milliseconds()), Addr: f.dst}
+		targets = f.replyTargets(targets[:0])
+		lanes := make([]int, len(targets))
+		for i, a := range targets {
+			lanes[i] = f.lanes[a]
+		}
+		f.mu.Unlock()
+		for i, a := range targets {
+			buf = s.Append(proto.Append(buf[:0], h, nil), lanes[i])
+			e.conn.WriteToUDPAddrPort(buf, a)
+			e.reports.Add(1)
 		}
 	}
 }

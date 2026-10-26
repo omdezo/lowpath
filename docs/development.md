@@ -166,12 +166,13 @@ internal/capture   capture backend contract; per-process UDP capture with WinDiv
 internal/netlink   netlink messages without cgo: rtnl (links, addresses, routes, rules), nft (nftables), sockdiag (TCP sockets with tcp_info)
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
 internal/engine    client: multipath send, dedup, probes, path selection, fallback
-internal/relay     egress relay: token check, dedup, deliver, server-leg ping
+internal/relay     egress relay: token check, dedup, deliver, server-leg ping, lane statistics (TStats)
 internal/proto     overlay framing {type, token, flow, seq, ts, addr}
 internal/icmp      ICMP echo and TTL-limited echo (IP Helper on Windows, raw socket, else ping socket (Linux) or datagram ICMP socket (macOS))
 internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
 internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
+internal/tstats    per-lane delivery bitmap: lane and joint loss, ρ, Gilbert p01/p10, RFC 3550 jitter; the TStats payload
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
 internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters and per-connection TCP bytes per OS
 internal/demo      simulated topology + game traffic generator (-demo)
@@ -200,6 +201,17 @@ go test ./...
   (3% loss in 8 ms bursts) losing both copies together, and how much a time
   shift between them helps (under 3x at 8 ms, 5x from 13 ms, 11x at 20 ms); real links on
   IPv4 and IPv6 loopback behind a segment that fades and heals.
+- **Lane statistics (`internal/tstats`, `internal/relay`):** the delivery
+  bitmap's rules case by case (reordering within 250 ms, late copies,
+  lanes joining, bursting, stopping and coming back, wrap-around, a
+  sender starting over, ring overflow, slot reuse), RFC 3550 jitter by hand,
+  and the wire format. With `netsim.Sampler` and fixed seeds, 200,000
+  packets per case: the counts equal the run's ground truth exactly, and
+  the estimates match the models (lane loss, p01, p10, mean burst, p_AB;
+  ρ about 30 for copies sent at once behind a shared Wi-Fi-like hop, about
+  10 one burst apart, about 1 on separate hops; jitter 2σ/√π for normal
+  delays). Through a real egress and two netsim links on IPv4 and IPv6
+  loopback, the `TStats` reports match the links' seeded losses.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
   and the socket owner table — all without admin rights. The fail-open
