@@ -98,6 +98,8 @@ type Config struct {
 	// end-to-end run); zero: 200 probes per hop, one per second.
 	TraceCount    int
 	TraceInterval time.Duration
+	// GatewayInterval is the router pinger's interval; zero: 50 ms (20 Hz).
+	GatewayInterval time.Duration
 }
 
 // ServerLists is the catalog of known game servers (catalog.ValveServers).
@@ -131,7 +133,8 @@ type Server struct {
 	// full-tunnel VPNs (internal/compat).
 	conflicts *conflictWatch
 	verdict   *verdicts
-	marker    SessionMarker // nil: none
+	gateway   *diag.GatewayPinger // router pings for Diagnostics and the verdict
+	marker    SessionMarker       // nil: none
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -248,6 +251,10 @@ func NewServer(cfg Config) (*Server, error) {
 		ping: cfg.PingTTL, names: cfg.Names, net: cfg.NetStats, store: cfg.Store, log: cfg.Log.With("component", "trace"),
 		count: cfg.TraceCount, interval: cfg.TraceInterval,
 	}
+	s.gateway = newGatewayPinger(cfg, s)
+	// Idle until the Diagnostics tab asks or a boost starts; ends with
+	// the server's lifetime.
+	go s.gateway.Run(life)
 	s.conflicts = newConflictWatch(cfg.Platform, life, cfg.Log.With("component", "conflicts"))
 	s.recoverLeftover()
 	s.current = newCurrentServers(cfg.Platform.Flows, cfg.Platform.Owners, cfg.ServerLookup, cfg.Locator, cfg.Ping, cfg.Store, life, cfg.Log.With("component", "current-server"))
@@ -421,6 +428,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/diag/trace", s.handleStartTrace)
 	mux.HandleFunc("DELETE /api/diag/trace", s.handleStopTrace)
 	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
+	mux.HandleFunc("GET /api/diag/gateway", s.handleGateway)
 	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
 	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
@@ -778,6 +786,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"route_trace":  s.lastTrace(),                    // addresses cut to /24 and /48
 		"conflicts":    s.conflicts.current().Redacted(), // user folder names cut out
 		"verdict":      s.diagnosis(),
+		"gateway":      s.gateway.View().Redacted(),
 		"live":         live,
 	})
 }
