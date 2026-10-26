@@ -38,6 +38,7 @@ import (
 	"lowpath/internal/app"
 	"lowpath/internal/capture"
 	"lowpath/internal/catalog"
+	"lowpath/internal/compat"
 	"lowpath/internal/demo"
 	"lowpath/internal/diag"
 	"lowpath/internal/platform"
@@ -52,6 +53,7 @@ type options struct {
 	waitPID                int
 	traceCount             int
 	traceInterval          time.Duration
+	compatInventory        string
 }
 
 func main() {
@@ -67,9 +69,15 @@ func main() {
 	flag.StringVar(&o.bloatServer, "bloat-server", "", "load server for the bufferbloat test (default "+diag.DefaultLoadURL+"); it must answer GET /__down?bytes=N and POST /__up")
 	flag.IntVar(&o.traceCount, "trace-count", 0, "probes per hop in a route trace (default 200; for tests)")
 	flag.DurationVar(&o.traceInterval, "trace-interval", 0, "time between probes to one hop in a route trace (default 1s; for tests)")
+	flag.StringVar(&o.compatInventory, "compat-inventory", "", "read the other network software (boosters, drivers, VPN adapters) from this JSON file instead of the system (for tests)")
 	flag.IntVar(&o.waitPID, "wait-pid", 0, "wait for this process to exit before starting (used when restarting elevated)")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
+	if o.compatInventory != "" {
+		// The end-to-end test plays "ExitLag is running" on any PC, and the
+		// real system's software doesn't change its results.
+		plat.Inventory = compat.NewFileSystem(o.compatInventory)
+	}
 
 	if err := run(o, plat); err != nil {
 		slog.Error("fatal", "err", err)

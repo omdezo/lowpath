@@ -72,6 +72,7 @@ type Platform struct {
     Icons      IconProvider
     Paths      Paths
     Flows      FlowWatcher
+    Inventory  SystemInventory // = compat.System
 }
 type Privileges interface {
     Elevated() bool                // administrator (Windows) or root
@@ -107,6 +108,7 @@ type Paths interface {
 | Games, Icons | `detect.System`: Toolhelp32, Steam under Program Files, exe icons | `detect.System` over `owner.Table` (every name a process goes by: short name, program file, argv[0], so Proton games match their `.exe`); Steam (native, Flatpak, Snap; `~/Library/Application Support/Steam`), Wine prefixes (Proton `compatdata`, Lutris, Heroic, Bottles, CrossOver, Whisky, `~/.wine`), Legendary installs; no icons yet |
 | Paths | `%APPDATA%\Lowpath`, `%LOCALAPPDATA%\Lowpath`; driver in `FOLDERID_ProgramFiles\Lowpath\driver` | `os.UserConfigDir`/`UserCacheDir` + `Lowpath` (XDG, `~/Library/...`); no driver |
 | Flows | `detect.KernelNetwork`: ETW real-time session on Microsoft-Windows-Kernel-Network (needs administrator rights) | `ErrUnsupported` (#43) |
+| Inventory | `compat.NewSystem`: service manager list (`SC_MANAGER_ENUMERATE_SERVICE`), registry Uninstall and service keys, `GetAdaptersAddresses`, the internet route from `diag.NetStats`; no admin rights | processes, `net.Interfaces` and the route; services and installed programs `ErrUnsupported` (the boosters are Windows programs) |
 
 Rules: a part not built for an OS fails with an error matching
 `errors.ErrUnsupported` (`divert.ErrUnsupported` matches it too) and the API
@@ -275,6 +277,47 @@ captures the test's UDP to 192.0.2.1 and swallows it, the test kills it
 (`Process.Kill` is `TerminateProcess`, as `taskkill /F`) or lets its
 handler deadlock, and a lower-priority sniffing handle must see the packets
 leave within 1 s.
+
+### Conflicts with other boosters and VPNs (C7) — `internal/compat`
+
+Two programs rerouting the same packets fight over them, and a silent
+capture failure next to ExitLag looks like Lowpath's fault. Lowpath never
+fights another driver for the game's packets: it names what is in the way
+and says what to do.
+
+`compat.Detector.Scan(ctx)` reads a `compat.System` (the platform's
+`Inventory`) part by part and returns a `Report{at, conflicts, unchecked}`:
+
+| What | Found from | Level |
+|---|---|---|
+| Game boosters: ExitLag, NoPing, WTFast, Mudfish, LagoFast, GearUP, Haste, Pingzapper, Battleping, Kill Ping, Outfox | process name (normalized: "ExitLag.exe" contains "exitlag"; short names such as `haste` match whole names only), service name or display name, Uninstall `DisplayName` | process running: `block`; only its service running: `warn`; installed: `info` |
+| WinDivert tools: clumsy | process | `block` (it degrades packets on purpose) |
+| WinDivert tools: GoodbyeDPI, zapret (`winws.exe`) | process, service | `warn` (they change web traffic, not usually game UDP) |
+| Windows Packet Filter (WinpkFilter), the NDIS filter ExitLag and NoPing install | service `ndisrd`, Uninstall entry | loaded: `warn`; installed: `info`, with how to uninstall it |
+| WinDivert loaded by another program | a running service named `WinDivert*` whose `ImagePath` is outside Lowpath's driver folders (`Paths.DriverDirs`) | `warn` |
+| A VPN carrying all traffic | the adapter that carries traffic to a public address (Windows: `GetBestInterfaceEx` through `diag.NetStats`; Linux and macOS: `compat.EgressRoute`, the interface owning the source address the kernel picks for a connected UDP socket, which sends nothing, falling back to the `0/0` route) is a VPN; this catches `0/0`, OpenVPN/WireGuard `0/1`+`128/1` and wg-quick's policy routing alike is a VPN: brand words in its name or description (NordLynx → NordVPN, TAP-Windows → OpenVPN, WireGuard, AnyConnect, ...), IANA type PPP/virtual/tunnel, or `tun*`/`wg*`/`utun*` on Linux and macOS; PPPoE, Teredo and ISATAP are not VPNs | `warn`; a split tunnel or a VPN that isn't up is no conflict |
+
+Each conflict carries `found` (the evidence), `action` (one sentence) and
+`why` (the "Why?" text). A part that can't be read goes to `unchecked` with
+the reason; a part the OS doesn't have (`errors.ErrUnsupported`) is skipped
+quietly; offline is no failure.
+
+In the app (`internal/app/conflicts.go`) a `conflictWatch` scans every 15 s
+and on demand, one scan at a time; callers wait at most 3 s and otherwise
+get the last report with a note, and a panic in an OS call becomes an
+`unchecked` line. A missing or stale report never blocks anything (fail
+open): Boost is refused only on a scan that finished while it waited. An OS
+call that never returns can't be ended; the 30 s limit only cuts the
+remaining steps short, and the next scan starts once the call returns.
+`POST /api/apply` in route mode checks first, before the rights check,
+since restarting as administrator wouldn't help, and answers 409
+`conflict` with the blocking conflicts unless `ignore_conflicts` is set
+(the UI's "Boost anyway"). Warnings and proxy mode never block. A capture
+that fails to start names the running conflicts in its message.
+
+`lowpath -compat-inventory file.json` reads a `compat.Inventory` from a
+file instead of the system (read again at every scan, missing file = empty
+and offline), so the end-to-end test plays "ExitLag is running" on any PC.
 
 ## Engine — capture mode
 
@@ -713,6 +756,7 @@ Game view adds `"custom": bool` and keeps `"processes": string[]`.
 | DELETE | /api/games/custom/{id} | | `{ok: true}` |
 | POST | /api/elevate | | `{ok: true}` then the app restarts elevated |
 | GET | /api/location[?refresh=1] | | `{state, message, at, ipv4, ipv6, ipv6_note, retry_after_s}`; each address `{ip, source, asn, asns, holder, as_name, isp, prefix, country, city, partial, lookup_error}` or null. 504 `location_timeout` |
+| GET | /api/conflicts[?fresh=1] | | `{at, conflicts: [{id, name, kind: "booster"\|"packet_tool"\|"packet_filter"\|"vpn", level: "block"\|"warn"\|"info", found, action, why}], unchecked}`, worst first; `fresh=1` scans again (waits at most 3 s) |
 | GET | /api/games/{id}/servers | | `ServerList` (below); starts a download/ping round when due |
 | POST | /api/games/{id}/servers/ping | | `ServerList`; pings every POP again now |
 
@@ -741,9 +785,13 @@ line_down_mbps, line_up_mbps, line_source}`). The snapshot adds
 "stopped"|"recovered", game_id, game, message, detail}` is the last boost
 that ended without the user asking (see Capture → Fail-open), until the
 next Boost or `DELETE /api/failsafe` (Dismiss), which returns the live view.
-Session adds `"capture_mode"`.
+`"conflicts": null | Report` is the last conflict scan (as `GET
+/api/conflicts`). Session adds `"capture_mode"`. Apply takes
+`"ignore_conflicts": bool`.
 
-New error kinds: `needs_admin` (409), `no_relays` (409), `capture_failed` (500),
+New error kinds: `needs_admin` (409), `no_relays` (409), `conflict` (409, with
+`conflicts`: the programs to close first), `capture_failed` (500, with
+`conflicts` when one is running),
 `unsupported` (501: route mode, the process list or the restart on a system
 without that part yet), `unauthorized` (401).
 
@@ -773,6 +821,14 @@ prints that URL to stderr only, never to the log.
   loopback test relay) instead of a broken Apply.
 - Route mode without admin → banner with **Restart as administrator**
   (`POST /api/elevate`).
+- `live.conflicts` → a banner above every page: running ones in red
+  (`block`) or amber (`warn`), "<name> is running." + the action + a
+  **Why?** that unfolds the explanation and the evidence; installed-only
+  ones as a quiet note that can be dismissed until the list changes. A
+  refused Boost says so under the button with **Boost anyway**; it goes
+  once the program is closed. Settings → Network: **Other network
+  software** lists everything found, what couldn't be checked, and
+  **Check again**.
 - Optimizing in route mode: "Waiting for game traffic — launch the game now"
   until packets flow; then the **Game servers** list (addr, primary, up/down
   packets) and capture counters. Proxy mode keeps the existing
@@ -816,7 +872,9 @@ prints that URL to stderr only, never to the log.
 
 ## Known limitations
 
-UDP over IPv4 only (TCP/IPv6 go direct). Some anti-cheats (Vanguard, FACEIT)
+UDP over IPv4 only (TCP/IPv6 go direct). The conflict detector knows the
+boosters by name: a renamed or new one is missed until it is added to
+`internal/compat/products.go`. Some anti-cheats (Vanguard, FACEIT)
 may refuse to run alongside the WinDivert driver. Unsigned exe → SmartScreen
 warning. Real benefit needs relays on well-peered servers near the game's
 datacenter; the loopback relay only proves the pipeline.

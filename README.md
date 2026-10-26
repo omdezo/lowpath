@@ -42,6 +42,7 @@ paths at once** so a loss on one path never reaches you, and shows you
 | **Multipath + duplication** | Each packet travels several relay paths; the first copy wins, so one bad path can't cause a spike. |
 | **Smart route selection** | Paths are ranked by ping, jitter and loss; degraded routes are swapped out, dead ones replaced instantly. |
 | **Kill switch** | If every route fails, block the game's traffic or fall back to the direct route — your choice. |
+| **Plays fair with other tools** | ExitLag, NoPing and other boosters, leftover packet filter drivers and full-tunnel VPNs are named with what to do; Lowpath never fights another driver for your game's packets. |
 | **Fails open** | If Lowpath hangs, crashes or is killed mid-match, the game goes back to your normal connection within a second, and Lowpath tells you what happened. |
 | **Honest measurements** | Before = your direct ping to the real game server. After = relay path + the relay's own ping to the server. No made-up numbers. |
 | **"Why am I lagging?"** | Settings → Diagnostics turns the tests below and your last boost into one verdict (your Wi-Fi, a full line, the ISP's route, the game server, or "already optimal: Lowpath isn't needed"), with a confidence level and the measurements behind it. Exports a text report with addresses cut to /24. |

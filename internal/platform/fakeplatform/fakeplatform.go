@@ -19,7 +19,9 @@ import (
 	"sync/atomic"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/compat"
 	"lowpath/internal/detect"
+	"lowpath/internal/diag"
 	"lowpath/internal/owner"
 	"lowpath/internal/platform"
 )
@@ -35,6 +37,7 @@ type Fake struct {
 	Icons      *Icons
 	Paths      *Paths
 	Flows      *Flows
+	Inventory  *Inventory
 }
 
 // New makes a fake platform that reports the host's OS name and keeps its
@@ -50,6 +53,7 @@ func New(dir string) *Fake {
 		Icons:      &Icons{},
 		Paths:      &Paths{dir: dir},
 		Flows:      &Flows{},
+		Inventory:  &Inventory{},
 	}
 }
 
@@ -57,8 +61,75 @@ func New(dir string) *Fake {
 func (f *Fake) Platform() *platform.Platform {
 	return &platform.Platform{
 		OS: f.OS, Capture: f.Capture, Owners: f.Owners, Privileges: f.Privileges,
-		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows,
+		Games: f.Games, Icons: f.Icons, Paths: f.Paths, Flows: f.Flows, Inventory: f.Inventory,
 	}
+}
+
+// Inventory is the other network software the test says is there. It starts
+// empty and offline: no conflicts.
+type Inventory struct {
+	mu   sync.Mutex
+	inv  compat.Inventory
+	errs map[string]error
+	hang chan struct{}
+}
+
+// Set replaces the inventory.
+func (i *Inventory) Set(inv compat.Inventory) { i.mu.Lock(); i.inv = inv; i.mu.Unlock() }
+
+// SetErr makes one part fail ("processes", "services", "programs",
+// "adapters" or "route"); nil makes it work again.
+func (i *Inventory) SetErr(part string, err error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.errs == nil {
+		i.errs = map[string]error{}
+	}
+	i.errs[part] = err
+}
+
+// Hang makes every read block until release is closed, like a service
+// manager that stopped answering.
+func (i *Inventory) Hang(release chan struct{}) { i.mu.Lock(); i.hang = release; i.mu.Unlock() }
+
+func (i *Inventory) read(part string) (compat.Inventory, error) {
+	i.mu.Lock()
+	hang := i.hang
+	i.mu.Unlock()
+	if hang != nil {
+		<-hang
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.inv, i.errs[part]
+}
+
+func (i *Inventory) Processes() ([]string, error) {
+	inv, err := i.read("processes")
+	return slices.Clone(inv.Processes), err
+}
+
+func (i *Inventory) Services() ([]compat.Service, error) {
+	inv, err := i.read("services")
+	return slices.Clone(inv.Services), err
+}
+
+func (i *Inventory) Programs() ([]string, error) {
+	inv, err := i.read("programs")
+	return slices.Clone(inv.Programs), err
+}
+
+func (i *Inventory) Adapters() ([]compat.Adapter, error) {
+	inv, err := i.read("adapters")
+	return slices.Clone(inv.Adapters), err
+}
+
+func (i *Inventory) DefaultRoute() (int, error) {
+	inv, err := i.read("route")
+	if err == nil && inv.DefaultRoute == 0 {
+		err = diag.ErrNoRoute
+	}
+	return inv.DefaultRoute, err
 }
 
 // Capture is a capture backend whose sessions the test drives.

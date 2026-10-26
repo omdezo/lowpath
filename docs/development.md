@@ -52,6 +52,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `-relays file.json` | Also use a read-only relay list ([example](../relays.example.json)). |
 | `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
 | `-trace-count N`, `-trace-interval 200ms` | Shorter route traces, for tests (default 200 probes per hop, one per second). |
+| `-compat-inventory file.json` | Read the other network software (processes, services, installed programs, adapters, internet route) from a JSON file instead of the system, for tests; see `compat.Inventory`. |
 
 ### Files on disk
 
@@ -84,6 +85,7 @@ internal/app       game list, local store, relays, sessions, game art, HTTP API
 internal/catalog   game server catalog: Valve SDR POP lists, geo cleanup, POP ping
 internal/platform  OS layer: capture backend, owners, privileges, detection, icons, paths
 internal/platform/fakeplatform  in-memory platform for tests (any OS, no admin)
+internal/compat    conflict detector: other boosters, WinpkFilter/WinDivert drivers, full-tunnel VPNs
 internal/owner     socket-owner resolver (UDP socket -> PID -> image name)
 internal/capture   capture backend contract; per-process UDP capture with WinDivert
 internal/divert    pure-Go WinDivert 2.2 bindings + embedded signed driver
@@ -158,6 +160,17 @@ go test ./...
   the HTTP loader against a local speed-test server, target choice, the
   passive detector's rules second by second, `/proc` and sysfs parsing from
   fixtures, and the Windows IP Helper calls without admin rights.
+- **Conflicts:** every rule against inventories (ExitLag running, only its
+  service, only installed; the other boosters and WinDivert tools by name,
+  and names that only look alike; WinpkFilter loaded and left behind;
+  WinDivert from Lowpath's folder vs another program's; full, split and
+  down VPNs, PPPoE and Teredo, Linux and macOS tunnel names), parts that
+  fail on their own, cancellation, the inventory file, redaction; the
+  Windows reader without admin rights (the TCP/IP driver, a loopback
+  adapter); and in the app, Boost refused next to ExitLag with "Boost
+  anyway", the conflict before the admin prompt, warnings and proxy mode
+  never blocking, a capture failure naming the conflict, and a hung or
+  panicking scan failing open.
 - **Route trace:** the persistence rule against a simulated route (clean,
   a router limiting its replies, loss from one hop on, loss at home, only
   the destination losing, a destination that ignores ping, load balancing,
@@ -199,7 +212,10 @@ From a normal terminal it covers the home screen, relay setup, the
 bufferbloat test (against a paced local load server started by the test),
 a short route trace over UDP to the loopback relay and over ICMP to
 Cloudflare with its text report, adding a custom game, automatic route measurement, Boost in proxy mode with live
-traffic, auto-stop on game exit, and route mode asking for admin rights. From
+traffic, auto-stop on game exit, Boost in route mode refused next to a
+running ExitLag (played through `-compat-inventory`, so the PC's own
+software doesn't matter) with the banner, "Why?" and the Settings list,
+and route mode asking for admin rights. From
 an **administrator** terminal it also tests route mode for real: WinDivert
 captures `lpcheck.exe`, tunnels it through the relay, injects the replies,
 and checks that networking is normal after Stop.
