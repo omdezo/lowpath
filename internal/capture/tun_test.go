@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"runtime"
@@ -175,6 +176,104 @@ func TestTUNRuleset(t *testing.T) {
 	}
 	if _, other := ruleShapes(tunRuleset(tunRoute{}, true)); len(other) != 7 {
 		t.Errorf("an empty direct set still adds elements: %x", other)
+	}
+	// Without root: only this user's sockets are marked.
+	one, _ := ruleShapes(tunRuleset(tunRoute{oneUser: true, uid: 1000}, true))
+	if last := one[len(one)-1]; !slices.Equal(last, []string{"meta", "cmp", "immediate", "meta"}) {
+		t.Errorf("one user's marking rule %v", last)
+	}
+}
+
+func TestTUNUsers(t *testing.T) {
+	status := func(eff string) []byte { return []byte("Name:\tlowpath\nCapEff:\t" + eff + "\n") }
+	for _, c := range []struct {
+		eff  string
+		euid int
+		uid  uint32
+		one  bool
+	}{
+		{"000001ffffffffff", 0, 0, false},      // root: sees every process's sockets
+		{"0000000000003000", 1000, 1000, true}, // setcap: only its own user's
+		{"0000000000083000", 1000, 0, false},   // with CAP_SYS_PTRACE it sees them all
+		{"not hex", 1000, 1000, true},
+	} {
+		if uid, one := tunUsers(status(c.eff), c.euid); uid != c.uid || one != c.one {
+			t.Errorf("CapEff %s, euid %d: %d %v; want %d %v", c.eff, c.euid, uid, one, c.uid, c.one)
+		}
+	}
+}
+
+// udp4 builds an IPv4 UDP datagram with flags/offset frag and IP ID id.
+func udp4(t *testing.T, payload int, frag, id uint16) []byte {
+	t.Helper()
+	pkt, err := appendUDP4(nil, netip.MustParseAddrPort("192.0.2.2:5000"), netip.MustParseAddrPort("198.51.100.7:3478"), id, make([]byte, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range pkt[28:] {
+		pkt[28+i] = byte(i)
+	}
+	binary.BigEndian.PutUint16(pkt[6:], frag)
+	binary.BigEndian.PutUint16(pkt[10:], 0)
+	binary.BigEndian.PutUint16(pkt[10:], ^fold(sum16(0, pkt[:20])))
+	return pkt
+}
+
+func TestFragmentIPv4(t *testing.T) {
+	pkt := udp4(t, 2972, 0, 0x1234) // 3000 bytes
+	frags, err := fragmentIPv4(pkt, 1280, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frags) != 3 {
+		t.Fatalf("%d fragments, want 3", len(frags))
+	}
+	var data []byte
+	for i, f := range frags {
+		if len(f) > 1280 || int(binary.BigEndian.Uint16(f[2:])) != len(f) {
+			t.Errorf("fragment %d: %d bytes, total length %d", i, len(f), binary.BigEndian.Uint16(f[2:]))
+		}
+		if fold(sum16(0, f[:20])) != 0xffff {
+			t.Errorf("fragment %d: bad header checksum", i)
+		}
+		if id := binary.BigEndian.Uint16(f[4:]); id != 0x1234 {
+			t.Errorf("fragment %d: id %#x, want the packet's", i, id)
+		}
+		fo := binary.BigEndian.Uint16(f[6:])
+		if int(fo&0x1fff)*8 != len(data) || (fo&0x2000 != 0) != (i < len(frags)-1) {
+			t.Errorf("fragment %d: flags/offset %#x at byte %d", i, fo, len(data))
+		}
+		if !slices.Equal(f[12:20], pkt[12:20]) || f[9] != protoUDP {
+			t.Errorf("fragment %d: header not copied", i)
+		}
+		data = append(data, f[20:]...)
+	}
+	if !slices.Equal(data, pkt[20:]) {
+		t.Error("the fragments don't add up to the datagram")
+	}
+	// An ID of 0 would be picked anew for each fragment by the kernel.
+	frags, _ = fragmentIPv4(udp4(t, 2000, 0, 0), 1280, 0x0042)
+	for _, f := range frags {
+		if binary.BigEndian.Uint16(f[4:]) != 0x0042 {
+			t.Errorf("id %#x, want the one given", binary.BigEndian.Uint16(f[4:]))
+		}
+	}
+	if frags, err := fragmentIPv4(udp4(t, 100, 0, 1), 1280, 0); err != nil || len(frags) != 1 {
+		t.Errorf("a small datagram: %d fragments, %v", len(frags), err)
+	}
+	for name, bad := range map[string][]byte{
+		"DF set":     udp4(t, 2000, 0x4000, 1),
+		"a fragment": udp4(t, 2000, 0x2000, 1),
+		"IPv6":       append([]byte{0x60}, make([]byte, 40)...),
+		"IP options": append([]byte{0x46}, udp4(t, 100, 0, 1)[1:]...),
+		"short":      {0x45, 0},
+	} {
+		if _, err := fragmentIPv4(bad, 1280, 1); err == nil {
+			t.Errorf("%s: fragmented", name)
+		}
+	}
+	if _, err := fragmentIPv4(pkt, 20, 1); err == nil {
+		t.Error("no room for data: fragmented")
 	}
 }
 

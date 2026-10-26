@@ -27,10 +27,11 @@ var tunRule = rtnl.Rule{Priority: tunRulePrio, Mark: tunMark, Mask: 0xffffffff, 
 //	udp dport 53 return
 //	ip daddr <relay> [udp dport <port>] return
 //	udp sport @direct return           other programs' sockets
-//	meta skuid <any> meta mark set <tunMark>
+//	meta skuid <any, or r.uid> meta mark set <tunMark>
 //
 // The last rule needs a socket owned by a user: the skuid load stops the
 // rule for kernel sockets (in-kernel tunnels), which then keep their route.
+// Without root it takes only this user's sockets (tunUsers).
 func tunRuleset(r tunRoute, owned bool) []netlink.Message {
 	f := nft.IPv4
 	var flags uint32
@@ -74,9 +75,13 @@ func tunRuleset(r tunRoute, owned bool) []netlink.Message {
 	}
 	rule(nft.Payload{Base: nft.BaseTransport, Offset: 0, Len: 2, Reg: nft.Reg1},
 		nft.Lookup{Set: tunNftSet, SetID: tunSetID, Reg: nft.Reg1}, ret)
-	rule(nft.Meta{Key: nft.MetaSkUID, Reg: nft.Reg1},
+	mark := []nft.Expr{nft.Meta{Key: nft.MetaSkUID, Reg: nft.Reg1}}
+	if r.oneUser {
+		mark = append(mark, nft.Cmp{Op: nft.CmpEq, Reg: nft.Reg1, Data: nft.HostU32(r.uid)})
+	}
+	rule(append(mark,
 		nft.Immediate{Reg: nft.Reg2, Data: nft.HostU32(tunMark)},
-		nft.Meta{Key: nft.MetaMark, Reg: nft.Reg2, Set: true})
+		nft.Meta{Key: nft.MetaMark, Reg: nft.Reg2, Set: true})...)
 	return nft.Batch(msgs...)
 }
 

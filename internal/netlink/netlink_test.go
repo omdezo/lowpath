@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -110,5 +111,42 @@ func TestAck(t *testing.T) {
 	e := &Error{Op: "add rule", Errno: syscall.ENOENT, Msg: "no such chain"}
 	if !errors.Is(e, syscall.ENOENT) || e.Error() != "netlink: add rule: "+syscall.ENOENT.Error()+" (no such chain)" {
 		t.Errorf("Error = %q", e)
+	}
+}
+
+func TestAcks(t *testing.T) {
+	reply := func(seq uint32, code int32) Reply {
+		r := errReply(code, flagCapped, 8, "")
+		r.Seq = seq
+		return r
+	}
+	msgs := []Message{{Op: ""}, {Op: "add table", Flags: FlagAck}, {Op: "add rule", Flags: FlagAck}, {}}
+
+	// Every acknowledgement arrives; the first refusal is the answer.
+	a := newAcks(100, msgs)
+	a.take(reply(7, -int32(syscall.EPERM))) // an earlier request's
+	a.take(reply(101, 0))
+	if a.done() || a.err != nil {
+		t.Fatalf("after one ack: done %v, err %v", a.done(), a.err)
+	}
+	a.take(reply(102, -int32(syscall.ENOENT)))
+	if !a.done() || !errors.Is(a.err, syscall.ENOENT) || !strings.Contains(a.err.Error(), "add rule") {
+		t.Fatalf("after both: done %v, err %v", a.done(), a.err)
+	}
+
+	// The kernel refuses the whole batch on its header (which asked for no
+	// ack) and answers nothing else: that ends the wait.
+	a = newAcks(100, msgs)
+	a.take(reply(100, -int32(syscall.EPERM)))
+	if !a.done() || !errors.Is(a.err, syscall.EPERM) || !strings.Contains(a.err.Error(), "request") {
+		t.Fatalf("refused batch: done %v, err %v", a.done(), a.err)
+	}
+
+	// Sequence numbers that wrap around.
+	a = newAcks(0xffffffff, msgs[1:3])
+	a.take(reply(0xffffffff, 0))
+	a.take(reply(0, 0))
+	if !a.done() || a.err != nil {
+		t.Fatalf("wrapped: done %v, err %v", a.done(), a.err)
 	}
 }

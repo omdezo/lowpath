@@ -151,6 +151,58 @@ func (r Reply) ack() (errno syscall.Errno, msg string, ok bool) {
 	return errno, msg, true
 }
 
+// acks follows the answers to one request of several messages, numbered
+// first, first+1, ...: the acknowledgement of each message that asked for one
+// (FlagAck), and the first refusal.
+type acks struct {
+	first uint32
+	ops   []string
+	want  map[uint32]bool
+	err   error
+	whole bool // the kernel refused the request as a whole
+}
+
+func newAcks(first uint32, msgs []Message) *acks {
+	a := &acks{first: first, ops: make([]string, len(msgs)), want: map[uint32]bool{}}
+	for i, m := range msgs {
+		a.ops[i] = m.Op
+		if m.Flags&FlagAck != 0 {
+			a.want[first+uint32(i)] = true
+		}
+	}
+	return a
+}
+
+// take reads one reply. An error for a message that asked for no
+// acknowledgement ends the wait: that is how nfnetlink refuses a whole batch
+// (no CAP_NET_ADMIN, an unknown subsystem), on its header, after which it
+// answers nothing else.
+func (a *acks) take(r Reply) {
+	i := r.Seq - a.first // wraps for answers to earlier requests
+	if i >= uint32(len(a.ops)) {
+		return // an answer to an earlier, abandoned request
+	}
+	errno, msg, ok := r.ack()
+	if !ok {
+		return
+	}
+	if errno != 0 && a.err == nil {
+		op := a.ops[i]
+		if op == "" {
+			op = "request"
+		}
+		a.err = &Error{Op: op, Errno: errno, Msg: msg}
+	}
+	if !a.want[r.Seq] {
+		a.whole = a.whole || errno != 0
+		return
+	}
+	delete(a.want, r.Seq)
+}
+
+// done reports whether nothing more will be answered.
+func (a *acks) done() bool { return len(a.want) == 0 || a.whole }
+
 func cString(b []byte) string {
 	for i, c := range b {
 		if c == 0 {

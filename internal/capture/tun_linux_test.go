@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"lowpath/internal/engine"
 	"lowpath/internal/netlink"
@@ -195,9 +198,12 @@ func tunServer(t *testing.T) {
 // tunCapturer captures the client's game socket and swallows its packets,
 // until it is killed.
 func tunCapturer(t *testing.T) {
-	port, _ := strconv.Atoi(os.Getenv(tunPortEnv))
 	res := newFakeOS()
-	res.socks = []socket{{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(port)), PID: pidGame}}
+	res.socks = nil
+	for _, p := range strings.Split(os.Getenv(tunPortEnv), ",") {
+		port, _ := strconv.Atoi(p)
+		res.socks = append(res.socks, socket{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(port)), PID: pidGame})
+	}
 	res.procs = map[uint32]string{pidGame: "game"}
 	b := NewTUN(res)
 	if os.Getenv(tunUnownedEnv) == "1" {
@@ -259,9 +265,21 @@ type peer struct {
 	server netip.AddrPort
 }
 
-func newPeer(t *testing.T) *peer {
+func newPeer(t *testing.T) *peer { return newPeerAs(t, 0) }
+
+// newPeerAs makes the socket as user uid: the kernel takes a socket's owner
+// from the file-system uid of the thread that creates it.
+func newPeerAs(t *testing.T, uid int) *peer {
 	t.Helper()
+	runtime.LockOSThread()
+	if uid != 0 {
+		unix.Setfsuid(uid)
+	}
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if uid != 0 {
+		unix.Setfsuid(0)
+	}
+	runtime.UnlockOSThread()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +312,22 @@ func (p *peer) send(t *testing.T, payload string) {
 // await waits for a reply equal to want (from the server address).
 func (p *peer) await(want string, within time.Duration) bool {
 	full := serverAddr + " " + want
+	return p.awaitMatch(func(r string) bool { return r == full }, within)
+}
+
+// awaitPrefix waits for a reply that starts with want (the read buffer cuts
+// long ones short).
+func (p *peer) awaitPrefix(want string, within time.Duration) bool {
+	full := serverAddr + " " + want
+	return p.awaitMatch(func(r string) bool { return strings.HasPrefix(r, full) }, within)
+}
+
+func (p *peer) awaitMatch(ok func(string) bool, within time.Duration) bool {
 	for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
 		p.mu.Lock()
-		ok := slices.Contains(p.got, full)
+		found := slices.ContainsFunc(p.got, ok)
 		p.mu.Unlock()
-		if ok {
+		if found {
 			return true
 		}
 	}
@@ -458,6 +487,25 @@ func tunRouteAndRestore(t *testing.T) {
 			t.Fatalf("the server saw a game packet: %q", r)
 		}
 	}
+	// A datagram bigger than the link's MTU, which the kernel fragments: the
+	// raw socket that sends it on won't, so the backend does.
+	big := "big" + strings.Repeat("x", 3000)
+	stranger.send(t, big)
+	if !stranger.awaitPrefix(direct(stranger, "bigxxx"), 2*time.Second) {
+		t.Fatalf("a datagram bigger than the MTU didn't get through: stats %+v", c.Stats())
+	}
+	// A second capture while this one runs: the table belongs to this one's
+	// socket, which is no lack of rights, and this capture keeps working.
+	if s2, err := NewTUN(res).Start(Config{Processes: []string{"game"}, OnPacket: func(_, _ netip.AddrPort, _ []byte) bool { return true }}); err == nil {
+		s2.Close()
+		t.Fatal("a second capture started while the first one runs")
+	} else if errors.Is(err, ErrNeedAdmin) || !strings.Contains(err.Error(), "another running program") {
+		t.Errorf("second capture: %v, want a table owned by another program", err)
+	}
+	game.send(t, "g-second")
+	if !game.await("relay:g-second", 2*time.Second) {
+		t.Fatalf("the first capture stopped working after a second one was refused: %v", game.replies())
+	}
 	// ... until the next refresh finds its owner and adds it to the fast path.
 	res.add(socket{Local: netip.AddrPortFrom(netip.IPv4Unspecified(), stranger.port()), PID: pidOther + 1}, "chat")
 	time.Sleep(2500 * time.Millisecond)
@@ -477,8 +525,8 @@ func tunRouteAndRestore(t *testing.T) {
 	}
 	st := c.Stats()
 	t.Logf("stats %+v, OnPacket calls %d", st, captured.Load())
-	if st.Captured != 2 || st.Injected != 2 || st.Errors != 0 {
-		t.Errorf("stats %+v, want 2 captured and injected, no errors", st)
+	if st.Captured != 3 || st.Injected != 3 || st.Errors != 0 {
+		t.Errorf("stats %+v, want 3 captured and injected, no errors", st)
 	}
 
 	if err := s.Close(); err != nil {
@@ -565,7 +613,15 @@ func tableExists(t *testing.T) bool {
 
 func tunKill(t *testing.T, nobody, unowned bool) {
 	game := newPeer(t)
+	var bystander *peer
 	env := []string{fmt.Sprintf("%s=%d", tunPortEnv, game.port())}
+	if nobody {
+		// Without root, the capture can only ever find the owners of its
+		// own user's sockets, so it marks no one else's: a root socket goes
+		// direct even listed as the game.
+		game, bystander = newPeerAs(t, 65534), newPeer(t)
+		env = []string{fmt.Sprintf("%s=%d,%d", tunPortEnv, game.port(), bystander.port())}
+	}
 	if unowned {
 		env = append(env, tunUnownedEnv+"=1")
 	}
@@ -585,6 +641,12 @@ func tunKill(t *testing.T, nobody, unowned bool) {
 	game.send(t, "swallowed")
 	if game.await(direct(game, "swallowed"), 300*time.Millisecond) {
 		t.Fatal("the game's packet reached the server while another process captured it")
+	}
+	if bystander != nil {
+		bystander.send(t, "root")
+		if !bystander.await(direct(bystander, "root"), time.Second) {
+			t.Fatal("a capture without root took another user's packet")
+		}
 	}
 	// SIGKILL: no Close, no deferred cleanup.
 	cmd.Process.Kill()
@@ -747,6 +809,12 @@ func tunNoRights(t *testing.T) {
 	t.Logf("as nobody: %v", err)
 	if d := tunDevices(t); len(d) != 0 {
 		t.Fatalf("a failed open left %v", d)
+	}
+	// The kernel refuses the nftables batch on its header; that must not
+	// read as a kernel that doesn't answer.
+	start := time.Now()
+	if err := b.Recover(Marker{Backend: "tun"}); err != nil || time.Since(start) > time.Second {
+		t.Fatalf("Recover as nobody with nothing left: %v after %v", err, time.Since(start))
 	}
 	fmt.Println(readyLine)
 }

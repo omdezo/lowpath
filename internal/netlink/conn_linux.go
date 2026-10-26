@@ -48,6 +48,9 @@ func Dial(family int) (*Conn, error) {
 	// Ask for the kernel's explanation with errors (Linux 4.12+); older
 	// kernels just don't give one.
 	unix.SetsockoptInt(fd, unix.SOL_NETLINK, unix.NETLINK_EXT_ACK, 1)
+	// Errors without a copy of the request (Linux 4.3+): an nftables set
+	// update can be bigger than the read buffer, and so would its echo.
+	unix.SetsockoptInt(fd, unix.SOL_NETLINK, unix.NETLINK_CAP_ACK, 1)
 	return &Conn{fd: fd, seq: uint32(time.Now().Unix()), buf: make([]byte, 1<<16)}, nil
 }
 
@@ -74,40 +77,25 @@ func (c *Conn) Do(msgs ...Message) error {
 		return errors.New("netlink: connection closed")
 	}
 	var b []byte
-	want := map[uint32]string{}
+	a := newAcks(c.seq+1, msgs)
 	for _, m := range msgs {
 		c.seq++
 		m.Flags |= FlagRequest
 		b = m.Append(b, c.seq)
-		if m.Flags&FlagAck != 0 {
-			want[c.seq] = m.Op
-		}
 	}
 	if err := unix.Sendto(c.fd, b, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("netlink: send: %w", err)
 	}
-	var first error
-	for len(want) > 0 {
+	for !a.done() {
 		replies, err := c.read()
 		if err != nil {
 			return err
 		}
 		for _, r := range replies {
-			op, ok := want[r.Seq]
-			if !ok {
-				continue // an answer to an earlier, abandoned request
-			}
-			errno, msg, isAck := r.ack()
-			if !isAck {
-				continue
-			}
-			delete(want, r.Seq)
-			if errno != 0 && first == nil {
-				first = &Error{Op: op, Errno: errno, Msg: msg}
-			}
+			a.take(r)
 		}
 	}
-	return first
+	return a.err
 }
 
 // Dump sends a dump request and returns every message of the answer.

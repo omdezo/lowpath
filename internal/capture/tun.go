@@ -3,6 +3,7 @@ package capture
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -91,6 +92,9 @@ type tunSystem interface {
 type tunRoute struct {
 	exclude []netip.AddrPort // relay endpoints (port 0 = the whole host)
 	direct  []uint16         // ports of other programs, for the fast path
+	// oneUser limits marking to the sockets of user uid (see tunUsers).
+	oneUser bool
+	uid     uint32
 }
 
 // tunDevice is the packet loop's device, plus the kernel's fast path.
@@ -177,12 +181,13 @@ func tunRights(err error) *RightsError {
 
 // Linux capability numbers (linux/capability.h).
 const (
-	capNetAdmin = 12
-	capNetRaw   = 13
+	capNetAdmin  = 12
+	capNetRaw    = 13
+	capSysPtrace = 19
 )
 
-// hasTUNRights reads the effective capabilities from /proc/self/status.
-func hasTUNRights(status []byte) (bool, error) {
+// capEff reads the effective capabilities from /proc/self/status.
+func capEff(status []byte) (uint64, error) {
 	sc := bufio.NewScanner(bytes.NewReader(status))
 	for sc.Scan() {
 		v, ok := strings.CutPrefix(sc.Text(), "CapEff:")
@@ -191,12 +196,35 @@ func hasTUNRights(status []byte) (bool, error) {
 		}
 		eff, err := strconv.ParseUint(strings.TrimSpace(v), 16, 64)
 		if err != nil {
-			return false, fmt.Errorf("capture: unreadable CapEff %q", v)
+			return 0, fmt.Errorf("capture: unreadable CapEff %q", v)
 		}
-		const need = 1<<capNetAdmin | 1<<capNetRaw
-		return eff&need == need, nil
+		return eff, nil
 	}
-	return false, errors.New("capture: no CapEff line in /proc/self/status")
+	return 0, errors.New("capture: no CapEff line in /proc/self/status")
+}
+
+// hasTUNRights reports whether the capabilities in /proc/self/status are
+// enough for the TUN backend.
+func hasTUNRights(status []byte) (bool, error) {
+	eff, err := capEff(status)
+	const need = 1<<capNetAdmin | 1<<capNetRaw
+	return err == nil && eff&need == need, err
+}
+
+// tunUsers says whose sockets the chain may mark. A program that isn't root
+// and lacks CAP_SYS_PTRACE (setcap gives it only the network rights) can't
+// read the /proc/<pid>/fd links of other users' processes, so their sockets
+// never get an owner here and can never be found to be the game's: marking
+// them would only send all their packets through user space for the whole
+// session. Such a program marks its own user's sockets only.
+func tunUsers(status []byte, euid int) (uid uint32, oneUser bool) {
+	if euid == 0 {
+		return 0, false
+	}
+	if eff, err := capEff(status); err == nil && eff&(1<<capSysPtrace) != 0 {
+		return 0, false
+	}
+	return uint32(euid), true
 }
 
 // directPorts lists the local UDP ports owned only by programs that are not
@@ -262,4 +290,58 @@ func tunExcludes(exclude []netip.AddrPort) []netip.AddrPort {
 		out = append(out, a)
 	}
 	return out
+}
+
+// Fragment sizes for resending a datagram the kernel would have fragmented:
+// 1280 fits every common link; 576 is what every IPv4 host must accept.
+var tunFragSizes = []int{1280, 576}
+
+// fragmentIPv4 splits an IPv4 packet into fragments of at most size bytes,
+// as the kernel does for a datagram bigger than the route's MTU. The TUN
+// receives such datagrams whole (fragmentation comes after the output
+// hook), and the raw socket that sends them on never fragments. id replaces
+// an IP ID of 0, which the kernel would otherwise pick anew per fragment.
+// Packets with the DF bit, IP options or already a fragment are refused.
+func fragmentIPv4(pkt []byte, size int, id uint16) ([][]byte, error) {
+	if len(pkt) < ipv4HeaderLen || pkt[0] != 0x45 {
+		return nil, errors.New("capture: fragment: not an IPv4 packet without options")
+	}
+	total := int(binary.BigEndian.Uint16(pkt[2:4]))
+	if total > len(pkt) || total < ipv4HeaderLen {
+		return nil, errors.New("capture: fragment: bad total length")
+	}
+	if binary.BigEndian.Uint16(pkt[6:8])&0x7fff != 0 {
+		return nil, errors.New("capture: fragment: DF set or already a fragment")
+	}
+	chunk := (size - ipv4HeaderLen) &^ 7
+	if chunk <= 0 {
+		return nil, fmt.Errorf("capture: fragment: size %d too small", size)
+	}
+	if binary.BigEndian.Uint16(pkt[4:6]) == 0 {
+		id = max(id, 1)
+	} else {
+		id = binary.BigEndian.Uint16(pkt[4:6])
+	}
+	data := pkt[ipv4HeaderLen:total]
+	var out [][]byte
+	for off := 0; ; off += chunk {
+		end := min(off+chunk, len(data))
+		f := make([]byte, ipv4HeaderLen+end-off)
+		copy(f, pkt[:ipv4HeaderLen])
+		copy(f[ipv4HeaderLen:], data[off:end])
+		binary.BigEndian.PutUint16(f[2:], uint16(len(f)))
+		binary.BigEndian.PutUint16(f[4:], id)
+		frag := uint16(off / 8)
+		if end < len(data) {
+			frag |= 0x2000 // more fragments
+		}
+		binary.BigEndian.PutUint16(f[6:], frag)
+		f[10], f[11] = 0, 0
+		binary.BigEndian.PutUint16(f[10:], ^fold(sum16(0, f[:ipv4HeaderLen])))
+		out = append(out, f)
+		if end == len(data) {
+			break
+		}
+	}
+	return out, nil
 }

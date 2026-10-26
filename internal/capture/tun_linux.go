@@ -3,6 +3,7 @@ package capture
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -53,6 +54,9 @@ func (l *linuxTUN) check() error {
 }
 
 func (l *linuxTUN) open(r tunRoute) (tunDevice, error) {
+	if status, err := os.ReadFile(l.status); err == nil {
+		r.uid, r.oneUser = tunUsers(status, os.Geteuid())
+	}
 	d := &tunLink{direct: map[uint16]bool{}}
 	if err := d.setUp(l.dev, r, !l.unowned); err != nil {
 		d.Close()
@@ -172,6 +176,34 @@ func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 	}
 	writeSysctl("net/ipv6/conf/"+d.name+"/disable_ipv6", "1") // missing when IPv6 is off
 
+	// The rule set only marks packets; nothing follows the mark until the
+	// rule exists. It comes before the route so that a table another
+	// running copy owns stops this one before it touches table tunTable.
+	if d.nf, err = netlink.Dial(netlink.Netfilter); err != nil {
+		return err
+	}
+	err = d.nf.Do(tunRuleset(r, own)...)
+	if own && (errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL)) {
+		// Before Linux 5.12 a table can't belong to a socket, and the
+		// unknown flag is refused with EINVAL (EOPNOTSUPP since); Close
+		// and Recover delete the table instead. (An owned table also
+		// survives `nft flush ruleset` from a firewall reload; an unowned
+		// one doesn't, and its packets then simply go direct.)
+		err = d.nf.Do(tunRuleset(r, false)...)
+	}
+	if errors.Is(err, syscall.EPERM) {
+		// The TUN device needed CAP_NET_ADMIN too, so this is not about
+		// rights: the table belongs to another process's netlink socket.
+		return fmt.Errorf("capture: nftables table %q belongs to another running program (another copy of Lowpath?); stop it and try again: %w", tunNftTable, err)
+	}
+	if err != nil {
+		return d.rightsOr(fmt.Errorf("capture: nftables: %w", err), err)
+	}
+	d.tableOn = true
+	for _, p := range r.direct {
+		d.direct[p] = true
+	}
+
 	if d.rt, err = netlink.Dial(netlink.Route); err != nil {
 		return err
 	}
@@ -194,26 +226,6 @@ func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 	}
 	if err := d.rt.Do(route); err != nil {
 		return fmt.Errorf("capture: route table %d to %s: %w", tunTable, d.name, err)
-	}
-
-	if d.nf, err = netlink.Dial(netlink.Netfilter); err != nil {
-		return err
-	}
-	err = d.nf.Do(tunRuleset(r, own)...)
-	if own && (errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL)) {
-		// Before Linux 5.12 a table can't belong to a socket, and the
-		// unknown flag is refused with EINVAL (EOPNOTSUPP since); Close
-		// and Recover delete the table instead. (An owned table also
-		// survives `nft flush ruleset` from a firewall reload; an unowned
-		// one doesn't, and its packets then simply go direct.)
-		err = d.nf.Do(tunRuleset(r, false)...)
-	}
-	if err != nil {
-		return d.rightsOr(fmt.Errorf("capture: nftables: %w", err), err)
-	}
-	d.tableOn = true
-	for _, p := range r.direct {
-		d.direct[p] = true
 	}
 
 	// The raw socket that sends non-game packets on, marked so the chain
@@ -284,13 +296,11 @@ func (d *tunLink) Send(pkt []byte, addr *divert.Address) (int, error) {
 		return 0, errNotIPv4 // the chain only marks IPv4
 	}
 	to := &unix.SockaddrInet4{Addr: [4]byte(pkt[16:20])}
-	var serr error
-	err := d.rawc.Write(func(fd uintptr) bool {
-		serr = unix.Sendto(int(fd), pkt, 0, to)
-		return serr != unix.EAGAIN
-	})
-	if err == nil {
-		err = serr
+	err := d.sendRaw(pkt, to)
+	if errors.Is(err, unix.EMSGSIZE) && pkt[6]&0x40 == 0 {
+		// Bigger than the route's MTU and fragmentable: what the kernel
+		// would have done before the mark moved it, the raw socket won't.
+		err = d.sendFragments(pkt, to)
 	}
 	if errors.Is(err, os.ErrClosed) {
 		return 0, divert.ErrClosed
@@ -299,6 +309,42 @@ func (d *tunLink) Send(pkt []byte, addr *divert.Address) (int, error) {
 		return 0, fmt.Errorf("capture: send on: %w", err)
 	}
 	return len(pkt), nil
+}
+
+func (d *tunLink) sendRaw(pkt []byte, to unix.Sockaddr) error {
+	var serr error
+	err := d.rawc.Write(func(fd uintptr) bool {
+		serr = unix.Sendto(int(fd), pkt, 0, to)
+		return serr != unix.EAGAIN
+	})
+	if err != nil {
+		return err
+	}
+	return serr
+}
+
+// sendFragments sends pkt as IPv4 fragments, smaller ones if the route
+// takes even less.
+func (d *tunLink) sendFragments(pkt []byte, to unix.Sockaddr) error {
+	var err error
+	for _, size := range tunFragSizes {
+		var frags [][]byte
+		if frags, err = fragmentIPv4(pkt, size, uint16(rand.Uint32())); err != nil {
+			return err
+		}
+		for i, f := range frags {
+			if err = d.sendRaw(f, to); err != nil {
+				if i == 0 && errors.Is(err, unix.EMSGSIZE) {
+					break // try the next size
+				}
+				return err
+			}
+		}
+		if err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // CalcChecksums has nothing to do: appendUDP4 fills in both checksums, and

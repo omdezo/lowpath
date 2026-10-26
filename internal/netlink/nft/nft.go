@@ -99,7 +99,8 @@ func Batch(msgs ...netlink.Message) []netlink.Message {
 	// The begin and end messages carry the subsystem in the resource id,
 	// big-endian.
 	mark := func(t uint16) netlink.Message {
-		return netlink.Message{Type: t, Data: []byte{0, 0, 0, subsysNftables}}
+		// A refusal of the whole batch comes as an error for its header.
+		return netlink.Message{Type: t, Data: []byte{0, 0, 0, subsysNftables}, Op: "nftables transaction"}
 	}
 	out := make([]netlink.Message, 0, len(msgs)+2)
 	out = append(out, mark(batchBegin))

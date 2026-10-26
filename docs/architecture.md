@@ -321,11 +321,22 @@ relay reply ──Inject──▶ write IPv4+UDP into lowpathN ──▶ kernel 
   `fwmark`, Tailscale's) and kernel sockets (no owner, so the `skuid` load
   ends the rule) are never marked; the rule's priority 5100 is ahead of VPN
   catch-alls (wg-quick sits near 32765, Tailscale at 5210+).
+- **Big datagrams.** A datagram bigger than the route's MTU reaches the
+  TUN whole (the kernel fragments after the output hook), and a raw socket
+  with `IP_HDRINCL` never fragments. When the resend fails with EMSGSIZE
+  and DF is clear, the backend sends it as IPv4 fragments of 1280 bytes
+  (576 if even that is too big).
 - **Rights.** Root, or `CAP_NET_ADMIN` and `CAP_NET_RAW` (`sudo setcap
   cap_net_admin,cap_net_raw+ep lowpath`); `Available` reads `CapEff` from
   `/proc/self/status`, and a refusal while setting up is a
   `capture.RightsError` that names them (the UI shows its wording).
-- **Fail-open.** Set-up order is device, address and route, nftables, raw
+  Without root (and without `CAP_SYS_PTRACE`) `/proc` shows the owners of
+  this user's sockets only, so the marking rule then also needs `meta
+  skuid` to be this user: other users' daemons never come up to user
+  space. nftables refusing the table with EPERM after the device was made
+  means another running copy owns it, and Start says so; nftables comes
+  before the route, so that copy's route is never touched.
+- **Fail-open.** Set-up order is device, nftables, address and route, raw
   socket, rule last; Stop removes the rule first, reads what is queued for
   50 ms, then deletes the table and closes the device. When the process
   dies in any way, the kernel deletes the TUN and its route; the rule then
