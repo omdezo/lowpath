@@ -82,6 +82,8 @@ internal/engine    client: multipath send, dedup, probes, path selection, fallba
 internal/relay     egress relay: token check, dedup, deliver, server-leg ping
 internal/proto     overlay framing {type, token, flow, seq, ts, addr}
 internal/icmp      ICMP echo (IcmpSendEcho on Windows, raw/ping socket on Linux)
+internal/diag      user-side diagnostics: public IP and ISP (STUN + RIPEstat, cached)
+internal/stun      STUN Binding codec and client (RFC 5389)
 internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries
 internal/demo      simulated topology + game traffic generator (-demo)
@@ -111,9 +113,15 @@ go test ./...
 - **App:** local API guard and per-launch session, relay and custom-game
   validation, error kinds, game art lookup, and a full route-mode session
   through the loopback relay with a fake capture device.
+- **Diagnostics:** the STUN client against local fake servers (resends,
+  stray replies, timeouts, closed ports, cancellation), RIPEstat parsing
+  against canned replies, the lookup cache, and every locator state
+  (offline, no IPv6, partial, private addresses, shared lookups).
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
-Google through a keyed relay and through the engine in capture mode.
+Google through a keyed relay and through the engine in capture mode, and
+that look up this PC's public IP and ISP with real STUN servers and
+RIPEstat (`go test -run TestInternet -v ./internal/diag` prints them).
 
 ### End-to-end UI test
 

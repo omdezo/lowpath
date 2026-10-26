@@ -185,3 +185,29 @@ export interface Bootstrap {
   mapping: Mapping | null;
   live: Live;
 }
+
+// GET /api/location: the public address the internet sees and the network
+// behind it (internal/diag). Empty fields are unknown.
+export interface Endpoint {
+  ip: string;
+  source: string;
+  asn?: number;
+  asns?: number[];
+  holder?: string;
+  as_name?: string;
+  isp?: string;
+  prefix?: string;
+  country?: string;
+  city?: string;
+  partial?: string;
+  lookup_error?: string;
+}
+
+export interface NetLocation {
+  state: "ok" | "partial" | "offline";
+  message?: string;
+  at: string;
+  ipv4: Endpoint | null;
+  ipv6: Endpoint | null;
+  ipv6_note?: string;
+}
