@@ -54,6 +54,7 @@ type options struct {
 	traceCount             int
 	traceInterval          time.Duration
 	compatInventory        string
+	wifiReading            string
 }
 
 func main() {
@@ -70,6 +71,7 @@ func main() {
 	flag.IntVar(&o.traceCount, "trace-count", 0, "probes per hop in a route trace (default 200; for tests)")
 	flag.DurationVar(&o.traceInterval, "trace-interval", 0, "time between probes to one hop in a route trace (default 1s; for tests)")
 	flag.StringVar(&o.compatInventory, "compat-inventory", "", "read the other network software (boosters, drivers, VPN adapters) from this JSON file instead of the system (for tests)")
+	flag.StringVar(&o.wifiReading, "wifi-reading", "", "read the Wi-Fi link, survey and scan pause from this JSON file instead of the adapter (for tests)")
 	flag.IntVar(&o.waitPID, "wait-pid", 0, "wait for this process to exit before starting (used when restarting elevated)")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) { o.dataFromArg = o.dataFromArg || f.Name == "data" })
@@ -77,6 +79,11 @@ func main() {
 		// The end-to-end test plays "ExitLag is running" on any PC, and the
 		// real system's software doesn't change its results.
 		plat.Inventory = compat.NewFileSystem(o.compatInventory)
+	}
+	if o.wifiReading != "" {
+		// The end-to-end test shows a Wi-Fi card on any PC; the real
+		// adapter is never read or tuned.
+		plat.WiFi = diag.NewFileWLAN(o.wifiReading)
 	}
 
 	if err := run(o, plat); err != nil {

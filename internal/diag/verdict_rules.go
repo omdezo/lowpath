@@ -71,6 +71,9 @@ func (homeRule) check(v *view) (Check, *Verdict) {
 		}
 	}
 	if !lossBad && !tailBad && hop == nil {
+		if _, known, fact := wifiSignal(v.ev.WiFi); known && v.linkKind() == LinkWiFi {
+			facts = append(facts, fact)
+		}
 		c.Status, c.Facts = CheckClear, facts
 		switch {
 		case g != nil:
@@ -151,11 +154,12 @@ func (v *view) linkKind() string {
 	return LinkUnknown
 }
 
-// wifiSignal says whether the radio link is weak: RSSI below -70 dBm or the
-// 2.4 GHz band. known is false when the system gave neither.
+// wifiSignal says whether the radio link is weak or crowded: RSSI below
+// -70 dBm, the 2.4 GHz band, or a channel the access point reports busy
+// more than 60% of the time. known is false when the system gave none.
 func wifiSignal(w *WiFiSignal) (weak, known bool, fact string) {
-	if w == nil || (w.RSSI == nil && w.Band == "") {
-		return false, false, "Lowpath doesn't read the Wi-Fi signal strength yet, so it can't confirm the radio link is the cause."
+	if w == nil || (w.RSSI == nil && w.Band == "" && w.BusyPct == nil) {
+		return false, false, "Lowpath couldn't read the Wi-Fi signal strength, so it can't confirm the radio link is the cause."
 	}
 	var parts []string
 	if w.RSSI != nil {
@@ -166,11 +170,19 @@ func wifiSignal(w *WiFiSignal) (weak, known bool, fact string) {
 		parts = append(parts, w.Band+" GHz")
 		weak = weak || w.Band == "2.4"
 	}
+	s := strings.Join(parts, " on ")
+	if w.BusyPct != nil {
+		if s != "" {
+			s += ", "
+		}
+		s += fmt.Sprintf("channel %.0f%% busy", *w.BusyPct)
+		weak = weak || *w.BusyPct > busyChannelPct
+	}
 	word := "strong enough"
 	if weak {
 		word = "weak or crowded"
 	}
-	return weak, true, fmt.Sprintf("Wi-Fi signal: %s (%s).", strings.Join(parts, " on "), word)
+	return weak, true, fmt.Sprintf("Wi-Fi signal: %s (%s).", s, word)
 }
 
 func gatewayFact(g GatewaySample, v *view) string {

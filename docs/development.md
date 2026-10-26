@@ -52,6 +52,7 @@ degrade or cut routes — no servers or admin rights needed.
 | `-relays file.json` | Also use a read-only relay list ([example](../relays.example.json)). |
 | `-bloat-server URL` | Load server for the bufferbloat test (default `https://speed.cloudflare.com`; it must answer `GET /__down?bytes=N` and `POST /__up`). |
 | `-trace-count N`, `-trace-interval 200ms` | Shorter route traces, for tests (default 200 probes per hop, one per second). |
+| `-wifi-reading file.json` | Play a Wi-Fi adapter from a JSON file (`diag.WiFiReadingFile`: the link, the survey, the scan pause, or an error such as `"disconnected"`) instead of reading or tuning the real one, for tests. |
 | `-compat-inventory file.json` | Read the other network software (processes, services, installed programs, adapters, internet route) from a JSON file instead of the system, for tests; see `compat.Inventory`. |
 
 ### Files on disk
@@ -207,6 +208,22 @@ go test ./...
   optimal with and without the relay's server leg), the order in which
   they win, the text report (no full addresses, 78 columns), and the API
   on `fakeplatform` with stored tests, a learned server and an analysis.
+- **Wi-Fi:** the Native Wifi structures (realtime connection quality with
+  one link and Wi-Fi 7 multi-link, connection attributes, the BSS list
+  with its elements after the entries, the interface list) decoded from
+  bytes in the 64-bit SDK layout, short and hostile replies, the unit
+  rules for rates, frequencies and widths, channels on 2.4, 5 and 6 GHz,
+  the BSS Load element, the channel survey (same channel, 2.4 GHz overlap,
+  an AP that sends no load or isn't in the scan), `/proc/net/wireless`
+  fixtures, a busy channel and a weak signal in the verdict and the
+  report's Wi-Fi line; on Windows the real API without admin rights (a
+  disconnected or missing adapter gives a reason, and nothing is changed);
+  and in the app on `fakeplatform`: every card state, a cable next to a
+  connected Wi-Fi, a hung Wi-Fi service (the card and the verdict answer in
+  time), the survey with location refused, and the scan pause through a
+  route-mode boost: applied, applied again, reverted on stop, off in
+  Settings, not on a cable, refused, half applied, and a late answer
+  reverted.
 
 `$env:LOWPATH_INTERNET=1` adds tests that tunnel real STUN requests to
 Google through a keyed relay and through the engine in capture mode,
@@ -235,7 +252,9 @@ Cloudflare with its text report, adding a custom game, automatic route measureme
 traffic, auto-stop on game exit, Boost in route mode refused next to a
 running ExitLag (played through `-compat-inventory`, so the PC's own
 software doesn't matter) with the banner, "Why?" and the Settings list,
-and route mode asking for admin rights. From
+the Wi-Fi card (played through `-wifi-reading`: signal, channel, link
+rate, *Check channel* and a disconnect) and the scan-pause toggle, and
+route mode asking for admin rights. From
 an **administrator** terminal it also tests route mode for real: WinDivert
 captures `lpcheck.exe`, tunnels it through the relay, injects the replies,
 and checks that networking is normal after Stop.

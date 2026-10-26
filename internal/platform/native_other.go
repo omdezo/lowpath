@@ -18,7 +18,8 @@ import (
 // libraries, Wine and Proton prefixes and Heroic's installs. The conflict
 // detector sees processes, network adapters and the internet route. Route
 // mode captures through a TUN device on Linux (nativeCapture); on macOS it
-// reports that capture isn't available yet (issue #42).
+// reports that capture isn't available yet (issue #42). The Wi-Fi signal
+// comes from /proc/net/wireless on Linux; macOS has no Wi-Fi reader yet.
 func Native() *Platform {
 	owners := owner.NewTable()
 	home, _ := os.UserHomeDir() // none: no game folders to look in
@@ -33,5 +34,6 @@ func Native() *Platform {
 		Paths:      NewUnixPaths(),
 		Flows:      detect.NewKernelNetwork(),
 		Inventory:  compat.NewSystem(games, diag.NewNetStats()),
+		WiFi:       diag.NewWLAN(),
 	}
 }

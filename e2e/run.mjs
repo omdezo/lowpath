@@ -25,6 +25,16 @@ const OUT = path.join(ROOT, "e2e", "out");
 const PORT = Number(process.env.LOWPATH_E2E_PORT) || 7891;
 const STUN = { host: "stun.l.google.com", port: 19302 };
 const GAME_ID = "custom-lpcheck";
+// The Wi-Fi adapter the app plays (-wifi-reading): no network name or
+// access point address, as the real reader never keeps them either.
+const WIFI = {
+  link: {
+    interface: "Wi-Fi", adapter: "Example Wi-Fi 6 Adapter", rssi_dbm: -61, quality_pct: 78, band: "5", channel: 36, freq_mhz: 5180, width_mhz: 80,
+    standard: "802.11ax", generation: "Wi-Fi 6", tx_mbps: 1201, rx_mbps: 866.7, mlo: false, source: "e2e file",
+  },
+  survey: { freq_mhz: 5180, networks: 11, same_channel: 2, overlapping: 0, loudest_neighbor_dbm: -71, load: { stations: 6, busy_pct: 58 } },
+  tuning: { scan_paused: true, streaming: true },
+};
 
 const results = [];
 const shots = [];
@@ -117,12 +127,14 @@ function speedServer() {
 
 // inventory is the file the app reads the "other network software" from
 // (-compat-inventory): the test writes "ExitLag is running" into it, and the
-// PC's real boosters and VPNs never change the results.
-function startApp(data, importFile, bloatServer, inventory) {
+// PC's real boosters and VPNs never change the results. wifi is the Wi-Fi
+// adapter it plays (-wifi-reading), so the Wi-Fi card is the same on a
+// cable and the PC's real adapter is never read or tuned.
+function startApp(data, importFile, bloatServer, inventory, wifi) {
   const log = fs.createWriteStream(path.join(OUT, "lowpath.log"));
   const app = spawn(
     APP,
-    ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory],
+    ["-headless", "-no-elevate", "-addr", `127.0.0.1:${PORT}`, "-data", data, "-relays", importFile, "-bloat-server", bloatServer, "-trace-count", "15", "-trace-interval", "200ms", "-compat-inventory", inventory, "-wifi-reading", wifi],
     { windowsHide: true },
   );
   app.stdout.pipe(log);
@@ -273,7 +285,9 @@ async function main() {
 
   const speed = await speedServer();
   const inventory = path.join(data, "inventory.json");
-  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`, inventory);
+  const wifiFile = path.join(data, "wifi.json");
+  fs.writeFileSync(wifiFile, JSON.stringify(WIFI));
+  const { app, link } = await startApp(data, importFile, `http://127.0.0.1:${speed.address().port}`, inventory, wifiFile);
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await (await browser.newContext({ viewport: { width: 1100, height: 720 } })).newPage();
   let helper;
@@ -510,6 +524,39 @@ async function main() {
     await page.getByRole("button", { name: /Show the measurements/ }).click().catch(() => {});
     await scrollToStart(page, ".verdict");
     await shot(page, "verdict", `Diagnostics verdict with the measurements open: ${vd?.verdict?.title ?? "—"}`);
+
+    // 4e. The Wi-Fi card, from the played adapter (-wifi-reading).
+    const card = page.getByTestId("wifi-card");
+    await card.locator(".bloat-stats").waitFor({ timeout: 8000 }).catch(() => {});
+    const wv = (await api(page, "GET", "/diag/wifi")).body;
+    const cardText = (await card.textContent().catch(() => "")) ?? "";
+    check(
+      "Wi-Fi card shows the adapter's signal, band, standard and link rate",
+      wv?.state === "ok" && wv.link?.rssi_dbm === -61 && /Good signal on 5 GHz/.test(cardText) && cardText.includes("802.11ax · Wi-Fi 6") && cardText.includes("1,201"),
+      wv ? `${wv.state}: ${wv.link?.rssi_dbm ?? "—"} dBm, ${wv.link?.band ?? "—"} GHz, in use ${wv.in_use}` : "no answer",
+    );
+    check("Wi-Fi card says the channel load needs a button press", /press Check channel/.test(cardText));
+    await scrollToStart(page, '[data-testid="wifi-card"]');
+    await shot(page, "wifi", "Diagnostics → Wi-Fi link: signal, channel, link rate and standard");
+    await card.getByRole("button", { name: /Check channel/ }).click();
+    await card.locator(".bloat-facts", { hasText: "% busy" }).waitFor({ timeout: 8000 }).catch(() => {});
+    const loadText = (await card.locator(".bloat-facts").textContent().catch(() => "")) ?? "";
+    check("Check channel shows the access point's load and its neighbours", /58% busy/.test(loadText) && /2 other networks on this channel/.test(loadText), loadText.slice(0, 160));
+    await scrollToStart(page, '[data-testid="wifi-card"]');
+    await shot(page, "wifi-channel", "Wi-Fi link after Check channel: the access point's own load report and the networks on its channel");
+    // The adapter disconnects: no numbers, a reason.
+    fs.writeFileSync(wifiFile, JSON.stringify({ link_error: "disconnected" }));
+    await card.locator(".bloat-grade.g-none").waitFor({ timeout: 8000 }).catch(() => {});
+    const offText = (await card.locator(".bloat-verdict").textContent().catch(() => "")) ?? "";
+    // On a cable the reason is the cable; on Wi-Fi, the disconnect.
+    check("A disconnected Wi-Fi shows — and why, not old numbers", /isn't connected|over a cable/.test(offText) && !offText.includes("-61"), offText.slice(0, 160));
+    fs.writeFileSync(wifiFile, JSON.stringify(WIFI));
+
+    await page.getByRole("tab", { name: "Optimization" }).click();
+    const pause = page.getByRole("switch", { name: "Pause Wi-Fi scans while boosting" });
+    await pause.waitFor({ timeout: 5000 }).catch(() => {});
+    check("Optimization: the Wi-Fi scan pause is a working toggle, on by default", (await pause.isChecked().catch(() => false)) && (await pause.isEnabled().catch(() => false)));
+    await shot(page, "optimization", "Settings → Optimization: pause Wi-Fi scans while boosting");
     await closeSettings(page);
 
     // 5. Add lpcheck.exe as a custom game, picked from the running programs.

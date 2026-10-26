@@ -6,6 +6,7 @@ import { fmtMs, pct } from "../util";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
 import { Verdict } from "./Verdict";
+import { WiFiCard } from "./WiFiCard";
 import "../diag.css";
 
 // Settings → Diagnostics: the verdict with the route split into Home / ISP
@@ -13,7 +14,7 @@ import "../diag.css";
 // Nothing here invents a number: a part nobody measured shows "—" and says
 // what would measure it.
 
-export function Diagnostics({ onError }: { onError: (msg: string, title?: string) => void }) {
+export function Diagnostics({ onError, wifiTuning }: { onError: (msg: string, title?: string) => void; wifiTuning: boolean }) {
   return (
     <>
       <h3>Diagnostics</h3>
@@ -22,6 +23,7 @@ export function Diagnostics({ onError }: { onError: (msg: string, title?: string
       </div>
       <Verdict renderSegments={(segs) => <RouteSegments segments={segs} />} />
       <GatewayCard />
+      <WiFiCard tuningEnabled={wifiTuning} />
       <BloatTest onError={onError} />
       <RouteTrace onError={onError} />
     </>

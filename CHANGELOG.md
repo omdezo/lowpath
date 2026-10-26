@@ -14,6 +14,17 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   while the tab is open and during a boost, with loss, median, p99, spikes
   and a 60-second chart, and the verdict uses it; a router that stops
   answering counts as loss, not as one that ignores ping (#10).
+- Wi-Fi link in Settings → Diagnostics: signal strength, band, channel,
+  width, Wi-Fi generation and link rate from the Native Wifi API (no
+  location access needed), and with *Check channel* the router's own
+  channel load (BSS Load) and the other networks on its channel. While a
+  game is boosted over Wi-Fi, background scans are paused and streaming
+  mode is on (Settings → Optimization, on by default), applied again after
+  a reconnect and reverted when the boost ends or Lowpath closes. The
+  verdict counts a weak signal, 2.4 GHz or a busy channel against the Wi-Fi,
+  the route bar's Home part says *Watch* when the router pings are clean
+  but the signal is weak, and the report gains a Wi-Fi line. Linux shows
+  the signal strength (#11).
 - Verdict in Settings → Diagnostics: one plain answer to "why am I
   lagging?" (Wi-Fi or home network, a full line, the ISP's route, the game
   server, or already optimal), with a confidence level, the measurements

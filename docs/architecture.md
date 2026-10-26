@@ -671,6 +671,11 @@ func NewTrace(TraceConfig) *Trace; (*Trace).Run(ctx, progress) (TraceResult, err
 func (TraceResult) Report() string; (TraceResult) Redacted() TraceResult
 func NewVerdictEngine(VerdictConfig) *VerdictEngine; (*VerdictEngine).Diagnose(Evidence) Diagnosis
 func (DiagnosisReport) Text() string
+type WLAN interface {                   // per OS, behind diag.NewWLAN(); platform.WiFi
+    Link(index int) (WiFiLink, error)   // RSSI, quality, band, channel, width, PHY, Tx/Rx rate, MLO links
+    Survey(index int) (WiFiSurvey, error) // BSS Load of the AP, networks on its channel (scan cache)
+    Tune(index int) (WiFiTuning, error) // background scan off + streaming mode on until Close
+}
 func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View() GatewayView, Sample() *GatewaySample
 ```
 
@@ -818,7 +823,8 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   measured), what measured it and a summary, and `blamed` on the verdict's
   segment. Home: router pings (median, loss; loss null when the router
   limits replies), `bad` when the home or line check found its problem,
-  `warn` for spikes without loss. ISP: a route trace on this connection
+  `warn` for spikes without loss or, on Wi-Fi, clean pings over a weak or
+  crowded signal (the home check stays clear). ISP: a route trace on this connection
   (time from this PC to the destination; the loss the ISP check cites when
   loss starts past home, else what persists from the first hop past home,
   null when loss starts at home),
@@ -830,6 +836,52 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
   (the trace already redacted) and measures nothing itself, so
   `GET /api/diag/verdict` answers at once; `GET /api/diag/verdict/report`
   is `DiagnosisReport.Text()` with the redacted location, for sharing.
+
+- **Wi-Fi** (`wifi*.go`, roadmap L9 and §3.6's Wi-Fi row). Windows uses
+  the Native Wifi API (`wlanapi.dll`, loaded lazily; no admin rights).
+  `Link` maps the default route's interface index to the adapter's GUID
+  (`GetIfEntry2Ex`), then reads `wlan_intf_opcode_realtime_connection_quality`
+  (PHY, link quality, Rx/Tx rate and per link the center frequency, width
+  and RSSI; the strongest link is the one judged on Wi-Fi 7 multi-link) and
+  `wlan_intf_opcode_rssi`. Both are location-free: since Windows 11 24H2
+  `current_connection` and `WlanGetNetworkBssList` return
+  `ERROR_ACCESS_DENIED` without location consent and the first call shows
+  Windows' location prompt, so `Link` falls back to `current_connection` only on builds before
+  the rule (below 25976, read with `RtlGetVersion`), with `channel_number`
+  for the channel; from the rule on, a failed realtime query leaves only
+  `channel_number` and `rssi`, so a background poll never shows the prompt. `Survey` is only called
+  when the user presses *Check channel*: it reads the connected BSSID and
+  the scan cache (no `WlanScan`), parses the AP's BSS Load element (ID 11:
+  station count, channel utilization /255, admission capacity) and counts
+  the other networks on its channel (and the overlapping ones on 2.4 GHz).
+  `Tune` sets `background_scan_enabled=FALSE` and
+  `media_streaming_mode=TRUE` on its own handle; the Wi-Fi service keeps a
+  setting while any client asks for it and resets both on a disconnect
+  (both documented), which is why `Refresh` sets them again; that it also
+  drops a client's request when the handle closes (so a crash reverts it)
+  is observed behaviour, not documented, and is part of the maintainer's
+  real Wi-Fi check. The structures are decoded from
+  copied bytes with every 64-bit SDK offset written out (`wifi_native.go`),
+  so their layouts are tested on every OS. Units the docs contradict are
+  decided by size: rates under 1000 are Mbit/s (no Wi-Fi rate is below 1
+  Mbit/s), frequencies over 100000 are kHz. Linux reads the signal from
+  `/proc/net/wireless` and `operstate` (band and rates need nl80211);
+  macOS has no reader yet. Errors: `ErrNoWiFi`, `ErrWiFiDisconnected`,
+  `ErrLocationDenied`, and one matching both `ErrUnsupported`s. SSIDs and
+  BSSIDs are never kept or shown: they can locate a home.
+- In the app (`internal/app/wifi.go`) every Wi-Fi call runs off the
+  request with a time limit (3 s, the survey 8 s; one read at a time), and
+  readings are shared for 2 s. A boost over Wi-Fi with Settings
+  `wifi_tuning` on (default) starts a tuner: `Tune` off the boost's path,
+  `Refresh` every 10 s, `Close` on stop (a `Tune` that answers after its
+  time limit is closed when it does; one that fails because the Wi-Fi is
+  reconnecting is tried again every 10 s). The AP's load joins the verdict
+  when its primary channel lies inside the link's channel (`OnChannel`:
+  the link may give the center of a 40 to 320 MHz channel). The verdict gets `Evidence.WiFi` from
+  a reading of the adapter that carries the default route (≤ 30 s old) and
+  the AP's channel load from a survey of the same channel (≤ 15 min old):
+  a channel the AP reports busy more than 60% of the time counts as weak,
+  like RSSI < −70 dBm or 2.4 GHz.
 
 ## App, desktop shell, build
 
@@ -915,8 +967,11 @@ polls while `state` is `loading` or `pinging` is true.
 | GET | /api/diag/gateway | | `GatewayView{state: "idle"\|"measuring"\|"on"\|"paused"\|"no_gateway"\|"offline"\|"no_reply"\|"no_permission"\|"cant_send"\|"unsupported", message, note, running, rate_hz, gateway, interface, link, since, stats: null \| {window_s, sent, lost, loss_pct, p50_ms, p95_ms, p99_ms, min_ms, max_ms, jitter_ms, spikes, max_loss_run, limited}, series: [{t, sent, lost, p50_ms, max_ms}]}`; asking keeps the pinger running for 15 s |
 | GET | /api/diag/verdict | | `Diagnosis{at, verdict: {id: "wifi"\|"home"\|"line"\|"isp"\|"relay"\|"server"\|"optimal"\|"clean"\|"unknown"\|"offline", segment, title, detail, advice, confidence: "high"\|"medium"\|"low", lowpath_helps, facts}, checks: [{rule, name, status: "found"\|"clear"\|"unknown", summary, facts}], link, interface, next: [{id: "bloat"\|"trace"\|"measure", text}], segments: [{id: "home"\|"isp"\|"lowpath"\|"server", name, status: "good"\|"warn"\|"bad"\|"unknown"\|"off", rtt_ms, loss_pct, source, summary, blamed}]}`; measures nothing, answers at once |
 | GET | /api/diag/verdict/report | | the diagnosis as text (`lowpath-diagnosis.txt`), addresses cut to /24 and /48, routers' host names left out |
+| GET | /api/diag/wifi | | `{at, state: "ok"\|"no_wifi"\|"disconnected"\|"unsupported"\|"error", message, link: null \| WiFiLink{interface, adapter, rssi_dbm, quality_pct, band, channel, freq_mhz, width_mhz, standard, generation, tx_mbps, rx_mbps, mlo, links, source, notes}, in_use, route, survey: null \| {state, message, result: WiFiSurvey{load: null \| {stations, busy_pct, admission_capacity}, load_note, networks, same_channel, overlapping, loudest_neighbor_dbm, freq_mhz}, at}, tuning: null \| {state: "applying"\|"on"\|"partial"\|"failed"\|"off", scan_paused, streaming, message, notes}}`; never an SSID or BSSID |
+| POST | /api/diag/wifi/survey | | reads the scan cache now (may show Windows' location prompt; `survey.state` `location` when refused); the same view |
 
-Live adds `"capture": null | {"mode": "route", "captured", "passed",
+Live adds `"wifi": null | {state, scan_paused, streaming, message, notes}`
+(the boost's Wi-Fi scan pause), `"capture": null | {"mode": "route", "captured", "passed",
 "injected", "errors", "game_pids": number[], "last_error": string}` and,
 during a session, `"line": PassiveState` (`{active, direction, since,
 watching, reason, rtt_ms, baseline_ms, other_down_mbps, other_up_mbps,
@@ -978,6 +1033,14 @@ prints that URL to stderr only, never to the log.
   once the program is closed. Settings → Network: **Other network
   software** lists everything found, what couldn't be checked, and
   **Check again**.
+- Settings → Diagnostics: **Wi-Fi link** (polled every 3 s): the RSSI in a
+  coloured box (≥ −70 dBm good, below weak, below −80 very weak), channel,
+  band and width, link rate, adapter, standard and frequency, each "—"
+  when not reported, with the reader's notes; **Check channel** reads the
+  AP's load and its neighbours (or says why not, e.g. location access);
+  the scan pause's state during a boost. Settings → Optimization: **Pause
+  Wi-Fi scans while boosting** (`wifi_tuning`). The boost's facts row
+  shows "Wi-Fi scans: Paused".
 - Optimizing in route mode: "Waiting for game traffic — launch the game now"
   until packets flow; then the **Game servers** list (addr, primary, up/down
   packets) and capture counters. Proxy mode keeps the existing

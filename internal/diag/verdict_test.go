@@ -103,7 +103,7 @@ func TestVerdictWiFiFromRouterLoss(t *testing.T) {
 		t.Errorf("segment %q helps %v", d.Verdict.Segment, d.Verdict.LowpathHelps)
 	}
 	facts := strings.Join(d.Verdict.Facts, "\n")
-	for _, want := range []string{"4 of 50 pings lost (8.0%)", "doesn't read the Wi-Fi signal"} {
+	for _, want := range []string{"4 of 50 pings lost (8.0%)", "couldn't read the Wi-Fi signal"} {
 		if !strings.Contains(facts, want) {
 			t.Errorf("facts lack %q:\n%s", want, facts)
 		}
