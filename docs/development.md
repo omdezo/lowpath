@@ -175,7 +175,7 @@ internal/dedup     first-copy-wins sliding window
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
 internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters per OS
 internal/demo      simulated topology + game traffic generator (-demo)
-internal/netsim    UDP hop with delay/jitter/loss/spike impairment
+internal/netsim    UDP hop with delay/jitter/loss/spike and Gilbert-Elliott burst impairment; shared segments
 internal/gamesim   echo game server
 deploy/            relay install scripts
 ui/                React + TypeScript UI (Vite), embedded via go:embed
@@ -193,6 +193,13 @@ go test ./...
 - **Engine:** the real client, relay and dedup over lossy simulated links
   (about 9% loss direct vs 0.00% with 3 copies), failover, no route flapping,
   kill switch, capture mode, relay restarts.
+- **Network simulator (`internal/netsim`):** Gilbert-Elliott burst loss
+  against its closed forms (mean loss, mean burst length, n-step state
+  probabilities) over 2 million packets per model with fixed seeds, per
+  packet and time stepped; two lanes behind one shared Wi-Fi-like segment
+  (3% loss in 8 ms bursts) losing both copies together, and how much a time
+  shift between them helps (about 3x at 8 ms, 11x at 20 ms); real links on
+  IPv4 and IPv6 loopback behind a segment that fades and heals.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
   and the socket owner table — all without admin rights. The fail-open

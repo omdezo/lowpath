@@ -1,14 +1,22 @@
 package netsim
 
 import (
+	"encoding/binary"
 	"math/rand/v2"
 	"sync"
 	"time"
 )
 
-// seedStream picks the PCG stream; any constant works, it only has to stay
-// the same so a Seed means the same packets every run.
-const seedStream = 0x6c6f777061746821
+// newRand is the random source for a seed. ChaCha8 rather than PCG: in the
+// statistics tests, PCG seeded 1, 2, 3... with a fixed stream gave loss
+// rates that spread about 1.4x wider from seed to seed than chance allows,
+// and tests with fixed seeds rely on each seed being a fair sample.
+func newRand(seed uint64) *rand.Rand {
+	var key [32]byte
+	binary.LittleEndian.PutUint64(key[:], seed)
+	copy(key[8:], "lowpath netsim")
+	return rand.New(rand.NewChaCha8(key))
+}
 
 // impairer makes the random choices for one link or segment: loss, spikes,
 // burst loss and jitter. One lock covers the random source and the burst
@@ -32,7 +40,7 @@ func (im *impairer) reseed(seed uint64) {
 	if seed == 0 {
 		seed = rand.Uint64()
 	}
-	im.rng = rand.New(rand.NewPCG(seed, seedStream))
+	im.rng = newRand(seed)
 	im.burst = geChain{}
 }
 

@@ -9,6 +9,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Network simulator: Gilbert-Elliott burst loss (`p`, `r`, `1-k`, `1-h`,
+  stepped per packet or in time) and shared segments, so lanes behind one
+  bursty hop such as home Wi-Fi lose packets together; seeded random
+  choices make lab runs repeatable (#55).
 - Router pinger and segmented Home / ISP / Lowpath / Game server bar in
   Settings → Diagnostics: the default gateway is pinged 20 times a second
   while the tab is open and during a boost, with loss, median, p99, spikes
