@@ -1038,9 +1038,10 @@ func tunRulesetFlushed(t *testing.T) {
 }
 
 // tunRulesetFlushedOldKernel: the table as kernels before 5.12 make it,
-// which a flush deletes. It is made again within about a second; when
-// another program takes its name in the same transaction it can't be, and
-// the capture stops with the reason, leaving nothing of its own.
+// which a flush deletes. It is made again within about a second, also when
+// an empty table of that name took its place; when another program's
+// socket takes its name in the same transaction it can't be, and the
+// capture stops with the reason, leaving nothing of its own.
 func tunRulesetFlushedOldKernel(t *testing.T) {
 	game := newPeer(t)
 	b := gameBackend(game)
@@ -1067,6 +1068,23 @@ func tunRulesetFlushedOldKernel(t *testing.T) {
 	}
 	if st := c.Stats(); st.RouteRepairs != 1 {
 		t.Errorf("stats %+v, want one repair", st)
+	}
+
+	// A flush followed by an empty table of that name (a firewall restoring
+	// its ruleset): the name is there, but the handle isn't this table's,
+	// and it is made again.
+	flushRuleset(t, nf, nft.AddTable(nft.IPv4, tunNftTable, 0))
+	replaced := time.Now()
+	if !tableExists(t) {
+		t.Fatal("no table after the flush and add")
+	}
+	back = relayedAgain(t, game, "e", replaced)
+	t.Logf("relayed again %v after the table was replaced (stats %+v)", back.Round(time.Millisecond), c.Stats())
+	if back == 0 || back > 1500*time.Millisecond {
+		t.Fatalf("back through the relay after %v, want about 1 s", back)
+	}
+	if st := c.Stats(); st.RouteRepairs != 2 {
+		t.Errorf("stats %+v, want two repairs", st)
 	}
 
 	// Another program's table of that name (owned by this test's socket).

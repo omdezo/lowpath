@@ -450,8 +450,9 @@ process, the unowned one stays and diverts nothing), `Recover`, a user
 without rights, the rule deleted from outside mid-capture (relayed again
 within about 1 s, as root and as the user with two capabilities), `nft
 flush ruleset` (an owned table stays; an unowned one is made again within
-about 1 s, and when another program's socket takes its name in the same
-transaction, capture stops with `ErrRouteRemoved` and leaves nothing),
+about 1 s, also when an empty table of that name took its place, and when
+another program's socket takes its name in the same transaction, capture
+stops with `ErrRouteRemoved` and leaves nothing),
 and the acceptance test: the real `lpcheck` (found by name through `/proc`)
 routed by the engine through the relay reports the relay's address, while a
 copy under another name reports the client's.
