@@ -55,17 +55,20 @@ func TestRepliesSurviveEgressRestart(t *testing.T) {
 	e, s := startCapture(t, engine.Config{Paths: []engine.PathSpec{{ID: "r", Label: "r", Addr: addr}}})
 
 	next := uint32(0)
-	// At most inFlight packets wait for their reply. A burst paced by the
-	// clock alone overruns a loopback receive buffer whenever a reader is
-	// starved (Linux drops them and counts RcvbufErrors), which would be
-	// lost replies this test doesn't mean to measure.
+	// Every 16 packets, wait until at most inFlight are still waiting for
+	// their reply. A burst paced by the clock alone overruns a loopback
+	// receive buffer whenever a reader is starved (Linux drops them and
+	// counts RcvbufErrors), which would be lost replies this test doesn't
+	// mean to measure. Replies that stop coming fail at once rather than
+	// stalling every 16 packets.
 	const inFlight = 64
 	sendBatch := func(n int) {
 		pkt := make([]byte, 8)
 		base := len(s.all())
 		for i := range n {
-			if i%16 == 0 {
-				waitFor(t, time.Second, func() bool { return len(s.all())-base >= i-inFlight })
+			if i%16 == 0 && !waitFor(t, 2*time.Second, func() bool { return len(s.all())-base >= i-inFlight }) {
+				t.Fatalf("replies stopped: %d for the first %d packets of %d (%d dropped as duplicates)",
+					len(s.all())-base, i, n, e.Snapshot().Dups)
 			}
 			next++
 			binary.BigEndian.PutUint32(pkt, next)
