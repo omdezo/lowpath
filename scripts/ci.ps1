@@ -160,14 +160,15 @@ function Invoke-WithEnv([hashtable]$Vars, [scriptblock]$Command) {
 
 # Get-TreeState is what git status shows, as one string ('' when clean), or
 # $null outside a git work tree (a source archive), where nothing is compared.
+# Only git's exit code decides: with 'Stop', Windows PowerShell turns any
+# line git writes to stderr (a warning, GIT_TRACE) into an error, which
+# would switch the check off without a word.
 function Get-TreeState {
-    try {
-        $lines = git -C $root status --porcelain --untracked-files=all 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
-        return (@($lines) -join "`n")
-    } catch {
-        return $null
-    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $null }
+    $ErrorActionPreference = 'Continue'
+    $lines = git -C $root status --porcelain --untracked-files=all 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (@($lines) -join "`n")
 }
 
 # With -Report, check up front that the result can be published, so a dirty
@@ -223,7 +224,9 @@ try {
             } finally { Pop-Location }
             if (-not (Test-Path (Join-Path $root 'ui\dist\app\index.html'))) { throw 'npm run build wrote no ui\dist\app\index.html' }
             $after = Get-TreeState
-            if ($null -ne $before -and $after -ne $before) {
+            if ($null -eq $before) {
+                Write-Host 'Not a git work tree: not checking that the build left git status as it was.' -ForegroundColor Yellow
+            } elseif ($after -ne $before) {
                 $was = $before -split "`n"
                 $new = @($after -split "`n" | Where-Object { $_ -and $was -notcontains $_ })
                 throw "npm run build changed what git status shows (build output belongs in ui\dist\app):`n$($new -join "`n")"

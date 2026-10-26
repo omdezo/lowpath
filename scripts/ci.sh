@@ -34,7 +34,9 @@ if command -v npm >/dev/null; then
   (cd ui && { [ -d node_modules ] || npm ci; } && npm run build)
   [ -f ui/dist/app/index.html ] || { echo "npm run build wrote no ui/dist/app/index.html"; exit 1; }
   after=$(tree_state)
-  if [ "$before" != - ] && [ "$after" != "$before" ]; then
+  if [ "$before" = - ]; then
+    echo "Not a git work tree: not checking that the build left git status as it was."
+  elif [ "$after" != "$before" ]; then
     echo "npm run build changed what git status shows (build output belongs in ui/dist/app):"
     printf '%s\n' "$after" | grep -vxF -e "$before" || true
     exit 1
