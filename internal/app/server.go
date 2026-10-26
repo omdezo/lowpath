@@ -131,6 +131,7 @@ type Server struct {
 	// full-tunnel VPNs (internal/compat).
 	conflicts *conflictWatch
 	verdict   *verdicts
+	wifi      *wifiWatch
 	marker    SessionMarker // nil: none
 
 	// lifetime ends when the server closes; background work (the
@@ -236,6 +237,7 @@ func NewServer(cfg Config) (*Server, error) {
 		lifetime: life, endLife: endLife,
 		line:    newLineWatch(cfg.NetStats, lineRate(cfg.Store.Bloat())),
 		verdict: newVerdicts(cfg.NetStats),
+		wifi:    newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
 		marker:  cfg.Marker,
 	}
 	s.bloat = &bloatRunner{
@@ -423,6 +425,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/diag/trace/report", s.handleTraceReport)
 	mux.HandleFunc("GET /api/diag/verdict", s.handleVerdict)
 	mux.HandleFunc("GET /api/diag/verdict/report", s.handleVerdictReport)
+	mux.HandleFunc("GET /api/diag/wifi", s.handleWiFi)
+	mux.HandleFunc("POST /api/diag/wifi/survey", s.handleWiFiSurvey)
 	mux.HandleFunc("POST /api/demo/impair", s.handleImpair)
 	mux.HandleFunc("GET "+pathSession, s.handleSession)
 	mux.HandleFunc("GET "+pathVersion, s.handleVersion)
@@ -683,6 +687,9 @@ type liveView struct {
 	// Conflicts is the last scan for other boosters, packet filter drivers
 	// and full-tunnel VPNs (nil until the first scan ends).
 	Conflicts *compat.Report `json:"conflicts"`
+	// WiFi is the boost's Wi-Fi scan pause (nil: no boost, not on Wi-Fi,
+	// or turned off in Settings).
+	WiFi *wifiTuneView `json:"wifi"`
 }
 
 func (s *Server) live() liveView {
@@ -700,6 +707,7 @@ func (s *Server) live() liveView {
 			v.Capture = &captureView{Mode: CaptureRoute, Stats: sess.capt.Stats()}
 		}
 		v.Line = s.line.view()
+		v.WiFi = sess.wifi.current()
 	}
 	return v
 }
@@ -778,6 +786,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"route_trace":  s.lastTrace(),                    // addresses cut to /24 and /48
 		"conflicts":    s.conflicts.current().Redacted(), // user folder names cut out
 		"verdict":      s.diagnosis(),
+		"wifi":         s.wifiView(), // no network name or access point address
 		"live":         live,
 	})
 }

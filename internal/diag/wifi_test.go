@@ -415,3 +415,35 @@ func TestDiagnosisReportWiFiLine(t *testing.T) {
 		t.Errorf("Wi-Fi line on a cable:\n%s", txt)
 	}
 }
+
+func TestFileWLAN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wifi.json")
+	f := NewFileWLAN(path)
+	if _, err := f.Link(0); !errors.Is(err, ErrNoWiFi) {
+		t.Errorf("missing file: %v", err)
+	}
+	os.WriteFile(path, []byte(`{"link":{"rssi_dbm":-61,"band":"5"},"survey_error":"location","tuning":{"scan_paused":true,"streaming":true}}`), 0o644)
+	if l, err := f.Link(0); err != nil || *l.RSSI != -61 || l.Band != "5" {
+		t.Errorf("Link: %+v %v", l, err)
+	}
+	if _, err := f.Survey(0); !errors.Is(err, ErrLocationDenied) {
+		t.Errorf("Survey: %v", err)
+	}
+	tu, err := f.Tune(0)
+	if err != nil || !tu.State().ScanPaused || f.Held() != 1 {
+		t.Fatalf("Tune: %v", err)
+	}
+	tu.Close()
+	tu.Close()
+	if f.Held() != 0 || tu.State().ScanPaused {
+		t.Error("Close didn't revert once")
+	}
+	os.WriteFile(path, []byte(`{"link_error":"disconnected"}`), 0o644)
+	if _, err := f.Link(0); !errors.Is(err, ErrWiFiDisconnected) {
+		t.Errorf("disconnected: %v", err)
+	}
+	os.WriteFile(path, []byte(`{`), 0o644)
+	if _, err := f.Link(0); err == nil {
+		t.Error("broken file read")
+	}
+}

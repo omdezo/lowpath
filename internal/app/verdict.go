@@ -33,6 +33,9 @@ func (s *Server) evidence(now time.Time) diag.Evidence {
 	switch r, err := s.verdict.net.DefaultRoute(); {
 	case err == nil:
 		ev.Link = &r
+		if r.Kind == diag.LinkWiFi {
+			ev.WiFi = s.wifi.signal()
+		}
 	case errors.Is(err, diag.ErrNoRoute):
 		ev.Offline = true
 	}
