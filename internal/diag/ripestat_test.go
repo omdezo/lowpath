@@ -65,20 +65,22 @@ func (f *fakeRIPE) calls() []string {
 	return append([]string(nil), f.queries...)
 }
 
+// The canned network is a documentation one: AS64500 (RFC 5398) announcing
+// 198.51.100.0/24 (RFC 5737), with the AS block RIPEstat reports for it.
 const (
-	omantelNetworkInfo = `{"asns":["28885"],"prefix":"5.36.0.0/15"}`
-	omantelOverview    = `{"type":"as","resource":"28885","block":{"resource":"28672-29695","desc":"Assigned by RIPE NCC","name":"IANA 16-bit Autonomous System (AS) Numbers Registry"},"holder":"OMANTEL-NAP-AS Oman Telecommunications Company (S.A.O.G)","announced":true}`
-	omantelGeo         = `{"located_resources":[{"resource":"5.37.1.2/32","locations":[{"country":"OM","city":"","resources":["5.36.0.0/15"],"latitude":21.0,"longitude":57.0,"covered_percentage":20.0},{"country":"OM","city":"Muscat","resources":["5.37.0.0/16"],"latitude":23.6,"longitude":58.5,"covered_percentage":80.0}],"unknown_percentage":0}],"unknown_percentage":{"v4":0.0},"parameters":{"resource":"5.37.1.2/32"}}`
+	exampleNetworkInfo = `{"asns":["64500"],"prefix":"198.51.100.0/24"}`
+	exampleOverview    = `{"type":"as","resource":"64500","block":{"resource":"64496-64511","desc":"Reserved for use in documentation and sample code","name":"IANA 16-bit Autonomous System (AS) Numbers Registry"},"holder":"EXAMPLEBB-AS Example Broadband","announced":true}`
+	exampleGeo         = `{"located_resources":[{"resource":"198.51.100.2/32","locations":[{"country":"NL","city":"","resources":["198.51.100.0/24"],"latitude":52.38,"longitude":4.9,"covered_percentage":20.0},{"country":"NL","city":"Amsterdam","resources":["198.51.100.0/25"],"latitude":52.37,"longitude":4.89,"covered_percentage":80.0}],"unknown_percentage":0}],"unknown_percentage":{"v4":0.0},"parameters":{"resource":"198.51.100.2/32"}}`
 )
 
 func newFakeRIPE(t *testing.T) (*fakeRIPE, *RIPEstat) {
 	t.Helper()
 	f := &fakeRIPE{
 		data: map[string]string{
-			"network-info":     omantelNetworkInfo,
-			"as-overview":      omantelOverview,
-			"maxmind-geo-lite": omantelGeo,
-			"whats-my-ip":      `{"ip":"5.37.1.2"}`,
+			"network-info":     exampleNetworkInfo,
+			"as-overview":      exampleOverview,
+			"maxmind-geo-lite": exampleGeo,
+			"whats-my-ip":      `{"ip":"198.51.100.2"}`,
 		},
 		fail: map[string]int{},
 	}
@@ -89,12 +91,12 @@ func newFakeRIPE(t *testing.T) (*fakeRIPE, *RIPEstat) {
 
 func TestRIPEstatLookupNetwork(t *testing.T) {
 	f, r := newFakeRIPE(t)
-	got, err := r.LookupNetwork(context.Background(), netip.MustParseAddr("5.37.1.2"))
+	got, err := r.LookupNetwork(context.Background(), pub4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ASN != 28885 || got.ASName != "OMANTEL-NAP-AS" || got.ISP != "Oman Telecommunications Company (S.A.O.G)" ||
-		got.Prefix != netip.MustParsePrefix("5.36.0.0/15") || got.Country != "OM" || got.City != "Muscat" || got.Partial != "" {
+	if got.ASN != 64500 || got.ASName != "EXAMPLEBB-AS" || got.ISP != "Example Broadband" ||
+		got.Prefix != netip.MustParsePrefix("198.51.100.0/24") || got.Country != "NL" || got.City != "Amsterdam" || got.Partial != "" {
 		t.Fatalf("got %+v", got)
 	}
 	calls := f.calls()
@@ -106,8 +108,8 @@ func TestRIPEstatLookupNetwork(t *testing.T) {
 			t.Fatalf("query without sourceapp: %s", c)
 		}
 	}
-	if !strings.Contains(strings.Join(calls, " "), "as-overview?resource=AS28885") {
-		t.Fatalf("as-overview not asked for AS28885: %v", calls)
+	if !strings.Contains(strings.Join(calls, " "), "as-overview?resource=AS64500") {
+		t.Fatalf("as-overview not asked for AS64500: %v", calls)
 	}
 }
 
@@ -115,11 +117,11 @@ func TestRIPEstatPartialFailures(t *testing.T) {
 	f, r := newFakeRIPE(t)
 	f.setFail("maxmind-geo-lite", 503)
 	f.setFail("as-overview", 500)
-	got, err := r.LookupNetwork(context.Background(), netip.MustParseAddr("5.37.1.2"))
+	got, err := r.LookupNetwork(context.Background(), pub4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ASN != 28885 || got.ISP != "" || got.City != "" {
+	if got.ASN != 64500 || got.ISP != "" || got.City != "" {
 		t.Fatalf("got %+v", got)
 	}
 	if !strings.Contains(got.Partial, "ISP name unknown") || !strings.Contains(got.Partial, "city unknown") {
@@ -132,20 +134,20 @@ func TestRIPEstatErrors(t *testing.T) {
 	ctx := context.Background()
 
 	f.set("network-info", `{"asns":[],"prefix":""}`) // what RIPEstat says for 192.168.1.1
-	if _, err := r.LookupNetwork(ctx, netip.MustParseAddr("5.37.1.2")); err == nil || !strings.Contains(err.Error(), "not announced") {
+	if _, err := r.LookupNetwork(ctx, pub4); err == nil || !strings.Contains(err.Error(), "not announced") {
 		t.Fatalf("unannounced: %v", err)
 	}
 	f.setFail("network-info", 429)
-	if _, err := r.LookupNetwork(ctx, netip.MustParseAddr("5.37.1.2")); err == nil || !strings.Contains(err.Error(), "HTTP 429") {
+	if _, err := r.LookupNetwork(ctx, pub4); err == nil || !strings.Contains(err.Error(), "HTTP 429") {
 		t.Fatalf("429: %v", err)
 	}
 	f.setFail("network-info", 0)
 	f.set("network-info", `not json`)
-	if _, err := r.LookupNetwork(ctx, netip.MustParseAddr("5.37.1.2")); err == nil || !strings.Contains(err.Error(), "unreadable") {
+	if _, err := r.LookupNetwork(ctx, pub4); err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("garbage: %v", err)
 	}
 	f.set("network-info", "")
-	if _, err := r.LookupNetwork(ctx, netip.MustParseAddr("5.37.1.2")); err == nil {
+	if _, err := r.LookupNetwork(ctx, pub4); err == nil {
 		t.Fatal("error reply accepted")
 	}
 }
@@ -153,7 +155,7 @@ func TestRIPEstatErrors(t *testing.T) {
 func TestRIPEstatWhatsMyIP(t *testing.T) {
 	f, r := newFakeRIPE(t)
 	pa, err := r.PublicAddr(context.Background(), IPv4)
-	if err != nil || pa.Addr != netip.MustParseAddr("5.37.1.2") || pa.Source == "" {
+	if err != nil || pa.Addr != pub4 || pa.Source == "" {
 		t.Fatalf("got %+v, %v", pa, err)
 	}
 	f.set("whats-my-ip", `{"ip":"nonsense"}`)
@@ -180,14 +182,14 @@ func TestRIPEstatHonorsContext(t *testing.T) {
 	r := NewRIPEstat(RIPEstatOptions{BaseURL: srv.URL})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := r.LookupNetwork(ctx, netip.MustParseAddr("5.37.1.2")); err == nil {
+	if _, err := r.LookupNetwork(ctx, pub4); err == nil {
 		t.Fatal("cancelled lookup succeeded")
 	}
 }
 
 func TestSplitHolder(t *testing.T) {
 	for _, tc := range []struct{ in, handle, name string }{
-		{"OMANTEL-NAP-AS Oman Telecommunications Company (S.A.O.G)", "OMANTEL-NAP-AS", "Oman Telecommunications Company (S.A.O.G)"},
+		{"EXAMPLEBB-AS Example Broadband (Holdings) B.V.", "EXAMPLEBB-AS", "Example Broadband (Holdings) B.V."},
 		{"GOOGLE - Google LLC", "GOOGLE", "Google LLC"},
 		{"COMCAST-7922 - Comcast Cable Communications, LLC", "COMCAST-7922", "Comcast Cable Communications, LLC"},
 		{"M247 M247 Europe SRL", "M247", "M247 Europe SRL"},

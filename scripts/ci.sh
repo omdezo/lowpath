@@ -8,8 +8,11 @@ cd "$(dirname "$0")/.."
 stage() { printf '\n==> %s\n' "$1"; }
 
 stage format
-unformatted=$(gofmt -l cmd internal)
+unformatted=$(gofmt -l cmd internal scripts)
 if [ -n "$unformatted" ]; then echo "Not gofmt'd:"; echo "$unformatted"; exit 1; fi
+
+stage addrs
+go run ./scripts/docaddrs
 
 stage vet
 go vet ./...
