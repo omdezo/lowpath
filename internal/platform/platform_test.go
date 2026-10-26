@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"lowpath/internal/capture"
+	"lowpath/internal/diag"
 )
 
 func TestNativeIsComplete(t *testing.T) {
@@ -26,6 +27,16 @@ func TestNativeIsComplete(t *testing.T) {
 	}
 	if d, err := p.Paths.DataDir(); err == nil && filepath.Base(d) != appDir {
 		t.Errorf("DataDir = %q, want a %s folder", d, appDir)
+	}
+	// Wi-Fi: this machine may have no adapter, a disconnected one or a
+	// connected one; what matters is that a missing reading says why.
+	if _, err := p.WiFi.Link(0); err != nil && !errors.Is(err, diag.ErrNoWiFi) && !errors.Is(err, diag.ErrWiFiDisconnected) && !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Wi-Fi link: %v, want a reading or a known reason", err)
+	}
+	if runtime.GOOS == "darwin" {
+		if _, err := p.WiFi.Tune(0); !errors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("Wi-Fi tuning on darwin: %v, want errors.ErrUnsupported", err)
+		}
 	}
 	if runtime.GOOS == "windows" {
 		return

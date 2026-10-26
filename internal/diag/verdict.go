@@ -122,6 +122,14 @@ type Diagnosis struct {
 type WiFiSignal struct {
 	RSSI *int   `json:"rssi_dbm"` // received signal strength, dBm
 	Band string `json:"band"`     // "2.4", "5" or "6" (GHz)
+	// BusyPct is how busy the access point says the channel is (its BSS
+	// Load report); nil: not surveyed, or the access point doesn't say.
+	BusyPct *float64 `json:"channel_busy_pct"`
+	// The rest is for the report only.
+	Channel    *int     `json:"channel"`
+	WidthMHz   *int     `json:"width_mhz"`
+	Generation string   `json:"generation"`
+	TxMbps     *float64 `json:"tx_mbps"`
 }
 
 // GatewaySample is a series of pings to the home router.
@@ -254,6 +262,9 @@ const (
 	gatewayTailMS  = 15
 	// weakRSSI: below -70 dBm a Wi-Fi link is moderate to weak.
 	weakRSSI = -70
+	// busyChannelPct: an access point that senses its channel busy more
+	// than this share of the time queues packets, which adds delay.
+	busyChannelPct = 60
 	// optimalMS: a direct route within this of the relay route needs no relay.
 	optimalMS = 2
 	// routeLossPct: loss on a route that is worth a verdict; cleanLossPct:
