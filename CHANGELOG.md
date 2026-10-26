@@ -125,6 +125,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   once more by itself a few seconds later (#112).
 - `scripts/ci.ps1 -Report` no longer refuses to report after a UI change:
   the generated `ui/dist` output doesn't count as an uncommitted change.
+- The relay and engine tests no longer fail on a busy machine: they wait
+  for the forwarding hop's counters and the engine's live samples instead
+  of sleeping, check the order of measured routes rather than RTT
+  ceilings, and the relay-restart test keeps its burst within what
+  loopback receive buffers hold (#114).
 - Route mode (Windows): closing the capture handle waits for the WinDivert
   calls still running on it, so a late inject from the engine or a worker
   that comes back after a fail-open can no longer reach the driver through
