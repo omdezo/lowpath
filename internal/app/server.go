@@ -147,6 +147,9 @@ type Server struct {
 	serviceNote string
 	// analyzeWait: see the constant; tests shorten it.
 	analyzeWait time.Duration
+	// scanFails holds back repeats of "the process list couldn't be read"
+	// (a scan runs every 3 s).
+	scanFails *logLimiter
 
 	// lifetime ends when the server closes; background work (the
 	// bufferbloat test) runs under it.
@@ -280,6 +283,7 @@ func NewServer(cfg Config) (*Server, error) {
 		wifi:        newWiFiWatch(cfg.Platform.WiFi, cfg.NetStats, cfg.Log.With("component", "wifi")),
 		marker:      cfg.Marker,
 		analyzeWait: analyzeWait,
+		scanFails:   newLogLimiter(scanFailLogEvery, nil),
 		inService:   cfg.InService,
 		serviceNote: cfg.ServiceNote,
 	}
@@ -408,8 +412,24 @@ func (s *Server) scanInstalled() {
 	s.mu.Unlock()
 }
 
+// scanFailLogEvery is how often a process list that keeps failing to read
+// is logged.
+const scanFailLogEvery = time.Minute
+
+// scanRunning reads which games run, for the library's badges and for Stop
+// on game exit.
 func (s *Server) scanRunning() {
-	procs := s.plat.Games.Running()
+	procs, err := s.plat.Games.Running()
+	if err != nil {
+		// An unreadable process list says nothing about which games run:
+		// keep the last answer, and the session, until a scan succeeds.
+		// Read as "nothing runs", one failed snapshot mid-match would end
+		// the boost and log that the game exited.
+		if ok, held := s.scanFails.allow(); ok {
+			s.log.Warn("couldn't read the running programs, keeping the last scan", "err", err, "failed_since_last_log", held)
+		}
+		return
+	}
 	run := map[string]bool{}
 	for _, g := range s.allGames() {
 		for _, p := range g.Processes {

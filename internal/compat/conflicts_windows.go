@@ -25,7 +25,7 @@ func NewSystem(procs ProcessLister, route RouteFinder) System {
 	return windowsSystem{procs: procs, route: route}
 }
 
-func (w windowsSystem) Processes() ([]string, error) { return processNames(w.procs), nil }
+func (w windowsSystem) Processes() ([]string, error) { return processNames(w.procs) }
 
 func (w windowsSystem) DefaultRoute() (int, error) { return routeIndex(w.route) }
 
@@ -94,44 +94,39 @@ func serviceImagePath(name string) string {
 
 // Programs lists the display names under the Uninstall keys (what Settings
 // → Apps shows): for all users in both registry views, and for this user.
+// A key that can't be read (access denied by policy) doesn't hide the
+// others: their names come back with an error naming the key that failed.
 func (windowsSystem) Programs() ([]string, error) {
 	const path = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`
-	roots := []struct {
-		key    registry.Key
-		access uint32
-	}{
-		{registry.LOCAL_MACHINE, registry.WOW64_64KEY},
-		{registry.LOCAL_MACHINE, registry.WOW64_32KEY},
-		{registry.CURRENT_USER, 0},
-	}
-	var out []string
-	var errs []error
-	seen := map[string]bool{}
-	for _, r := range roots {
-		k, err := registry.OpenKey(r.key, path, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE|r.access)
+	return readPrograms([]programSource{
+		uninstallKey(`HKLM\`+path+` (64-bit view)`, registry.LOCAL_MACHINE, path, registry.WOW64_64KEY),
+		uninstallKey(`HKLM\`+path+` (32-bit view)`, registry.LOCAL_MACHINE, path, registry.WOW64_32KEY),
+		uninstallKey(`HKCU\`+path, registry.CURRENT_USER, path, 0),
+	})
+}
+
+// uninstallKey reads the display names of the programs listed under one
+// Uninstall key. A key that doesn't exist (no 32-bit programs, nothing
+// installed for this user) lists nothing and is no error.
+func uninstallKey(name string, root registry.Key, path string, access uint32) programSource {
+	return programSource{name: name, read: func() ([]string, error) {
+		k, err := registry.OpenKey(root, path, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE|access)
 		if errors.Is(err, registry.ErrNotExist) {
-			continue
+			return nil, nil
 		}
 		if err != nil {
-			errs = append(errs, err)
-			continue
+			return nil, err
 		}
-		subs, err := k.ReadSubKeyNames(-1)
-		if err != nil {
-			errs = append(errs, err)
-		}
+		defer k.Close()
+		subs, err := k.ReadSubKeyNames(-1) // on an error, the names read so far
+		var out []string
 		for _, sub := range subs {
-			if name := displayName(k, sub); name != "" && !seen[name] {
-				seen[name] = true
-				out = append(out, name)
+			if n := displayName(k, sub); n != "" {
+				out = append(out, n)
 			}
 		}
-		k.Close()
-	}
-	if len(out) == 0 && len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return out, nil
+		return out, err
+	}}
 }
 
 func displayName(parent registry.Key, sub string) string {

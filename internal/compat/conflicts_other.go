@@ -26,7 +26,7 @@ func NewSystem(procs ProcessLister, route RouteFinder) System {
 	return unixSystem{procs: procs, route: NewEgressRoute(route)}
 }
 
-func (u unixSystem) Processes() ([]string, error) { return processNames(u.procs), nil }
+func (u unixSystem) Processes() ([]string, error) { return processNames(u.procs) }
 
 func (u unixSystem) DefaultRoute() (int, error) { return routeIndex(u.route) }
 

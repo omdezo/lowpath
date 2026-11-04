@@ -12,7 +12,9 @@ import (
 
 type noProcs struct{}
 
-func (noProcs) Running() map[string]bool { return map[string]bool{"lowpath.test.exe": true} }
+func (noProcs) Running() (map[string]bool, error) {
+	return map[string]bool{"lowpath.test.exe": true}, nil
+}
 
 // Every part reads without administrator rights. Assertions stay on what
 // every Windows PC has, and nothing found is printed: the test runs on

@@ -50,6 +50,9 @@ type tracker struct {
 	mu   sync.Mutex
 	ring [ringSize]rec
 	next uint32
+	// awake times probes out on the time the engine could read their
+	// replies, not on wall time; nil: wall time. Set before the first probe.
+	awake *awakeClock
 }
 
 func (t *tracker) send(now time.Time) uint32 {
@@ -128,21 +131,29 @@ func (t *tracker) statsN(now time.Time, window int) Stats {
 		if !r.valid || r.seq != t.next-uint32(i) {
 			break
 		}
-		if !r.got && now.Sub(r.sent) < probeTimeout {
-			continue // still in flight, don't count it yet
+		if !r.got && t.awake.age(r.sent, now) < probeTimeout {
+			// Still in flight, or its reply may be among those queued while
+			// the engine stalled: don't count it yet.
+			continue
 		}
 		sent++
-		if r.got {
-			rtts = append(rtts, float64(r.rtt)/float64(time.Millisecond))
-			if r.leg >= 0 {
-				legSum += float64(r.leg) / float64(time.Millisecond)
-				legs++
-			}
-			if r.sent.After(lastGot) {
-				lastGot = r.sent
-			}
-		} else {
+		if !r.got {
 			lost++
+			continue
+		}
+		if r.sent.After(lastGot) {
+			lastGot = r.sent
+		}
+		if t.awake.stalled(r.sent, r.readAt()) >= stallMin {
+			// Delivered, but its round trip spans a stall: it says how long
+			// the engine stalled, not how slow the path is. (A reply sent
+			// and read within a stall's settle time is a real sample.)
+			continue
+		}
+		rtts = append(rtts, float64(r.rtt)/float64(time.Millisecond))
+		if r.leg >= 0 {
+			legSum += float64(r.leg) / float64(time.Millisecond)
+			legs++
 		}
 	}
 	s := Stats{Samples: len(rtts)}
@@ -164,6 +175,16 @@ func (t *tracker) statsN(now time.Time, window int) Stats {
 		}
 		s.Jitter = math.Sqrt(sq / float64(len(rtts)))
 	}
-	s.Up = !lastGot.IsZero() && now.Sub(lastGot) < probeTimeout+2*time.Second
+	s.Up = !lastGot.IsZero() && t.awake.age(lastGot, now) < probeTimeout+2*time.Second
 	return s
+}
+
+// readAt is about when the reply was read: the round trip without the
+// relay's leg to the server, which the relay measured on its own clock.
+func (r rec) readAt() time.Time {
+	at := r.sent.Add(r.rtt)
+	if r.leg > 0 {
+		at = at.Add(-r.leg)
+	}
+	return at
 }

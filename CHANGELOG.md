@@ -144,6 +144,27 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- A process list that couldn't be read no longer counts as "every game
+  exited": with *Stop on game exit* on, one failed scan mid-match used to
+  end the boost and log "game exited". Now the last scan, the library's
+  running badges and the session are kept until a scan reads the list
+  (logged at most once a minute); Windows retries a snapshot that fails
+  with `ERROR_BAD_LENGTH`, and the conflict check lists running programs
+  as unchecked instead of saying no booster runs (#211).
+- The conflict check no longer says "None found" for installed programs it
+  couldn't read: when one Uninstall registry key is refused (by policy,
+  for example) the programs under the other keys are still matched and the
+  report names the key it couldn't check (#150).
+- A stall of the whole PC or VM (a second or more without running) no
+  longer reads as packet loss: replies that arrived meanwhile and wait to
+  be read no longer count as lost, a route is no longer dropped and the
+  boost no longer falls back for them right after it starts, and their
+  late reads don't show as ping spikes. The engine notices a stall as a
+  gap of 500 ms or more in a 50 ms heartbeat and leaves it, plus 250 ms
+  for the queued replies to be read, out of a probe's 1 s timeout and the
+  start grace. Dead routes still fall back, as soon as the engine has run
+  long enough to know, and at most 3 s later than before on a PC that
+  never stops stalling; a PC that is only busy is not stalled (#214).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent

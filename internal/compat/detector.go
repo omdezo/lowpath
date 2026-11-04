@@ -73,10 +73,12 @@ func (d *Detector) Scan(ctx context.Context) Report {
 			}
 		},
 		func() {
+			// A partly read list still counts: the names read are matched,
+			// and the places that couldn't be read are listed as unchecked
+			// so "none found" isn't claimed for them.
 			p, err := d.sys.Programs()
-			if note("installed programs", err) {
-				inv.Programs = p
-			}
+			note("installed programs", err)
+			inv.Programs = p
 		},
 		func() {
 			a, err := d.sys.Adapters()
