@@ -4,33 +4,57 @@ import (
 	"encoding/binary"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
+)
+
+// stream tells apart the random sources made from one Seed: the down
+// direction of a link (or of a segment split by SetProfiles) draws from its
+// own, so its choices don't mirror the up direction's.
+type stream byte
+
+const (
+	// upStream is the source every impairer drew from before directions
+	// were split, so up-direction (and shared-segment) runs with a given
+	// Seed still lose exactly the packets they did.
+	upStream stream = iota
+	downStream
 )
 
 // newRand is the random source for a seed. ChaCha8 rather than PCG: in the
 // statistics tests, PCG seeded 1, 2, 3... with a fixed stream gave loss
 // rates that spread about 1.4x wider from seed to seed than chance allows,
 // and tests with fixed seeds rely on each seed being a fair sample.
-func newRand(seed uint64) *rand.Rand {
+func newRand(seed uint64) *rand.Rand { return newStreamRand(seed, upStream) }
+
+// newStreamRand is newRand for one stream of a seed. The stream goes in a
+// key byte the seed never reaches, not into the seed itself, so no seed's
+// down stream is another seed's up stream.
+func newStreamRand(seed uint64, s stream) *rand.Rand {
 	var key [32]byte
 	binary.LittleEndian.PutUint64(key[:], seed)
 	copy(key[8:], "lowpath netsim")
+	key[31] = byte(s)
 	return rand.New(rand.NewChaCha8(key))
 }
 
-// impairer makes the random choices for one link or segment: loss, spikes,
-// burst loss and jitter. One lock covers the random source and the burst
-// chain because a link's two directions send from different goroutines.
+// impairer makes the random choices for one direction of a link, or for a
+// segment: loss, spikes, burst loss and jitter. One lock covers the random
+// source and the burst chain because the links behind a segment, and the
+// two directions of a half-duplex one, send from different goroutines.
 type impairer struct {
-	mu    sync.Mutex
-	seed  uint64
-	rng   *rand.Rand
-	burst geChain
+	mu     sync.Mutex
+	stream stream
+	seed   uint64
+	rng    *rand.Rand
+	burst  geChain
 }
 
 // newImpairer seeds from seed, or from the global source when it is 0.
-func newImpairer(seed uint64) *impairer {
-	im := &impairer{}
+func newImpairer(seed uint64) *impairer { return newStreamImpairer(seed, upStream) }
+
+func newStreamImpairer(seed uint64, s stream) *impairer {
+	im := &impairer{stream: s}
 	im.reseed(seed)
 	return im
 }
@@ -40,7 +64,7 @@ func (im *impairer) reseed(seed uint64) {
 	if seed == 0 {
 		seed = rand.Uint64()
 	}
-	im.rng = newRand(seed)
+	im.rng = newStreamRand(seed, im.stream)
 	im.burst = geChain{}
 }
 
@@ -73,4 +97,26 @@ func (im *impairer) decide(p *Profile, now time.Duration) (drop bool, delay time
 		delay += time.Duration(im.rng.NormFloat64() * float64(p.Jitter))
 	}
 	return false, delay
+}
+
+// direction is one way through a link or segment: the profile it applies
+// and the impairer making its choices. A link has two; a segment has two
+// but sends both ways through the first until SetProfiles splits it.
+type direction struct {
+	profile atomic.Pointer[Profile]
+	imp     *impairer
+}
+
+func (d *direction) init(p Profile, s stream) {
+	d.imp = newStreamImpairer(p.Seed, s)
+	d.set(p)
+}
+
+func (d *direction) get() Profile { return *d.profile.Load() }
+
+func (d *direction) set(p Profile) { d.profile.Store(&p) }
+
+// decide is impairer.decide with this direction's current profile.
+func (d *direction) decide(now time.Duration) (drop bool, delay time.Duration) {
+	return d.imp.decide(d.profile.Load(), now)
 }

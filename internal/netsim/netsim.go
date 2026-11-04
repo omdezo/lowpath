@@ -3,7 +3,9 @@
 // With a zero Profile it is a plain relay hop (ingress / transit); with a
 // non-zero one it simulates an ISP or carrier path so the whole system can
 // be exercised on one machine. Links can sit behind a shared Segment, such
-// as the player's Wi-Fi, whose losses hit all of them at once.
+// as the player's Wi-Fi, whose losses hit all of them at once. A Link
+// impairs each direction on its own, up (client to target: game to server)
+// and down (the target's replies), and each can have its own Profile.
 package netsim
 
 import (
@@ -34,17 +36,18 @@ type Profile struct {
 	// Seed makes the random choices (loss, bursts, jitter) repeat exactly
 	// from run to run, for tests; 0 picks a random one. Give each link and
 	// segment its own: two with the same Seed make the same choices, so
-	// their losses would line up.
+	// their losses would line up. One Seed is enough for both directions
+	// of a link: the down direction draws from a stream of its own.
 	Seed uint64 `json:"seed,omitempty"`
 }
 
 type Link struct {
 	listen  *net.UDPConn
 	target  *net.UDPAddr
-	profile atomic.Pointer[Profile]
+	up      direction // from the client (the address Listen took) to the target
+	down    direction // the target's replies
 	segment atomic.Pointer[Segment]
 	clock   func() time.Duration // time since the link started; tests set their own
-	imp     *impairer
 
 	mu    sync.Mutex
 	peers map[netip.AddrPort]*net.UDPConn
@@ -60,17 +63,41 @@ func Listen(addr string, target netip.AddrPort, p Profile) (*Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Link{listen: c, target: net.UDPAddrFromAddrPort(target), clock: sinceNow(), imp: newImpairer(p.Seed), peers: map[netip.AddrPort]*net.UDPConn{}}
-	l.profile.Store(&p)
+	l := newLink(p, sinceNow())
+	l.listen, l.target = c, net.UDPAddrFromAddrPort(target)
 	return l, nil
+}
+
+// newLink is a link without its sockets, impairing both directions with p.
+func newLink(p Profile, clock func() time.Duration) *Link {
+	l := &Link{clock: clock, peers: map[netip.AddrPort]*net.UDPConn{}}
+	l.up.init(p, upStream)
+	l.down.init(p, downStream)
+	return l
 }
 
 func (l *Link) Addr() netip.AddrPort { return l.listen.LocalAddr().(*net.UDPAddr).AddrPort() }
 
-func (l *Link) Profile() Profile { return *l.profile.Load() }
+// Profile is the up direction's profile: both directions' unless
+// SetProfiles gave them different ones.
+func (l *Link) Profile() Profile { return l.up.get() }
 
-// SetProfile changes impairment at runtime (used to simulate a degrading route).
-func (l *Link) SetProfile(p Profile) { l.profile.Store(&p) }
+// Profiles is each direction's profile: up from the client to the target,
+// down for the target's replies.
+func (l *Link) Profiles() (up, down Profile) { return l.up.get(), l.down.get() }
+
+// SetProfile changes impairment at runtime (used to simulate a degrading
+// route), the same way in both directions.
+func (l *Link) SetProfile(p Profile) { l.SetProfiles(p, p) }
+
+// SetProfiles impairs each direction its own way, such as loss on the
+// download only (roadmap L11). The directions keep separate random state
+// whatever their profiles, so the replies flowing back don't change which
+// client packets are lost, and a seeded run repeats.
+func (l *Link) SetProfiles(up, down Profile) {
+	l.up.set(up)
+	l.down.set(down)
+}
 
 // SetSegment puts the link behind a shared hop, or takes it out with nil.
 // Packets in both directions then cross the segment as well as the link.
@@ -138,12 +165,16 @@ func (l *Link) peer(src netip.AddrPort) *net.UDPConn {
 // lanes' copies sent at once with different delays reach the Wi-Fi apart
 // and don't share a fade.
 func (l *Link) send(pkt []byte, reply bool, write func([]byte)) {
-	drop, delay := l.imp.decide(l.profile.Load(), l.clock())
+	dir := &l.up
+	if reply {
+		dir = &l.down
+	}
+	drop, delay := dir.decide(l.clock())
 	s := l.segment.Load()
 	if s != nil && (!reply || drop) {
 		// Decided even when the link already drops the packet, so the
 		// segment's state moves the same way whatever the link does.
-		segDrop, segDelay := s.decide()
+		segDrop, segDelay := s.decide(reply)
 		drop = drop || segDrop
 		delay += segDelay
 		s = nil
@@ -156,7 +187,7 @@ func (l *Link) send(pkt []byte, reply bool, write func([]byte)) {
 			write(pkt)
 			return
 		}
-		if segDrop, segDelay := s.decide(); !segDrop {
+		if segDrop, segDelay := s.decide(true); !segDrop {
 			after(segDelay, func() { write(pkt) })
 		}
 	})

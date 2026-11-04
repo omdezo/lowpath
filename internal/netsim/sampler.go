@@ -10,7 +10,8 @@ import "time"
 // a time-stepped burst state, as on a Segment) and one per lane for its own
 // link. With the same non-zero Seed and packets in the same order, a
 // per-packet profile (no Step, spikes or jitter timing) loses exactly the
-// packets a Link with that profile does.
+// packets a Link with that profile does in its up direction (client to
+// target), or a Segment that SetProfiles hasn't split, in both.
 type Sampler struct {
 	p   Profile
 	imp *impairer

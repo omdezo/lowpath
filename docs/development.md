@@ -176,7 +176,7 @@ internal/tstats    per-lane delivery bitmap: lane and joint loss, ρ, Gilbert p0
 internal/detect    installed/running games, exe icons, Steam libraries, ETW flow watcher
 internal/diag      gateway pinger, bufferbloat test, passive detector, route trace (MTR), verdict engine + route segments, default route + NIC counters and per-connection TCP bytes per OS
 internal/demo      simulated topology + game traffic generator (-demo)
-internal/netsim    UDP hop with delay/jitter/loss/spike and Gilbert-Elliott burst impairment; shared segments
+internal/netsim    UDP hop with delay/jitter/loss/spike and Gilbert-Elliott burst impairment, per direction; shared segments
 internal/gamesim   echo game server
 deploy/            relay install scripts
 ui/                React + TypeScript UI (Vite), embedded via go:embed
@@ -200,7 +200,12 @@ go test ./...
   packet and time stepped; two lanes behind one shared Wi-Fi-like segment
   (3% loss in 8 ms bursts) losing both copies together, and how much a time
   shift between them helps (under 3x at 8 ms, 5x from 13 ms, 11x at 20 ms); real links on
-  IPv4 and IPv6 loopback behind a segment that fades and heals.
+  IPv4 and IPv6 loopback behind a segment that fades and heals. Each
+  direction of a link has its own profile and random state: replies don't
+  change which client packets are lost, a segment is one half-duplex radio
+  until split per direction, and real links on IPv4 and IPv6 loopback with
+  3% loss on the download only lose 3% down (± 5 standard errors, exactly
+  as seeded) and nothing up.
 - **Lane statistics (`internal/tstats`, `internal/relay`):** the delivery
   bitmap's rules case by case (reordering within 250 ms, late copies,
   lanes joining, bursting, stopping and coming back, wrap-around, a
