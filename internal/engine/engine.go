@@ -583,7 +583,9 @@ func (e *Engine) choose(now time.Time, seed map[string]Stats) {
 	// at the first tick its probes may still be in flight, or not even sent
 	// on a machine that starved the engine, and falling back on that would
 	// send the game direct for nothing. Paths not in use get no such credit.
-	grace := now.Sub(e.start) < startGrace
+	// Awake time, not wall time: a stall right after Start must not use
+	// up the grace before any reply could be read.
+	grace := e.awake.age(e.start, now) < startGrace
 	var up []ranked
 	for _, c := range cands {
 		unjudged := grace && !c.s.measured() && slices.Contains(cur.active, c.p)

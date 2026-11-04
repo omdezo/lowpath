@@ -275,6 +275,13 @@ func TestSelectionThroughAStall(t *testing.T) {
 			},
 		},
 		{
+			// The stall uses up the wall-clock start grace before any reply
+			// could be read; the grace counts awake time.
+			name: "stall before the first reply, past the start grace",
+			tl:   stallTimeline{stallAt: ms(250), stallFor: ms(2800), rtt: ms(200), drain: -1},
+			want: []want{{at: ms(3051), active: []string{"a", "b"}}},
+		},
+		{
 			name: "stall mid-session, replies not read yet",
 			tl:   stallTimeline{stallAt: ms(4950), stallFor: ms(1500), rtt: ms(80), drain: -1},
 			want: []want{{at: ms(6451), active: []string{"a", "b"}, clean: true}},

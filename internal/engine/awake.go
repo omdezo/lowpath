@@ -28,19 +28,22 @@ type span struct{ from, to time.Time }
 const (
 	// heartbeatEvery is how often the heartbeat runs while nothing stalls.
 	heartbeatEvery = probeInterval / 2
-	// stallMin is the heartbeat gap that counts as a stall: well above
-	// what scheduling noise delays a 50 ms ticker by, well below the probe
-	// timeout it protects.
-	stallMin = 250 * time.Millisecond
+	// stallMin is the heartbeat gap that counts as a stall: half the probe
+	// timeout. A shorter gap can't by itself hold a reply back past its
+	// timeout, and counting it would let a merely busy PC, whose heartbeat
+	// is often a few hundred milliseconds late, look stalled all the time.
+	stallMin = probeTimeout / 2
 	// stallSettle is how long after a stall the readers get to drain the
 	// replies queued during it before a probe's age runs on again.
 	stallSettle = 250 * time.Millisecond
 	// maxStallCredit bounds how much stalled time is taken out of an age.
-	// On a machine that stalls without end, every heartbeat gap is a stall
-	// and awake time would stand still: probes would never time out and
-	// routes that are really dead would never fall back. Past this credit
-	// wall time counts again, so fail-open holds whatever the machine does.
-	maxStallCredit = 10 * time.Second
+	// On a machine that stalls again and again, the stalls merge and awake
+	// time would stand still: probes would never time out and routes that
+	// are really dead would never fall back. Past this credit wall time
+	// counts again, so fail-open holds whatever the machine does, at most
+	// this much later than without stalls. It is the same bound as the
+	// start grace: stalls of up to about this long don't read as loss.
+	maxStallCredit = startGrace
 	// stallKeep is how long a stall is remembered: longer than the oldest
 	// probe a tracker still looks at (ringSize probes) plus the credit.
 	stallKeep = ringSize*probeInterval + probeTimeout + maxStallCredit

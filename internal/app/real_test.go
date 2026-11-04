@@ -525,7 +525,7 @@ func TestStopOnGameExit(t *testing.T) {
 			if exited := strings.Contains(out, "game exited, stopping optimization"); exited != (c.endsAt != 0) {
 				t.Errorf("game exit logged %v, want %v:\n%s", exited, c.endsAt != 0, out)
 			}
-			// Scans 3 s apart fail within the minute: logged once.
+			// The failed scans all fall within one minute: logged once.
 			if n := strings.Count(out, "couldn't read the running programs"); n != c.fails {
 				t.Errorf("%d \"couldn't read\" lines, want %d:\n%s", n, c.fails, out)
 			}

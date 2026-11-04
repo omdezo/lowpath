@@ -144,9 +144,10 @@ func (t *tracker) statsN(now time.Time, window int) Stats {
 		if r.sent.After(lastGot) {
 			lastGot = r.sent
 		}
-		if t.awake.stalled(r.sent, r.readAt()) > 0 {
-			// Delivered, but read late: its round trip says how long the
-			// engine stalled, not how slow the path is.
+		if t.awake.stalled(r.sent, r.readAt()) >= stallMin {
+			// Delivered, but its round trip spans a stall: it says how long
+			// the engine stalled, not how slow the path is. (A reply sent
+			// and read within a stall's settle time is a real sample.)
 			continue
 		}
 		rtts = append(rtts, float64(r.rtt)/float64(time.Millisecond))

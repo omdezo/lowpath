@@ -160,10 +160,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   be read no longer count as lost, a route is no longer dropped and the
   boost no longer falls back for them right after it starts, and their
   late reads don't show as ping spikes. The engine notices a stall as a
-  gap in a 50 ms heartbeat and leaves it, plus 250 ms for the queued
-  replies to be read, out of a probe's 1 s timeout. Dead routes still
-  fall back, as soon as the engine has run long enough to know, and
-  within 10 s more on a PC that never stops stalling (#214).
+  gap of 500 ms or more in a 50 ms heartbeat and leaves it, plus 250 ms
+  for the queued replies to be read, out of a probe's 1 s timeout and the
+  start grace. Dead routes still fall back, as soon as the engine has run
+  long enough to know, and at most 3 s later than before on a PC that
+  never stops stalling; a PC that is only busy is not stalled (#214).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent
