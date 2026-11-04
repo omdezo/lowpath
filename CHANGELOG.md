@@ -140,6 +140,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   necessary addresses pass (#131).
 
 ### Changed
+- Settings → Diagnostics stops asking while the window is hidden: the
+  router pings, Wi-Fi and verdict cards no longer poll a minimised or
+  covered window, so the router pinger idles 15 s after the window is
+  hidden (a boost keeps it running), and the cards ask again the moment
+  the window shows. The three cards share one polling hook, which also
+  never lets an older answer replace a newer one (#161).
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
