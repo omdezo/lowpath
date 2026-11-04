@@ -140,6 +140,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   necessary addresses pass (#131).
 
 ### Changed
+- Relay lane statistics cost a tethered phone far less data: the full
+  TStats report goes down one path a second, the one carrying the game's
+  packets fastest, and the other paths get a 13-byte report every 3 s that
+  only says which path they are, about 0.09 MB an hour each instead of up
+  to 1.2 MB. The relay's stats log adds the bytes the reports took
+  (#213).
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
 

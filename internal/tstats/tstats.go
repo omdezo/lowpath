@@ -103,6 +103,12 @@ type Stats struct {
 	Pairs []Pair `json:"pairs"`
 }
 
+// Short returns s without its lane and pair blocks: the flow's seqs and
+// lost alone. Sent down a lane, it still tells the receiver which lane
+// that is, in 13 bytes of payload instead of 13 + 37 per lane + 18 per
+// pair (see the wire format).
+func (s Stats) Short() Stats { return Stats{Dir: s.Dir, Seqs: s.Seqs, Lost: s.Lost} }
+
 // ratio is n/d, or 0 when d is 0.
 func ratio(n, d uint32) float64 {
 	if d == 0 {

@@ -211,7 +211,11 @@ go test ./...
   ρ about 30 for copies sent at once behind a shared Wi-Fi-like hop, about
   10 one burst apart, about 1 on separate hops; jitter 2σ/√π for normal
   delays). Through a real egress and two netsim links on IPv4 and IPv6
-  loopback, the `TStats` reports match the links' seeded losses.
+  loopback, the `TStats` reports match the links' seeded losses. The
+  report scheduler (full report on one lane, short ones on the rest) case
+  by case: lanes appearing, leaving, going quiet and taking over; and an
+  egress driven on a fake clock for 60 s with four lanes, counting each
+  lane's bytes against the 0.3 MB an hour budget.
 - **Capture:** the generated filter against WinDivert's own filter compiler,
   packet parsing/building and checksums byte-for-byte against WinDivert's,
   and the socket owner table — all without admin rights. The fail-open
