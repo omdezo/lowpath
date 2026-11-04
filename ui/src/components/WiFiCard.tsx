@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Radar, Wifi } from "lucide-react";
+import { Loader2, MapPin, Radar, Wifi } from "lucide-react";
 import { api } from "../api";
-import type { WiFiLink, WiFiSurveyView, WiFiTuning, WiFiView } from "../types";
+import type { SettingsPage, WiFiLink, WiFiSurveyView, WiFiTuning, WiFiView } from "../types";
 import "../diag.css";
 
 // The Wi-Fi card: signal, band and link rate of the Wi-Fi adapter, read
@@ -149,6 +149,8 @@ export function WiFiCard({ tuningEnabled }: { tuningEnabled: boolean }) {
             <dt>Channel load</dt>
             <dd>
               <SurveyText s={v.survey} />
+              {/* A new survey answer (at) starts the button over. */}
+              {v.survey?.settings && <OpenSettings key={v.survey.at} page={v.survey.settings} />}
             </dd>
             <dt>Scan pause</dt>
             <dd>
@@ -191,6 +193,43 @@ function SurveyText({ s }: { s: WiFiSurveyView | null }) {
       {overlap}
       <span className="faint"> · {r.networks} networks heard</span>
     </>
+  );
+}
+
+const SETTINGS_LABEL: Record<SettingsPage, string> = { location: "Open location settings" };
+
+// OpenSettings opens the system settings page that lifts what stopped the
+// survey (Windows' location access). It only opens the page: the survey
+// stays on demand, so the user presses Check channel once they changed it.
+function OpenSettings({ page }: { page: SettingsPage }) {
+  const [state, setState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
+  const [why, setWhy] = useState("");
+  const open = async () => {
+    setState("opening");
+    try {
+      await api.openSettings(page);
+      setState("opened");
+    } catch (e) {
+      setWhy(e instanceof Error ? e.message : String(e));
+      setState("failed");
+    }
+  };
+  return (
+    <div className="wifi-fix">
+      <button className="btn btn-xs" onClick={open} disabled={state === "opening"}>
+        {state === "opening" ? <Loader2 size={13} className="spin" /> : <MapPin size={13} />} {SETTINGS_LABEL[page]}
+      </button>
+      {state === "opened" && (
+        <span className="muted" role="status">
+          Settings is open. Once desktop apps may use your location, press Check channel again.
+        </span>
+      )}
+      {state === "failed" && (
+        <span className="note-warn" role="alert">
+          — Couldn't open Settings ({why}). Open it from the Start menu instead.
+        </span>
+      )}
+    </div>
   );
 }
 

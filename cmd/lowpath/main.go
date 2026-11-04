@@ -63,7 +63,11 @@ type options struct {
 	// serviceNote is set by run, not a flag: why the installed service
 	// isn't used (connectService).
 	serviceNote string
-	wifiReading string
+	// openSettings is set by run, not a flag: it opens a page of the
+	// system's settings on this window's desktop, for the window's server
+	// or the Frontend in front of the service (never the service).
+	openSettings app.SettingsOpener
+	wifiReading  string
 }
 
 // appIcon is the app's icon for the windows and the app menu on Linux and
@@ -175,6 +179,7 @@ func run(parent context.Context, o options, plat *platform.Platform, desk platfo
 
 	// The background service holds the rights route mode needs, so with it
 	// this process needs none and shows no prompt.
+	o.openSettings = func(page platform.SettingsPage) error { return platform.OpenSettings(desk, page) }
 	fe, note, err := connectService(ctx, o, plat, logger)
 	o.serviceNote = note
 	if err != nil {
@@ -367,7 +372,7 @@ func buildServer(ctx context.Context, o options, plat *platform.Platform, logger
 	so := shell.Options{
 		Data: o.data, Relays: o.relays, BloatServer: o.bloatServer, Demo: o.demo,
 		TraceCount: o.traceCount, TraceInterval: o.traceInterval, UI: dist,
-		ServiceNote: o.serviceNote,
+		ServiceNote: o.serviceNote, OpenSettings: o.openSettings,
 	}
 	if plat.Privileges.CanElevate() {
 		so.Elevate = func() error { return plat.Privileges.Relaunch(childArgs(o)) }

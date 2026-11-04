@@ -79,7 +79,7 @@ func connectService(ctx context.Context, o options, plat *platform.Platform, log
 		logger.Warn("no UI to serve in front of the service", "err", err)
 		return nil, fmt.Sprintf("this build has no UI to show in front of it (%v)", err), nil
 	}
-	fe, err = app.NewFrontend(app.FrontendConfig{Dial: api.Dial, UI: dist, Log: logger})
+	fe, err = app.NewFrontend(app.FrontendConfig{Dial: api.Dial, UI: dist, Log: logger, OpenSettings: o.openSettings})
 	if err != nil {
 		logger.Warn("can't use the Lowpath service", "err", err)
 		return nil, fmt.Sprintf("Lowpath couldn't connect to it (%v)", err), nil

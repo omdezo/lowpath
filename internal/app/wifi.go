@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lowpath/internal/diag"
+	"lowpath/internal/platform"
 )
 
 // The Wi-Fi card in Settings → Diagnostics, the verdict's radio evidence,
@@ -101,6 +102,10 @@ type wifiSurveyView struct {
 	Message string           `json:"message,omitempty"`
 	Survey  *diag.WiFiSurvey `json:"result"`
 	At      time.Time        `json:"at"`
+	// Settings is the system settings page where the user can lift what
+	// stopped the survey (location access), when this system has one: the
+	// card offers to open it.
+	Settings platform.SettingsPage `json:"settings,omitempty"`
 }
 
 // wifiWatch reads the Wi-Fi link when asked and keeps the newest reading.
@@ -110,6 +115,9 @@ type wifiWatch struct {
 	log  *slog.Logger
 	// The time limits (the constants above; tests shorten them).
 	callTimeout, surveyTimeout, refreshEvery time.Duration
+	// hasSettings says which system settings pages exist here
+	// (platform.HasSettings; tests play Windows).
+	hasSettings func(platform.SettingsPage) bool
 
 	mu        sync.Mutex
 	last      *wifiView
@@ -119,7 +127,8 @@ type wifiWatch struct {
 }
 
 func newWiFiWatch(w diag.WLAN, ns diag.NetStats, log *slog.Logger) *wifiWatch {
-	return &wifiWatch{wlan: w, net: ns, log: log, callTimeout: wifiCallTimeout, surveyTimeout: wifiSurveyTimeout, refreshEvery: wifiRefreshEvery}
+	return &wifiWatch{wlan: w, net: ns, log: log, callTimeout: wifiCallTimeout, surveyTimeout: wifiSurveyTimeout, refreshEvery: wifiRefreshEvery,
+		hasSettings: platform.HasSettings}
 }
 
 // routeIndex is the interface to read: the default route's when it is a
@@ -290,6 +299,9 @@ func (w *wifiWatch) runSurvey() *wifiSurveyView {
 		sv.State, sv.Message = wifiState(err)
 		if sv.State == wifiError {
 			w.log.Warn("Wi-Fi survey", "err", err)
+		}
+		if sv.State == wifiLocation && w.hasSettings(platform.SettingsLocation) {
+			sv.Settings = platform.SettingsLocation
 		}
 	} else {
 		sv.Survey = &s
