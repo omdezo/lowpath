@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"lowpath/internal/capture"
 	"lowpath/internal/compat"
 	"lowpath/internal/platform"
 )
@@ -44,19 +45,20 @@ type conflictWatch struct {
 	inflight chan struct{}  // closed when the running scan ends; nil when none runs
 }
 
-func newConflictWatch(plat *platform.Platform, lifetime context.Context, log *slog.Logger) *conflictWatch {
+// own lists the adapters the running session created (Server.ownAdapters).
+func newConflictWatch(plat *platform.Platform, lifetime context.Context, log *slog.Logger, own func() []int) *conflictWatch {
 	// WinDivert loaded from one of these folders is Lowpath's own.
-	var own []string
+	var dirs []string
 	for _, elevated := range []bool{true, false} {
-		dirs, _ := plat.Paths.DriverDirs(elevated)
-		for _, d := range dirs {
-			if !slices.Contains(own, d) {
-				own = append(own, d)
+		ds, _ := plat.Paths.DriverDirs(elevated)
+		for _, d := range ds {
+			if !slices.Contains(dirs, d) {
+				dirs = append(dirs, d)
 			}
 		}
 	}
 	return &conflictWatch{
-		det:      compat.NewDetector(compat.Config{System: plat.Inventory, OwnDriverDirs: own}),
+		det:      compat.NewDetector(compat.Config{System: plat.Inventory, OwnDriverDirs: dirs, OwnAdapters: own}),
 		log:      log,
 		lifetime: lifetime,
 		wait:     conflictWait,
@@ -197,4 +199,22 @@ func (s *Server) withConflictHint(e *apiError) *apiError {
 	}
 	return &apiError{code: e.code, kind: e.kind, conflicts: active,
 		err: fmt.Errorf("%w (%s may be in the way: see the notice above)", e.err, compat.Names(active))}
+}
+
+// ownAdapters are the network adapters the running session created: route
+// mode's TUN device on Linux, which may hold the internet route while it
+// runs. The conflict check leaves them out of its VPN rule.
+func (s *Server) ownAdapters() []int {
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	if sess == nil || sess.capt == nil {
+		return nil
+	}
+	if o, ok := sess.capt.(capture.OwnAdapter); ok {
+		if i, ok := o.OwnAdapter(); ok {
+			return []int{i}
+		}
+	}
+	return nil
 }

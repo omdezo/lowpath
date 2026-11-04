@@ -494,6 +494,22 @@ and says what to do.
 | WinDivert loaded by another program | a running service named `WinDivert*` whose `ImagePath` is outside Lowpath's driver folders (`Paths.DriverDirs`) | `warn` |
 | A VPN carrying all traffic | the adapter that carries traffic to a public address (Windows: `GetBestInterfaceEx` through `diag.NetStats`; Linux and macOS: `compat.EgressRoute`, the interface owning the source address the kernel picks for a connected UDP socket, which sends nothing, falling back to the `0/0` route) is a VPN; this catches `0/0`, OpenVPN/WireGuard `0/1`+`128/1` and wg-quick's policy routing alike is a VPN: brand words in its name or description (NordLynx → NordVPN, TAP-Windows → OpenVPN, WireGuard, AnyConnect, ...), IANA type PPP/virtual/tunnel, or `tun*`/`wg*`/`utun*` on Linux and macOS; PPPoE, Teredo and ISATAP are not VPNs | `warn`; a split tunnel or a VPN that isn't up is no conflict |
 
+Lowpath's own adapter is never a VPN. A capture session whose backend
+creates an adapter (Linux route mode's TUN device) reports it by index
+(`capture.OwnAdapter`), the app passes the running session's to the
+detector (`compat.Config.OwnAdapters`), and the VPN rule leaves that index
+out, so a boost holding the internet route doesn't flag itself; its name
+(`lowpath*`) is only a fallback. A real VPN on the route is still reported
+during a boost.
+
+macOS VPNs that run as Network Extensions (WireGuard and many App Store
+clients) appear as a `utun` interface found through `compat.EgressRoute`.
+**Not checked yet with real clients**: WireGuard, an App Store VPN with
+on-demand rules, and iCloud Private Relay, which runs per connection
+through the network stack, without a `utun` default route, and must not
+count as a VPN. The list of what was checked goes here once someone has
+run them on a Mac (#149).
+
 Each conflict carries `found` (the evidence), `action` (one sentence) and
 `why` (the "Why?" text). A part that can't be read goes to `unchecked` with
 the reason; a part the OS doesn't have (`errors.ErrUnsupported`) is skipped

@@ -37,6 +37,8 @@ var unixTunnelPrefixes = []string{"tun", "tap", "wg", "utun", "ipsec", "nordlynx
 
 // notVPN are virtual adapters that carry no VPN: IPv6 transition tunnels,
 // PPPoE (the DSL connection itself is a PPP link) and loopback adapters.
+// "lowpath" is only a fallback for an adapter of Lowpath's that the
+// detector wasn't told about (Config.OwnAdapters names them by index).
 var notVPN = []string{"teredo", "isatap", "6to4", "pppoe", "loopback", "lowpath"}
 
 // vpnName returns the VPN's name when a is a VPN adapter, or "".

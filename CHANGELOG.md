@@ -140,6 +140,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   necessary addresses pass (#131).
 
 ### Changed
+- The conflict check knows Lowpath's own network adapter by its index:
+  while Linux route mode's TUN device carries the internet route, the boost
+  is not reported as "Your VPN", whatever the adapter is called, and a real
+  VPN on the route still is (#149).
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
 

@@ -339,3 +339,29 @@ func TestProductTable(t *testing.T) {
 		}
 	}
 }
+
+// The adapter Lowpath itself created (route mode's TUN) is never reported
+// as a VPN when it carries the internet route, whatever it is called; a
+// real VPN on the route still is (#149).
+func TestOwnAdapterIsNeverAVPN(t *testing.T) {
+	tun := Adapter{Index: 9, Name: "tun0", Type: ifTypeVirtual, Up: true}
+	wg := Adapter{Index: 12, Name: "wg0", Up: true}
+	inv := Inventory{Adapters: []Adapter{tun, wg}, DefaultRoute: 9}
+	if _, ok := find(scan(inv), "vpn"); !ok {
+		t.Fatal("without knowing it is Lowpath's, tun0 on the route must look like a VPN")
+	}
+	own := Inventory{Adapters: inv.Adapters, DefaultRoute: 9, OwnAdapters: []int{9}}
+	if r := detector(static{}).Evaluate(own); len(r.Conflicts) != 0 {
+		t.Errorf("Lowpath's own adapter reported: %v", ids(r))
+	}
+	// Through the detector's config, as the app wires it.
+	d := NewDetector(Config{System: static{inv: inv}, OwnAdapters: func() []int { return []int{9} }, Now: func() time.Time { return time.Unix(0, 0) }})
+	if r := d.Scan(context.Background()); len(r.Conflicts) != 0 {
+		t.Errorf("Config.OwnAdapters ignored: %v", ids(r))
+	}
+	// Another adapter of ours doesn't hide a VPN holding the route.
+	vpn := Inventory{Adapters: inv.Adapters, DefaultRoute: 12, OwnAdapters: []int{9}}
+	if r := detector(static{}).Evaluate(vpn); !slices.Contains(ids(r), "vpn:warn") {
+		t.Errorf("WireGuard on the route hidden by Lowpath's other adapter: %v", ids(r))
+	}
+}

@@ -50,6 +50,17 @@ type Session interface {
 	Err() error
 }
 
+// OwnAdapter is a Session whose backend created a network adapter of its
+// own: Linux route mode's TUN device, which carries the game's traffic and
+// may hold the internet route while it runs. Whoever looks for VPNs by the
+// adapter carrying that route must leave it out, by its index: its name is
+// the backend's to choose. WinDivert creates none.
+type OwnAdapter interface {
+	// OwnAdapter is the adapter's interface index; ok false when this
+	// session has none.
+	OwnAdapter() (index int, ok bool)
+}
+
 // Elevation reports whether this process has the rights capture needs
 // (administrator on Windows).
 type Elevation interface {

@@ -14,6 +14,7 @@ import (
 // Detector turns what a System reports into conflicts.
 type Detector struct {
 	sys      System
+	ownNICs  func() []int
 	ownDirs  []string
 	products []Product
 	now      func() time.Time
@@ -26,7 +27,11 @@ type Config struct {
 	// from: a WinDivert driver loaded from anywhere else belongs to another
 	// program.
 	OwnDriverDirs []string
-	Now           func() time.Time // nil: time.Now
+	// OwnAdapters lists the indexes of the network adapters Lowpath has
+	// created now (route mode's TUN device), so a boost holding the
+	// internet route isn't taken for a VPN. Nil: none.
+	OwnAdapters func() []int
+	Now         func() time.Time // nil: time.Now
 }
 
 // NewDetector returns a detector for the known boosters, packet tools,
@@ -37,7 +42,7 @@ func NewDetector(cfg Config) *Detector {
 	}
 	products := append(boosters(), packetTools()...)
 	products = append(products, winpkFilter())
-	return &Detector{sys: cfg.System, ownDirs: cfg.OwnDriverDirs, products: products, now: cfg.Now}
+	return &Detector{sys: cfg.System, ownNICs: cfg.OwnAdapters, ownDirs: cfg.OwnDriverDirs, products: products, now: cfg.Now}
 }
 
 // Scan reads the system and reports every conflict found, worst first. It
@@ -100,6 +105,9 @@ func (d *Detector) Scan(ctx context.Context) Report {
 			break
 		}
 		step()
+	}
+	if d.ownNICs != nil {
+		inv.OwnAdapters = append(inv.OwnAdapters, d.ownNICs()...)
 	}
 	r := d.Evaluate(inv)
 	r.Unchecked = append(r.Unchecked, unchecked...)
@@ -265,6 +273,11 @@ func vpnConflict(inv Inventory) (Conflict, bool) {
 	for _, a := range inv.Adapters {
 		if a.Index != inv.DefaultRoute || !a.Up {
 			continue
+		}
+		if slices.Contains(inv.OwnAdapters, a.Index) {
+			// Lowpath's own TUN holds the route during a boost: the game's
+			// traffic going through Lowpath is the point, not a conflict.
+			return Conflict{}, false
 		}
 		name := vpnName(a)
 		if name == "" {

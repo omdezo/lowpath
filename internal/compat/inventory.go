@@ -42,6 +42,9 @@ type Inventory struct {
 	// DefaultRoute is the index of the interface that carries internet
 	// traffic; 0 when offline or unknown.
 	DefaultRoute int `json:"default_route"`
+	// OwnAdapters are the indexes of adapters Lowpath itself created (route
+	// mode's TUN device): never another program's VPN, whatever their name.
+	OwnAdapters []int `json:"own_adapters,omitempty"`
 }
 
 // System reads the parts of an Inventory from the OS. Each part may fail on

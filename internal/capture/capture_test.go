@@ -397,3 +397,22 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// adapterDev is a device that is a network adapter of its own (the TUN).
+type adapterDev struct {
+	*fakeDev
+	index int
+}
+
+func (a adapterDev) adapterIndex() int { return a.index }
+
+// A session reports the adapter its device created, and none otherwise.
+func TestOwnAdapter(t *testing.T) {
+	if i, ok := (&Capture{dev: adapterDev{newFakeDev(), 9}}).OwnAdapter(); !ok || i != 9 {
+		t.Errorf("TUN-like device: %d %v", i, ok)
+	}
+	if i, ok := (&Capture{dev: newFakeDev()}).OwnAdapter(); ok {
+		t.Errorf("WinDivert-like device reports adapter %d", i)
+	}
+	var _ OwnAdapter = (*Capture)(nil)
+}

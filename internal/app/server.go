@@ -297,7 +297,7 @@ func NewServer(cfg Config) (*Server, error) {
 	// Idle until the Diagnostics tab asks or a boost starts; ends with
 	// the server's lifetime.
 	go s.gateway.Run(life)
-	s.conflicts = newConflictWatch(cfg.Platform, life, cfg.Log.With("component", "conflicts"))
+	s.conflicts = newConflictWatch(cfg.Platform, life, cfg.Log.With("component", "conflicts"), s.ownAdapters)
 	s.recoverLeftover()
 	s.current = newCurrentServers(cfg.Platform.Flows, cfg.Platform.Owners, cfg.ServerLookup, cfg.Locator, cfg.Ping, cfg.Store, life, cfg.Log.With("component", "current-server"))
 	return s, nil
