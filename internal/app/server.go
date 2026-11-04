@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +114,10 @@ type Config struct {
 type ServerLists interface {
 	List(appID int) catalog.ServerList
 	Ping(appID int) catalog.ServerList
+	// TraceTarget is a relay address of one listed POP to trace, and its
+	// name; ok false when the list or the POP isn't known (it never starts
+	// a download).
+	TraceTarget(appID int, popID string) (addr netip.Addr, label string, ok bool)
 	Close()
 }
 

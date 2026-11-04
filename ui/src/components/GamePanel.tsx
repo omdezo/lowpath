@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, Info, Loader2, Plus, Power, RotateCw, ShieldAlert, Wifi, Zap } from "lucide-react";
 import { api, ApiError, describeError } from "../api";
-import type { Analysis, Conflict, Game, Live, RelayView, Route, RouteMode, Settings, Stats } from "../types";
+import type { Analysis, Conflict, Game, Live, RelayView, Route, RouteMode, Settings, Stats, TraceRequest } from "../types";
 import { ms, pct, quality, score } from "../util";
 import { StatusPill } from "./Bits";
 import { ArtImg, GameIcon, hasArt } from "./GameArt";
@@ -23,6 +23,8 @@ interface Props {
   onError: (msg: string, title?: string) => void;
   onOpenRelays: () => void;
   onEnableLoopback: () => Promise<void>;
+  // onTrace: trace one of the game's servers (Settings → Diagnostics).
+  onTrace?: (r: TraceRequest) => void;
 }
 
 const DUP_LABEL: Record<number, string> = { 0: "Auto", 1: "Off", 2: "Balanced", 4: "Max" };
@@ -62,7 +64,7 @@ function readDetailsOpen(): boolean {
 }
 
 export function GamePanel(props: Props) {
-  const { game, live, settings, relays, demo, history, now, otherGameName, onError, onOpenRelays, onEnableLoopback } = props;
+  const { game, live, settings, relays, demo, history, now, otherGameName, onError, onOpenRelays, onEnableLoopback, onTrace } = props;
   const [routes, setRoutes] = useState<Route[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -344,8 +346,8 @@ export function GamePanel(props: Props) {
           <section className="card setup-wrap">
             <Setup gameName={game.name} onOpenRelays={onOpenRelays} onEnableLoopback={onEnableLoopback} />
           </section>
-          <CurrentServer gameId={game.id} gameName={game.name} />
-          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
+          <CurrentServer gameId={game.id} gameName={game.name} onTrace={onTrace} />
+          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} onTrace={onTrace} />}
         </>
       ) : (
         <>
@@ -428,8 +430,8 @@ export function GamePanel(props: Props) {
             direct={beforeShown ? beforeShown.rtt_ms : null}
           />
 
-          <CurrentServer gameId={game.id} gameName={game.name} />
-          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} />}
+          <CurrentServer gameId={game.id} gameName={game.name} onTrace={onTrace} />
+          {sdr && <ValveServers gameId={game.id} gameName={game.name} now={now} onTrace={onTrace} />}
 
           {loopbackOnly && (
             <div className="note">

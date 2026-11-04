@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Activity, AlertTriangle, Check, Cpu, Download, Gauge, Network, Server, SlidersHorizontal, Wifi, Wrench, X } from "lucide-react";
 import { api } from "../api";
-import type { CaptureMode, Platform, RelayView, Settings } from "../types";
+import type { CaptureMode, Platform, RelayView, Settings, TraceRequest } from "../types";
 import { cap } from "../util";
 import { Modal, Toggle } from "./Bits";
 import { Connection } from "./Connection";
@@ -24,10 +24,12 @@ interface Props {
   onRemap: () => void;
   onClose: () => void;
   onError: (msg: string, title?: string) => void;
+  // traceRequest: a game page asked to trace one of its servers (Diagnostics).
+  traceRequest?: TraceRequest | null;
 }
 
 export function SettingsModal(props: Props) {
-  const { initialTab, settings, relays, platform, version, demo, onChange, onRelaysChanged, onRemap, onClose, onError } = props;
+  const { initialTab, settings, relays, platform, version, demo, onChange, onRelaysChanged, onRemap, onClose, onError, traceRequest } = props;
   const [tab, setTab] = useState<SettingsTab>(initialTab ?? "network");
   const [saved, setSaved] = useState(false);
 
@@ -164,7 +166,7 @@ export function SettingsModal(props: Props) {
 
           {tab === "relays" && <RelaysPane relays={relays} settings={settings} onSettings={set} onRelaysChanged={onRelaysChanged} />}
 
-          {tab === "diagnostics" && <Diagnostics onError={onError} wifiTuning={settings.wifi_tuning ?? true} />}
+          {tab === "diagnostics" && <Diagnostics onError={onError} wifiTuning={settings.wifi_tuning ?? true} traceRequest={traceRequest} />}
 
           {tab === "optimization" && (
             <>

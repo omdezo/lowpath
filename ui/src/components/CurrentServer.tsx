@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Loader2, MapPin, Radio } from "lucide-react";
+import { AlertTriangle, Loader2, MapPin, Radio, Route } from "lucide-react";
 import { api } from "../api";
-import type { CurrentServer as CurrentServerView, CurrentServerInfo } from "../types";
+import type { CurrentServer as CurrentServerView, CurrentServerInfo, TraceRequest } from "../types";
 import { fmtMs, pct } from "../util";
 
 // The card polls while it is on screen; that is also what keeps the server
@@ -25,7 +25,9 @@ function pingQ(v: number): "good" | "warn" | "bad" {
 // CurrentServer names the server a game is talking to, for every game:
 // where it is (with the city checked against the ping), whose network it
 // is on, and how the direct route to it behaves right now.
-export function CurrentServer({ gameId, gameName }: { gameId: string; gameName: string }) {
+// onTrace: the server shown can be traced (Settings → Diagnostics, with it
+// picked: the trace's "<game> server" target is this one).
+export function CurrentServer({ gameId, gameName, onTrace }: { gameId: string; gameName: string; onTrace?: (r: TraceRequest) => void }) {
   const [view, setView] = useState<CurrentServerView | null>(null);
   const [failed, setFailed] = useState(false);
   const timer = useRef<number | undefined>(undefined);
@@ -88,7 +90,13 @@ export function CurrentServer({ gameId, gameName }: { gameId: string; gameName: 
 
       {view?.state === "none" && <div className="pops-msg faint">{view.message}</div>}
 
-      {sv && <ServerDetails sv={sv} you={view?.you?.city} />}
+      {sv && (
+        <ServerDetails
+          sv={sv}
+          you={view?.you?.city}
+          onTrace={onTrace ? () => onTrace({ targetId: `server:${gameId}`, label: `${gameName} server` }) : undefined}
+        />
+      )}
 
       {view && view.others.length > 0 && (
         <div className="cur-others faint">
@@ -111,7 +119,7 @@ export function CurrentServer({ gameId, gameName }: { gameId: string; gameName: 
   );
 }
 
-function ServerDetails({ sv, you }: { sv: CurrentServerInfo; you?: string }) {
+function ServerDetails({ sv, you, onTrace }: { sv: CurrentServerInfo; you?: string; onTrace?: () => void }) {
   const n = sv.network;
   const place = n?.city ? `${n.city}${n.country ? `, ${n.country}` : ""}` : n?.country ? n.country : null;
   const tooFar = sv.geo.state === "too_far";
@@ -168,6 +176,11 @@ function ServerDetails({ sv, you }: { sv: CurrentServerInfo; you?: string }) {
         <Metric label="Loss" value={sv.loss_pct != null ? pct(sv.loss_pct) : "—"} unit="%" q={sv.loss_pct != null && sv.loss_pct > 0 ? "warn" : undefined} />
       </div>
       {!pingKnown && sv.ping_note && <div className="cur-geo faint">{sv.ping_note}</div>}
+      {onTrace && (
+        <button className="btn btn-xs cur-trace" onClick={onTrace} title="Find where on the way to this server loss starts (Settings → Diagnostics)">
+          <Route size={13} /> Trace this server
+        </button>
+      )}
       {pingKnown && <div className="pops-foot faint">Direct ICMP ping from this PC, last {sv.sent} pings · network from RIPEstat</div>}
     </div>
   );

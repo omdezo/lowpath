@@ -2,11 +2,13 @@ package app
 
 import (
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"sync"
 	"testing"
 
 	"lowpath/internal/catalog"
+	"lowpath/internal/diag"
 )
 
 // fakeServerLists records what the API asked for.
@@ -31,6 +33,14 @@ func (f *fakeServerLists) Ping(app int) catalog.ServerList {
 	l := f.List(app)
 	l.Pinging = true
 	return l
+}
+
+// TraceTarget knows one POP, dxb, at a documentation address.
+func (f *fakeServerLists) TraceTarget(app int, pop string) (netip.Addr, string, bool) {
+	if pop != "dxb" {
+		return netip.Addr{}, "", false
+	}
+	return netip.MustParseAddr("203.0.113.7"), "Valve Dubai (dxb)", true
 }
 
 func (f *fakeServerLists) Close() {
@@ -105,5 +115,35 @@ func TestServersAPIWithoutCatalog(t *testing.T) {
 	var l catalog.ServerList
 	if code := call(t, ts, "GET", "/api/games/cs2/servers", "", &l); code != 200 || l.State != "unsupported" {
 		t.Fatalf("cs2 without a catalog: %d %+v", code, l)
+	}
+}
+
+// "Trace this server" names a POP by game and id; the address and the name
+// come from the game's list, and anything else is refused (#140).
+func TestTraceAValvePOP(t *testing.T) {
+	_, srv := newServersTestServer(t, &fakeServerLists{})
+	cfg, err := srv.traceConfig(t.Context(), traceRequest{TargetID: "pop:cs2:dxb"})
+	if err != nil || cfg.Target != netip.MustParseAddr("203.0.113.7") || cfg.Host != "Valve Dubai (dxb)" || cfg.Mode != diag.TraceICMP {
+		t.Fatalf("pop:cs2:dxb = %+v, %v", cfg, err)
+	}
+	for _, req := range []traceRequest{
+		{TargetID: "pop:cs2:sto"},                    // not on the list
+		{TargetID: "pop:nope:dxb"},                   // no such game
+		{TargetID: "pop:valorant:dxb"},               // a game without a list
+		{TargetID: "pop:cs2"},                        // malformed
+		{TargetID: "pop:cs2:"},                       // malformed
+		{TargetID: "pop:cs2:dxb", Mode: "udp"},       // only a relay answers UDP probes
+		{TargetID: "pop:cs2:dxb", Host: "x.example"}, // the id wins; still checked
+	} {
+		cfg, err := srv.traceConfig(t.Context(), req)
+		if req.Host != "" {
+			if err != nil || cfg.Host != "Valve Dubai (dxb)" {
+				t.Errorf("%+v: %+v, %v; want the list's POP", req, cfg, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%+v: %+v, want refused", req, cfg)
+		}
 	}
 }

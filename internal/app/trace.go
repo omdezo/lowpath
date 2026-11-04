@@ -219,6 +219,15 @@ func (s *Server) traceConfig(ctx context.Context, req traceRequest) (diag.TraceC
 	}
 	cfg := diag.TraceConfig{Mode: mode}
 	switch {
+	case strings.HasPrefix(req.TargetID, popTargetPrefix):
+		// A POP on a game page's Valve list ("Trace this server"): looked
+		// up here, so the address and the name are the list's, not the
+		// request's.
+		addr, label, err := s.popTraceTarget(req.TargetID)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.Target, cfg.Host = addr, label
 	case req.TargetID != "":
 		var spec *engine.PathSpec
 		for _, p := range s.net.Paths("") {
@@ -253,6 +262,29 @@ func (s *Server) traceConfig(ctx context.Context, req traceRequest) (diag.TraceC
 		return cfg, errors.New("UDP mode needs one of your relays as the target: only a relay answers UDP probes on its port")
 	}
 	return cfg, nil
+}
+
+// popTargetPrefix starts the trace target id of a Valve POP:
+// "pop:<game id>:<POP id>". POPs aren't in traceTargets (a game lists
+// dozens); the game page names the one the user picked.
+const popTargetPrefix = "pop:"
+
+// popTraceTarget resolves a POP target id through the game's server list.
+func (s *Server) popTraceTarget(id string) (netip.Addr, string, error) {
+	rest := strings.TrimPrefix(id, popTargetPrefix)
+	i := strings.LastIndexByte(rest, ':')
+	if i <= 0 || i == len(rest)-1 {
+		return netip.Addr{}, "", fmt.Errorf("%q is not a server of a game's list", id)
+	}
+	g, ok := s.game(rest[:i])
+	if !ok || s.servers == nil || g.SteamApp <= 0 {
+		return netip.Addr{}, "", errors.New("that game has no server list to trace from")
+	}
+	addr, label, ok := s.servers.TraceTarget(g.SteamApp, rest[i+1:])
+	if !ok {
+		return netip.Addr{}, "", errors.New("that server isn't on the game's list any more, or has no address to trace; pick another one")
+	}
+	return addr, label, nil
 }
 
 // resolveTraceHost parses or looks up host (2 s at most) and checks that

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -367,5 +368,34 @@ func TestValveCloseStopsNewWork(t *testing.T) {
 	r.v.Ping(730)
 	if r.src.count() != n {
 		t.Fatalf("downloads started after Close: %d, then %d", n, r.src.count())
+	}
+}
+
+// A trace target is one IPv4 relay of a POP on the list already held, named
+// after its city; asking never starts a download.
+func TestValveTraceTarget(t *testing.T) {
+	r := newRig(t)
+	if _, _, ok := r.v.TraceTarget(730, "dxb"); ok {
+		t.Fatal("a target before the list was known")
+	}
+	if n := r.src.count(); n != 0 {
+		t.Fatalf("TraceTarget started %d downloads", n)
+	}
+	waitFor(t, r.v, settled)
+	addr, label, ok := r.v.TraceTarget(730, "dxb")
+	if !ok || !addr.Is4() || label != "Valve Dubai (dxb)" {
+		t.Errorf("dxb: %v %q %v", addr, label, ok)
+	}
+	// An older id of the same POP still finds it, under its current id.
+	if _, label, ok := r.v.TraceTarget(730, "bom"); !ok || !strings.HasSuffix(label, "(bom2)") {
+		t.Errorf("alias bom: %q %v", label, ok)
+	}
+	for _, id := range []string{"ctu", "nope", ""} { // no relays; unknown
+		if a, l, ok := r.v.TraceTarget(730, id); ok {
+			t.Errorf("%q: %v %q", id, a, l)
+		}
+	}
+	if _, _, ok := r.v.TraceTarget(440, "dxb"); ok {
+		t.Error("a target for another app's list")
 	}
 }

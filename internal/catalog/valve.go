@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"strconv"
 	"sync"
@@ -145,6 +146,36 @@ func (v *ValveServers) List(appID int) ServerList {
 		v.startPing(a)
 	}
 	return v.view(a, now)
+}
+
+// TraceTarget is one relay address of the app's POP id (or an older alias
+// of it) to run a route trace to, with a name for it ("Valve Stockholm
+// (sto)"). It reads the list already held, never starting a download: a
+// trace is asked for from a list on screen. ok is false when the list or
+// the POP isn't known, or the POP has no public IPv4 relay (partner data
+// centers list none).
+func (v *ValveServers) TraceTarget(appID int, popID string) (addr netip.Addr, label string, ok bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	a := v.app(appID)
+	if a.cfg == nil {
+		return netip.Addr{}, "", false
+	}
+	for _, p := range a.cfg.POPs {
+		if p.ID != popID && !slices.Contains(p.Aliases, popID) {
+			continue
+		}
+		relays := pickRelays(p.Relays, 1)
+		if len(relays) == 0 {
+			return netip.Addr{}, "", false
+		}
+		name := p.City
+		if name == "" {
+			name = p.Desc
+		}
+		return relays[0], fmt.Sprintf("Valve %s (%s)", name, p.ID), true
+	}
+	return netip.Addr{}, "", false
 }
 
 // old says the list is due for a refresh: older than the TTL, or saved "in

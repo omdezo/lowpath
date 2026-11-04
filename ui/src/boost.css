@@ -1079,3 +1079,25 @@
 .cur-note svg {
   vertical-align: -2px;
 }
+
+/* A POP row with a "Trace the route" button in a fourth column. */
+.pop-row.has-trace {
+  grid-template-columns: minmax(0, 1fr) 72px 64px 32px;
+}
+
+.pop-trace.icon-btn {
+  width: 32px;
+  height: 28px;
+  justify-self: end;
+  color: var(--faint);
+}
+
+.pop-trace.icon-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.cur-trace {
+  align-self: flex-start;
+  margin-top: 10px;
+  gap: 6px;
+}
