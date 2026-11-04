@@ -61,7 +61,25 @@ func Analyze(ctx context.Context, specs []PathSpec, o AnalyzeOptions, dur time.D
 		dst = netip.AddrPortFrom(o.Server, 0) // the relay pings the IP; the port is unused
 	}
 
+	// The trackers judge probes on the time the analysis could run, like a
+	// boost's do: replies queued while the whole process stalled are not
+	// loss, and a seed that says so would start the boost in fallback.
+	var before tracker
+	awake := &awakeClock{}
+	before.awake = awake
+	for _, p := range paths {
+		p.probes.awake = awake
+	}
+	awake.beat(time.Now())
+	beatCtx, stopBeat := context.WithCancel(context.Background())
+	defer stopBeat()
+
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		awake.run(beatCtx)
+	}()
 	for _, p := range paths {
 		wg.Add(1)
 		go func() {
@@ -81,7 +99,6 @@ func Analyze(ctx context.Context, specs []PathSpec, o AnalyzeOptions, dur time.D
 			}
 		}()
 	}
-	var before tracker
 	if dc != nil {
 		wg.Add(1)
 		go func() {
@@ -143,16 +160,8 @@ loop:
 	// Let in-flight probes land, then judge anything still missing as lost.
 	time.Sleep(probeTimeout)
 	pings.Wait()
-	now := time.Now()
-	n := min(ringSize, int(dur/every))
-	out := Analysis{Paths: map[string]Stats{}}
-	if dc != nil || icmpBaseline {
-		out.Direct = before.statsN(now, n)
-	}
-	out.DirectKnown = out.Direct.Samples > 0
-	for _, p := range paths {
-		out.Paths[p.spec.ID] = p.probes.statsN(now, n)
-	}
+	out := judgeAnalysis(awake, &before, dc != nil || icmpBaseline, paths, time.Now(), min(ringSize, int(dur/every)))
+	stopBeat()
 	for _, p := range paths {
 		p.conn.Close()
 	}
@@ -162,4 +171,22 @@ loop:
 	wg.Wait()
 	paths = nil
 	return out, ctx.Err()
+}
+
+// judgeAnalysis turns the last n probes of the baseline (when there is one)
+// and of every path into the analysis at now. It beats awake first, so a
+// stall that ended just now is on record before the probes it delayed are
+// judged: their replies may still wait to be read, and they count as in
+// flight rather than lost.
+func judgeAnalysis(awake *awakeClock, before *tracker, baseline bool, paths []*path, now time.Time, n int) Analysis {
+	awake.beat(now)
+	out := Analysis{Paths: map[string]Stats{}}
+	if baseline {
+		out.Direct = before.statsN(now, n)
+	}
+	out.DirectKnown = out.Direct.Samples > 0
+	for _, p := range paths {
+		out.Paths[p.spec.ID] = p.probes.statsN(now, n)
+	}
+	return out
 }

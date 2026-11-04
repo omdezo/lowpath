@@ -165,6 +165,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   start grace. Dead routes still fall back, as soon as the engine has run
   long enough to know, and at most 3 s later than before on a PC that
   never stops stalling; a PC that is only busy is not stalled (#214).
+- Analyze (and the startup route mapping) judges its probes the same way
+  as a boost: a stall during an analysis no longer reports the replies it
+  held up as loss, so the analysis no longer seeds a boost with every
+  route down and starts it in fallback (#218).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent
