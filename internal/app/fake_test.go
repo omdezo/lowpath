@@ -69,7 +69,7 @@ func waitReset(t *testing.T, srv *Server) {
 	t.Helper()
 	select {
 	case <-srv.current.resetDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(stateWait): // only counts when the reset never returns
 		t.Fatal("start-up's flow reset never returned")
 	}
 }

@@ -27,6 +27,11 @@ func (c cableLine) DefaultRoute() (diag.Route, error) {
 	return diag.Route{Index: 3, Name: "Ethernet", Gateway: c.gw, Kind: diag.LinkEthernet}, nil
 }
 
+// newWiFiServer is a server whose Wi-Fi reads are expected to answer: the
+// watch's limits are stateWait, which only count when the fake never
+// answers. A starved test process may not run the read goroutine for
+// seconds, and with a short limit the card would say the service isn't
+// answering although the fake answered at once (#216).
 func newWiFiServer(t *testing.T, fp *fakeplatform.Fake, ns diag.NetStats) (*Server, func(method, path string, out any) int) {
 	t.Helper()
 	line := newFakeHomeLine()
@@ -34,8 +39,22 @@ func newWiFiServer(t *testing.T, fp *fakeplatform.Fake, ns diag.NetStats) (*Serv
 		ns = line
 	}
 	ts, srv := newRealServer(t, fp, func(c *Config) { c.NetStats, c.BloatLoader, c.Ping = ns, line, line.ping })
-	srv.wifi.callTimeout, srv.wifi.surveyTimeout, srv.wifi.refreshEvery = 200*time.Millisecond, 200*time.Millisecond, 50*time.Millisecond
+	srv.wifi.callTimeout, srv.wifi.surveyTimeout, srv.wifi.refreshEvery = stateWait, stateWait, 50*time.Millisecond
 	return srv, func(method, path string, out any) int { return call(t, ts, method, path, "", out) }
+}
+
+// hungLimit is the watch's limit in the tests that hang the Wi-Fi service
+// on purpose: what they check is that the card gives up, so it is short to
+// keep them fast. Only those tests may use it.
+const hungLimit = 200 * time.Millisecond
+
+// newHungWiFiServer is newWiFiServer for a test whose fake Wi-Fi service
+// hangs: the card gives up after hungLimit.
+func newHungWiFiServer(t *testing.T, fp *fakeplatform.Fake) (*Server, func(method, path string, out any) int) {
+	t.Helper()
+	srv, api := newWiFiServer(t, fp, nil)
+	srv.wifi.callTimeout, srv.wifi.surveyTimeout = hungLimit, hungLimit
+	return srv, api
 }
 
 func getWiFi(t *testing.T, api func(string, string, any) int) wifiView {
@@ -152,7 +171,7 @@ func TestWiFiAPIHungService(t *testing.T) {
 	fp.WiFi.SetLink(exampleLink(-60), nil)
 	release := make(chan struct{})
 	fp.WiFi.Hang(release)
-	srv, api := newWiFiServer(t, fp, nil)
+	srv, api := newHungWiFiServer(t, fp)
 	start := time.Now()
 	v := getWiFi(t, api)
 	if v.State != wifiError || v.Link != nil || !strings.Contains(v.Message, "isn't answering") {
@@ -442,7 +461,7 @@ func TestWiFiSurveyHungService(t *testing.T) {
 	fp.WiFi.SetLink(exampleLink(-58), nil)
 	release := make(chan struct{})
 	fp.WiFi.Hang(release)
-	_, api := newWiFiServer(t, fp, nil)
+	_, api := newHungWiFiServer(t, fp)
 	var v wifiView
 	for i := 0; i < 3; i++ {
 		api("POST", "/api/diag/wifi/survey", &v)
