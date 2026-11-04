@@ -37,6 +37,8 @@ type Options struct {
 	InService bool
 	// ServiceNote: see app.Config.ServiceNote.
 	ServiceNote string
+	// OpenSettings: see app.Config.OpenSettings (nil in the service).
+	OpenSettings app.SettingsOpener
 }
 
 // Build wires the API server to the store, catalog, relays and the
@@ -72,7 +74,7 @@ func Build(ctx context.Context, o Options, plat *platform.Platform, logger *slog
 		Log:    logger.With("component", "catalog"),
 	})
 	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: o.UI, Log: logger, Quit: quit, ArtDir: filepath.Join(o.Data, "art"),
-		TraceCount: o.TraceCount, TraceInterval: o.TraceInterval, Elevate: o.Elevate, InService: o.InService, ServiceNote: o.ServiceNote,
+		TraceCount: o.TraceCount, TraceInterval: o.TraceInterval, Elevate: o.Elevate, InService: o.InService, ServiceNote: o.ServiceNote, OpenSettings: o.OpenSettings,
 		// While route mode captures, this file says so; finding it at the
 		// next start means that run was killed or crashed.
 		Marker: capture.NewMarkerFile(filepath.Join(o.Data, "capture-session.json")),

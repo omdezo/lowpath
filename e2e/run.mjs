@@ -740,6 +740,22 @@ async function main() {
     const offText = (await card.locator(".bloat-verdict").textContent().catch(() => "")) ?? "";
     // On a cable the reason is the cable; on Wi-Fi, the disconnect.
     check("A disconnected Wi-Fi shows — and why, not old numbers", /isn't connected|over a cable/.test(offText) && !offText.includes("-61"), offText.slice(0, 160));
+    // Windows 11 24H2 refuses the scan without location access: the card
+    // says which setting and offers to open it (not pressed here: it would
+    // open the tester's own Settings app).
+    fs.writeFileSync(wifiFile, JSON.stringify({ link: WIFI.link, survey_error: "location" }));
+    await card.locator(".bloat-stats").waitFor({ timeout: 8000 }).catch(() => {});
+    await card.getByRole("button", { name: /Check channel/ }).click();
+    const fix = card.getByRole("button", { name: "Open location settings" });
+    await fix.waitFor({ timeout: 8000 }).catch(() => {});
+    const locText = (await card.locator(".bloat-facts").textContent().catch(() => "")) ?? "";
+    check(
+      "A scan refused for location says which setting, with a button that opens it",
+      (await fix.isVisible().catch(() => false)) && /Let desktop apps access your location/.test(locText),
+      locText.slice(0, 160),
+    );
+    await scrollToStart(page, '[data-testid="wifi-card"]');
+    await shot(page, "wifi-location", "Wi-Fi link: Check channel refused for location access, with a button to the setting");
     fs.writeFileSync(wifiFile, JSON.stringify(WIFI));
 
     await page.getByRole("tab", { name: "Optimization" }).click();

@@ -9,6 +9,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Wi-Fi card: when Windows refuses *Check channel* for want of location
+  access, an *Open location settings* button opens that page of the
+  Settings app (`ms-settings:privacy-location`, as Microsoft recommends);
+  the check itself still runs only when pressed. The window opens the
+  page itself, never the background service, and the API opens only pages
+  Lowpath names, never a URL from the request (#158).
 - Relay lane statistics: the egress relay records which path delivered
   each copy of the game's packets and once a second sends the client a
   TStats report per flow: each path's loss, the loss two paths share and

@@ -30,6 +30,7 @@ type Frontend struct {
 	auth      *auth
 	ui        fs.FS
 	log       *slog.Logger
+	settings  SettingsOpener
 	transport *http.Transport
 	proxy     *httputil.ReverseProxy
 }
@@ -43,6 +44,10 @@ type FrontendConfig struct {
 	// Session is the cookie secret; empty: a random one (tests set their
 	// own).
 	Session string
+	// OpenSettings opens a page of the system's settings on this window's
+	// desktop. The window answers that request itself: the service runs as
+	// another account and has no screen to open it on. Nil: not offered.
+	OpenSettings SettingsOpener
 }
 
 // serviceHost is the Host the service sees on requests from the window. It
@@ -60,7 +65,7 @@ func NewFrontend(cfg FrontendConfig) (*Frontend, error) {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
-	f := &Frontend{auth: newAuth(cfg.Session), ui: cfg.UI, log: cfg.Log}
+	f := &Frontend{auth: newAuth(cfg.Session), ui: cfg.UI, log: cfg.Log, settings: cfg.OpenSettings}
 	f.transport = &http.Transport{
 		Proxy: nil, // never an HTTP proxy from the environment
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -93,6 +98,8 @@ func (f *Frontend) Handler() http.Handler {
 	// Answered here, so a second launch finds this window even while the
 	// service restarts.
 	mux.HandleFunc("GET "+pathVersion, handleVersion)
+	// Opened on this desktop, never passed on to the service.
+	mux.HandleFunc("POST /api/os/settings/{page}", handleOpenSettings(f.settings, f.log))
 	mux.Handle("/api/", f.proxy)
 	if f.ui != nil {
 		mux.Handle("/", spa(f.ui))

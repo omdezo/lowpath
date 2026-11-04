@@ -21,6 +21,7 @@ import type {
   Settings,
   TraceMode,
   TraceStatus,
+  SettingsPage,
   WiFiView,
 } from "./types";
 
@@ -99,6 +100,8 @@ export const api = {
   gateway: () => call<GatewayView>("GET", "/diag/gateway"),
   wifi: () => call<WiFiView>("GET", "/diag/wifi"),
   wifiSurvey: () => call<WiFiView>("POST", "/diag/wifi/survey"),
+  // Opens a page of the system's settings on this computer (204, no body).
+  openSettings: (page: SettingsPage) => call<null>("POST", `/os/settings/${enc(page)}`),
 };
 
 // Plain-language wording for the error kinds the daemon uses to say "you need

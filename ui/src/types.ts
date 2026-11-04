@@ -205,11 +205,18 @@ export interface WiFiSurvey {
   freq_mhz: number;
 }
 
+// A page of the system's own settings the app may open for the user
+// (POST /api/os/settings/{page}).
+export type SettingsPage = "location";
+
 export interface WiFiSurveyView {
   state: WiFiState;
   message?: string;
   result: WiFiSurvey | null;
   at: string;
+  // The settings page that lifts what stopped the survey, where this
+  // system has one (location access on Windows 11 24H2 and later).
+  settings?: SettingsPage;
 }
 
 export type WiFiTuningState = "applying" | "on" | "partial" | "failed" | "off";

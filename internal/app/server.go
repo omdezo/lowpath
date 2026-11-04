@@ -70,6 +70,10 @@ type Config struct {
 	// Elevate: not supported on this platform.
 	Elevate func() error
 	Quit    func()
+	// OpenSettings opens a page of the system's settings for the user (the
+	// Wi-Fi card's "Open location settings"). Nil: this process has no
+	// window to open it on (the background service, tests).
+	OpenSettings SettingsOpener
 
 	// Session is the secret every /api request must carry in the session
 	// cookie (see LaunchPath). Empty: a random one, which is what the app
@@ -129,12 +133,14 @@ type Server struct {
 	ui      fs.FS
 	elevate func() error
 	quit    func()
-	auth    *auth
-	art     *artStore
-	bloat   *bloatRunner
-	trace   *traceRunner
-	line    *lineWatch
-	current *currentServers
+	// openSettings: see Config.OpenSettings.
+	openSettings SettingsOpener
+	auth         *auth
+	art          *artStore
+	bloat        *bloatRunner
+	trace        *traceRunner
+	line         *lineWatch
+	current      *currentServers
 	// conflicts names other boosters, packet filter drivers and
 	// full-tunnel VPNs (internal/compat).
 	conflicts *conflictWatch
@@ -268,7 +274,7 @@ func NewServer(cfg Config) (*Server, error) {
 	life, endLife := context.WithCancel(context.Background())
 	s := &Server{
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
-		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
+		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit, openSettings: cfg.OpenSettings,
 		auth:   newAuth(cfg.Session),
 		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
@@ -484,6 +490,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/processes", s.handleProcesses)
 	mux.HandleFunc("GET /api/art/{id}/{kind}", s.handleArt)
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
+	mux.HandleFunc("POST /api/os/settings/{page}", handleOpenSettings(s.openSettings, s.log))
 	mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /api/location", s.handleLocation)
 	mux.HandleFunc("GET /api/conflicts", s.handleConflicts)
