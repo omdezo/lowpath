@@ -44,9 +44,20 @@ next is in the [roadmap](roadmap.md).
   derives it; `0` = open relay. Relays started with a key drop every packet
   whose token differs. Forwarding hops pass packets through untouched.
 - A `TProbe` may carry `Addr` = the game server. The egress replies with
-  `TProbeReply` (same header, type changed) whose payload is
-  `proto.AppendServerRTT(nil, rtt)`; `-1` → unknown. Clients decode with
-  `proto.ParseServerRTT(payload)`.
+  `TProbeReply` (same header, type changed) whose payload is a server-leg
+  block, `proto.AppendServerLeg(nil, leg)` (big endian, 10 bytes):
+  `rtt` u32 µs, `loss` u16 in hundredths of a percent (0..10000), `jitter`
+  u32 µs (RFC 3550, of the relay's pings); `0xFFFFFFFF` / `0xFFFF` =
+  unknown. Each field has its own unknown, so a relay can report the RTT
+  before it has enough pings for loss and jitter. Clients decode with
+  `proto.ParseServerLeg(payload)`, whose `HasRTT` / `HasLoss` /
+  `HasJitter` say what is known. Compatibility is by length, with no
+  version byte: fields are only ever appended, readers decode the fields
+  the payload covers, ignore what follows and take a missing field as
+  unknown. A client that predates loss and jitter reads the first 4 bytes
+  with `proto.ParseServerRTT` and skips the rest; a relay that predates
+  them sends only the 4-byte `rtt`, which a new client reads as loss and
+  jitter unknown, never 0 (#146).
 - Sequence numbers are per flow and direction. The egress starts each
   flow's downstream numbering at a random value, and `dedup.Window` treats a
   number `dedup.RestartGap` (4 × window) or more behind its newest one as a
@@ -574,7 +585,13 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   `DirectKnown=false` and paths show relay RTT only.
 - Snapshot JSON additions: `mode` ("proxy"|"capture"), `servers`
   (`[{addr, pkts_up, pkts_down, last_seen, primary}]`), `server_leg_ms`,
-  `server_leg_known`, `before_known`. `listen` is "" in capture mode.
+  `server_leg_known`, `server_leg_loss_pct` / `server_leg_loss_known`,
+  `server_leg_jitter_ms` / `server_leg_jitter_known` (the same leg's loss
+  and jitter, from the relay's pings; unknown from relays that don't
+  report them), `before_known`. All of the leg comes from the latest
+  after-probe reply as one report and is unknown once that is older than
+  `legStale` (3 s) or the primary server changes. `listen` is "" in
+  capture mode.
 - Stats JSON gains `server_ms` (relay→server leg included in `rtt_ms`, 0 if unknown).
 
 ## Relay, lpcheck, deploy
@@ -598,7 +615,17 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
 - Server-leg pinger: every destination seen in data or probes is pinged
   (first ping immediately, then every PingInterval ≈ 1 s) while it is in use
   (forget after 30 s idle); smoothed RTT (EWMA); unknown after 3 misses.
-- Probe replies carry `proto.AppendServerRTT`.
+  Each server also keeps a `legWindow` (`legwindow.go`) of its latest 60
+  ping outcomes, a minute at the default interval: loss over the window,
+  and RFC 3550 jitter of the replies' round trips (`J += (|D| − J)/16`, D
+  the change from the previous reply's RTT, lost pings skipped). Sixty
+  pings make one lost ping 1.7%, under the verdict's 2% bar for blaming
+  the server, while still describing the current minute of play. Loss is
+  reported from 20 outcomes and jitter from 20 reply-to-reply
+  comparisons (the verdict's `minPathSamples`), and both only while the
+  RTT is known: misses that made it unknown may be a server that stopped
+  answering ping, not a measured 100% loss.
+- Probe replies carry `proto.AppendServerLeg` (RTT, loss, jitter).
 - Lane statistics (`internal/tstats`, roadmap L1): each return address of a
   flow is a lane (slot 0..7; a slot freed by a forgotten address gets a new
   lane id). A `tstats.Tracker` per flow keeps a 1024-number delivery
@@ -640,7 +667,8 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   Windows' built-in `ssh`/`scp`; uploads `dist/relay-linux-amd64` or
   `-arm64`; prints the address + key to paste into Lowpath).
 - Tests: wrong token dropped, private destination blocked, probe reply carries
-  the (fake) pinger's RTT, open relay still works, the limits above, and
+  the (fake) pinger's RTT and, once it has enough pings, their loss and
+  jitter, open relay still works, the limits above, and
   `TStats` counts through two netsim lanes on IPv4 and IPv6 loopback
   matching the links' seeded losses.
 
@@ -1007,8 +1035,12 @@ func NewGatewayPinger(GatewayConfig) *GatewayPinger // Run(ctx), Touch(), View()
      boost the advice is to keep it on. A UDP trace losing only at the relay's port gives
      `relay` (segment `lowpath`).
   4. *Game server*: the relay leg is clean (< 1% loss, < 10 ms jitter) and
-     the relay's leg to the server loses ≥ 2% or jitters ≥ 10 ms (relays
-     don't report that leg's loss yet), or, low confidence, during a boost
+     the relay's leg to the server loses ≥ 2% or jitters ≥ 10 ms (from a
+     boost, the leg's loss and jitter as the relay reports them with probe
+     replies; nil from relays that don't). Loss alone drops a step and
+     says it can't tell a ping limit from lost game traffic, since a
+     server that limits ping drops the relay's pings too, unless the PC's
+     own pings to the server lose ≥ 2% as well; or, low confidence, during a boost
      direct loses ≥ 2% and the relay reports no time to the server (a hint:
      the relay may not be able to ping, and an ISP problem looks the same).
   5. *Already optimal*: direct RTT ≤ relay route + 2 ms and no lossier

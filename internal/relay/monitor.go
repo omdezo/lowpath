@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"lowpath/internal/proto"
 )
 
 const (
@@ -43,6 +45,7 @@ type server struct {
 	rtt      time.Duration // smoothed, meaningful only while known
 	known    bool
 	misses   int
+	recent   legWindow // the latest pings, for the leg's loss and jitter
 }
 
 func newMonitor(ping pingFunc, interval time.Duration) *monitor {
@@ -57,17 +60,24 @@ func (m *monitor) touch(a netip.Addr) {
 	m.mu.Unlock()
 }
 
-// observe marks a as in use and returns its smoothed RTT; ok is false until
-// the first reply, after maxMisses misses in a row, or when a cannot be
-// monitored (limit reached, relay stopping).
-func (m *monitor) observe(a netip.Addr) (rtt time.Duration, ok bool) {
+// observe marks a as in use and returns what is known of the leg to it: the
+// smoothed RTT, and the loss and jitter of the latest pings once there are
+// enough of them. Nothing is known until the first reply, after maxMisses
+// misses in a row, or when a cannot be monitored (limit reached, relay
+// stopping). Loss and jitter are reported only while the RTT is: a server
+// that stops answering may have started dropping ping rather than traffic,
+// so its misses are not passed off as a measured 100% loss.
+func (m *monitor) observe(a netip.Addr) proto.ServerLeg {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.useLocked(a.Unmap(), time.Now())
 	if s == nil || !s.known {
-		return 0, false
+		return proto.ServerLeg{}
 	}
-	return s.rtt, true
+	l := proto.ServerLeg{RTT: s.rtt, HasRTT: true}
+	l.LossPct, l.HasLoss = s.recent.loss()
+	l.Jitter, l.HasJitter = s.recent.jitterEstimate()
+	return l
 }
 
 func (m *monitor) useLocked(a netip.Addr, now time.Time) *server {
@@ -114,6 +124,7 @@ func (m *monitor) run(a netip.Addr, s *server) {
 func (m *monitor) record(a netip.Addr, s *server, rtt time.Duration, err error) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	s.recent.add(rtt, err == nil)
 	if err != nil {
 		s.misses++
 		if s.misses >= maxMisses {

@@ -443,6 +443,17 @@ func (serverRule) check(v *view) (Check, *Verdict) {
 				vd.Confidence = ConfidenceMedium
 			}
 			vd.Facts = []string{fact}
+			directLoss := p.Direct != nil && p.Direct.Samples >= minPathSamples && p.Direct.LossPct >= routeLossPct
+			if !legJitter && !directLoss {
+				// The relay's leg is measured with ping, and a server
+				// that limits ping drops the relay's pings too: loss
+				// seen from the relay alone can't tell that from lost
+				// game traffic. Jitter can't be explained that way, and
+				// the PC losing pings to the server as well is a second
+				// vantage point agreeing.
+				vd.Confidence = vd.Confidence.lower()
+				vd.Facts = append(vd.Facts, "The relay measures that leg with ping, and servers often limit ping, so this loss alone can't tell a ping limit from lost game traffic.")
+			}
 			c.Status, c.Facts, c.Summary = CheckFound, vd.Facts, vd.Title+"."
 			return c, vd
 		}
@@ -483,7 +494,11 @@ func (serverRule) check(v *view) (Check, *Verdict) {
 		c.Summary = "Measure routes on a game's page, or boost a game."
 	}
 	if p != nil && p.ServerMS != nil {
-		facts = append(facts, fmt.Sprintf("The relay reaches the game server in %.0f ms (relays don't report that leg's loss yet).", *p.ServerMS))
+		if p.ServerLossPct != nil {
+			facts = append(facts, fmt.Sprintf("The relay reaches the game server in %.0f ms, losing %.1f%% of its pings with %s ms jitter.", *p.ServerMS, *p.ServerLossPct, msText(p.ServerJitterMS)))
+		} else {
+			facts = append(facts, fmt.Sprintf("The relay reaches the game server in %.0f ms (it doesn't report that leg's loss: an older relay, or too few pings yet).", *p.ServerMS))
+		}
 	}
 	c.Facts = facts
 	return c, nil

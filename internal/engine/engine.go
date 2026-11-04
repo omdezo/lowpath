@@ -91,6 +91,16 @@ type Snapshot struct {
 	// them from the adapter's totals to find "other" traffic.
 	WireUp   uint64 `json:"wire_bytes_up"`
 	WireDown uint64 `json:"wire_bytes_down"`
+
+	// ServerLegLoss (%) and ServerLegJitter (RFC 3550, ms) are the loss and
+	// jitter of the same leg as ServerLeg, over the relay's latest pings to
+	// the server. Each is known only while the relay reports it (older
+	// relays never do, and a relay waits for enough pings first) and the
+	// report is as fresh as ServerLeg's.
+	ServerLegLoss        float64 `json:"server_leg_loss_pct"`
+	ServerLegLossKnown   bool    `json:"server_leg_loss_known"`
+	ServerLegJitter      float64 `json:"server_leg_jitter_ms"`
+	ServerLegJitterKnown bool    `json:"server_leg_jitter_known"`
 }
 
 const (
@@ -134,9 +144,8 @@ type Engine struct {
 	afterFlow uint64
 	flows     *flowTable
 	routing   atomic.Pointer[routing]
-	relayed   atomic.Bool  // a game packet went out through the relays
-	legUS     atomic.Int64 // latest server leg in µs, -1 = unknown
-	legAt     atomic.Int64 // unix nanos when legUS was reported
+	relayed   atomic.Bool               // a game packet went out through the relays
+	leg       atomic.Pointer[legReport] // latest server leg; nil = none
 
 	mu       sync.Mutex // control plane: selection state and events
 	chosen   bool
@@ -168,7 +177,6 @@ func Start(cfg Config) (*Engine, error) {
 		afterFlow: randID(),
 	}
 	e.routing.Store(&routing{})
-	e.legUS.Store(-1)
 	if !e.capture {
 		if !e.cfg.Direct.IsValid() {
 			e.cfg.Direct = cfg.Target
@@ -352,7 +360,7 @@ func (e *Engine) readPath(p *path) {
 			case e.afterFlow:
 				// First copy wins; the duplicates from other paths are ignored.
 				if e.after.recvLeg(h.Seq, now, leg) {
-					e.setServerLeg(leg, now)
+					e.setServerLeg(proto.ParseServerLeg(payload), now)
 				}
 			}
 		case proto.TData:
@@ -456,25 +464,32 @@ func (e *Engine) probeLoop(ctx context.Context) {
 	}
 }
 
-// setServerLeg records what the latest after-probe reply said about the egress
-// relay's leg to the game server (leg < 0: unknown).
-func (e *Engine) setServerLeg(leg time.Duration, now time.Time) {
-	us := int64(-1)
-	if leg >= 0 {
-		us = leg.Microseconds()
-	}
-	e.legUS.Store(us)
-	e.legAt.Store(now.UnixNano())
+// legReport is what one after-probe reply said about the egress relay's leg
+// to the game server, and when it came. It is replaced as a whole, so a
+// snapshot never mixes one reply's RTT with another's loss.
+type legReport struct {
+	proto.ServerLeg
+	at time.Time
 }
 
-// serverLeg is the latest relay->server RTT reported with an after probe.
-func (e *Engine) serverLeg(now time.Time) (ms float64, known bool) {
-	us := e.legUS.Load()
-	if us < 0 || now.Sub(time.Unix(0, e.legAt.Load())) > legStale {
-		return 0, false
-	}
-	return float64(us) / 1000, true
+// setServerLeg records what the latest after-probe reply said about the egress
+// relay's leg to the game server.
+func (e *Engine) setServerLeg(leg proto.ServerLeg, now time.Time) {
+	e.leg.Store(&legReport{ServerLeg: leg, at: now})
 }
+
+// serverLeg is the latest relay->server leg reported with an after probe;
+// nothing is known once that report is legStale old (no reply has come, so
+// it may describe a route the game no longer takes).
+func (e *Engine) serverLeg(now time.Time) proto.ServerLeg {
+	r := e.leg.Load()
+	if r == nil || now.Sub(r.at) > legStale {
+		return proto.ServerLeg{}
+	}
+	return r.ServerLeg
+}
+
+func millis(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
 func (e *Engine) selectLoop(ctx context.Context) {
 	t := time.NewTicker(time.Second)
@@ -501,7 +516,7 @@ func (e *Engine) primaryChanged() {
 	if e.capture {
 		e.before.reset()
 	}
-	e.legUS.Store(-1)
+	e.leg.Store(nil)
 }
 
 // copies decides how many paths carry each packet.
@@ -726,7 +741,10 @@ func (e *Engine) Snapshot() Snapshot {
 		snap.Listen = e.ListenAddr().String()
 	}
 	snap.BeforeKnown = snap.Before.Samples > 0
-	snap.ServerLeg, snap.ServerLegKnown = e.serverLeg(now)
+	leg := e.serverLeg(now)
+	snap.ServerLeg, snap.ServerLegKnown = millis(leg.RTT), leg.HasRTT
+	snap.ServerLegLoss, snap.ServerLegLossKnown = leg.LossPct, leg.HasLoss
+	snap.ServerLegJitter, snap.ServerLegJitterKnown = millis(leg.Jitter), leg.HasJitter
 	snap.Flows, snap.Servers = e.flows.list()
 	snap.PktsUp, snap.PktsDown, snap.Dups = e.pktsUp.Load(), e.pktsDown.Load(), e.dups.Load()
 	snap.WireUp, snap.WireDown = e.wireUp.Load(), e.wireDown.Load()

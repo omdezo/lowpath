@@ -9,6 +9,15 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Server leg loss and jitter: the egress relay keeps its last 60 pings to
+  each game server and reports the leg's loss and RFC 3550 jitter with
+  every probe reply, next to its latest round trip. A boost's snapshot
+  carries them, and the verdict uses them to tell a lagging game
+  server from a clean route; loss that only the relay sees, with a steady
+  leg, lowers its confidence and says a server limiting ping looks the
+  same. The reply format only grows, so older clients ignore the new
+  fields and an older relay's replies read as not measured rather than
+  as a clean leg (#146).
 - Relay lane statistics: the egress relay records which path delivered
   each copy of the game's packets and once a second sends the client a
   TStats report per flow: each path's loss, the loss two paths share and

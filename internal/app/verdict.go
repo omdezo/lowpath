@@ -99,7 +99,10 @@ func (s *Server) gameName(id string) string {
 
 // boostEvidence is a running boost's routes: direct (ICMP to the server,
 // when it answers) and the relay route split into the relay leg and the
-// relay's own leg to the server.
+// relay's own leg to the server. That leg's loss and jitter are left nil
+// unless the relay reported them: an older relay, or one that hasn't
+// pinged the server enough yet, says nothing about them, which is not the
+// same as a clean leg.
 func boostEvidence(snap engine.Snapshot, game string, now time.Time) *diag.PathEvidence {
 	p := &diag.PathEvidence{Source: diag.PathBoost, At: now, Game: game}
 	if snap.BeforeKnown {
@@ -112,6 +115,12 @@ func boostEvidence(snap engine.Snapshot, game string, now time.Time) *diag.PathE
 			p.ServerMS = ptrTo(a.Server)
 		case snap.ServerLegKnown:
 			p.ServerMS = ptrTo(snap.ServerLeg)
+		}
+		if snap.ServerLegLossKnown {
+			p.ServerLossPct = ptrTo(snap.ServerLegLoss)
+		}
+		if snap.ServerLegJitterKnown {
+			p.ServerJitterMS = ptrTo(snap.ServerLegJitter)
 		}
 	}
 	return p

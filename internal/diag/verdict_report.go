@@ -216,8 +216,12 @@ func (r DiagnosisReport) measurements(b *strings.Builder) {
 		if p.Source == PathBoost {
 			what = "Running boost"
 		}
-		s := fmt.Sprintf("%s for %s (%s ago): direct %s; relay leg %s; relay to server %s ms.", what, p.Game, ago(at.Sub(p.At)),
-			pathText(p.Direct), pathText(p.Relay), msText(p.ServerMS))
+		leg := msText(p.ServerMS) + " ms"
+		if p.ServerLossPct != nil || p.ServerJitterMS != nil {
+			leg += fmt.Sprintf(", %s%% loss, %s ms jitter", pctText(p.ServerLossPct), msText(p.ServerJitterMS))
+		}
+		s := fmt.Sprintf("%s for %s (%s ago): direct %s; relay leg %s; relay to server %s.", what, p.Game, ago(at.Sub(p.At)),
+			pathText(p.Direct), pathText(p.Relay), leg)
 		line(s)
 	}
 }

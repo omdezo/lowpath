@@ -186,6 +186,21 @@ func TestBoostEvidence(t *testing.T) {
 	if p.SameMethod || p.Source != diag.PathBoost || p.Game != "Example Game" {
 		t.Errorf("%+v", p)
 	}
+	// The relay hasn't reported the leg's loss and jitter: unknown, not 0.
+	if p.ServerLossPct != nil || p.ServerJitterMS != nil {
+		t.Errorf("unreported leg: loss %v jitter %v, want nil", p.ServerLossPct, p.ServerJitterMS)
+	}
+	// Reported: passed on as they are, a clean 0 included.
+	snap.ServerLegLoss, snap.ServerLegLossKnown = 0, true
+	snap.ServerLegJitter, snap.ServerLegJitterKnown = 6.5, true
+	if p := boostEvidence(snap, "", now); p.ServerLossPct == nil || *p.ServerLossPct != 0 || p.ServerJitterMS == nil || *p.ServerJitterMS != 6.5 {
+		t.Errorf("reported leg: loss %v jitter %v", p.ServerLossPct, p.ServerJitterMS)
+	}
+	// Each on its own: loss known, jitter not (yet).
+	snap.ServerLegLoss, snap.ServerLegJitterKnown = 4, false
+	if p := boostEvidence(snap, "", now); p.ServerLossPct == nil || *p.ServerLossPct != 4 || p.ServerJitterMS != nil {
+		t.Errorf("loss only: loss %v jitter %v", p.ServerLossPct, p.ServerJitterMS)
+	}
 	// Only the latest server leg known.
 	snap.After.Server, snap.ServerLeg, snap.ServerLegKnown = 0, 17, true
 	if p := boostEvidence(snap, "", now); p.Relay.RTTMS != 30 || *p.ServerMS != 17 {
@@ -193,7 +208,7 @@ func TestBoostEvidence(t *testing.T) {
 	}
 	// The server ignores ping, and every relay is down (fallback).
 	snap.BeforeKnown, snap.Fallback = false, true
-	if p := boostEvidence(snap, "", now); p.Direct != nil || p.Relay != nil || p.ServerMS != nil {
+	if p := boostEvidence(snap, "", now); p.Direct != nil || p.Relay != nil || p.ServerMS != nil || p.ServerLossPct != nil {
 		t.Errorf("fallback: %+v", p)
 	}
 }

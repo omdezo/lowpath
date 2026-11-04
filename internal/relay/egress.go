@@ -282,18 +282,17 @@ func (e *Egress) handle(pkt []byte, src netip.AddrPort, out []byte) []byte {
 	return out
 }
 
-// probeReply echoes the probe header with the relay->server RTT for the
-// server named in it, or "unknown" when there is none or it is not measured.
+// probeReply echoes the probe header with what the relay knows of its leg to
+// the server named in it (RTT, loss, jitter), each "unknown" when there is
+// no server or it is not measured.
 func (e *Egress) probeReply(dst []byte, h proto.Header) []byte {
-	rtt := time.Duration(-1)
+	var leg proto.ServerLeg
 	if h.Addr.IsValid() && e.allowed(h.Addr.Addr()) {
-		if d, ok := e.mon.observe(h.Addr.Addr()); ok {
-			rtt = d
-		}
+		leg = e.mon.observe(h.Addr.Addr())
 	}
 	h.Type = proto.TProbeReply
-	var p [4]byte
-	return proto.Append(dst, h, proto.AppendServerRTT(p[:0], rtt))
+	var p [proto.ServerLegLen]byte
+	return proto.Append(dst, h, proto.AppendServerLeg(p[:0], leg))
 }
 
 func (e *Egress) data(h proto.Header, payload []byte, src netip.AddrPort) {

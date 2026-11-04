@@ -98,6 +98,11 @@ export interface Snapshot {
   after: Stats;
   server_leg_ms?: number;
   server_leg_known?: boolean;
+  // That leg's loss and jitter; meaningless unless their *_known is true.
+  server_leg_loss_pct?: number;
+  server_leg_loss_known?: boolean;
+  server_leg_jitter_ms?: number;
+  server_leg_jitter_known?: boolean;
   servers?: GameServer[] | null;
   paths: PathStatus[] | null;
   copies: number;
