@@ -44,6 +44,9 @@ if command -v npm >/dev/null; then
     printf '%s\n' "$after" | grep -vxF -e "$before" || true
     exit 1
   fi
+  # Release builds (-tags release) embed this build and refuse the
+  # placeholder; check that they compile.
+  go vet -tags release ./...
 fi
 
 echo

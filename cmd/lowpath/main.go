@@ -137,6 +137,11 @@ func run(parent context.Context, o options, plat *platform.Platform, desk platfo
 		return err
 	}
 	defer closeLog()
+	if _, err := ui.FS(); err != nil {
+		// A release build with only the placeholder page (ui.ErrNoBuild):
+		// refuse to start rather than show a window without the UI.
+		return err
+	}
 	// A copy running as root for the user (macOS's elevated restart) leaves
 	// the user's files the user's.
 	handBack(o.logs, o.data)

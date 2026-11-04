@@ -25,14 +25,22 @@
     there is none (a fresh clone), the placeholder page that says how to
     build it.
 
+.PARAMETER Release
+    Build release artifacts (anything handed to someone else): stop when
+    there is no UI build in ui\dist\app instead of embedding the placeholder
+    page, and build the programs with -tags release, which fail to compile
+    without it.
+
 .EXAMPLE
     .\build.ps1
     .\build.ps1 -SkipTests -SkipUI
+    .\build.ps1 -Release
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipTests,
-    [switch]$SkipUI
+    [switch]$SkipUI,
+    [switch]$Release
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,7 +87,13 @@ try {
             Invoke-Native 'npm run build' { npm run build }
         } finally { Pop-Location }
     }
-    if (-not (Test-Path $uiBuilt)) {
+    # A release build must carry the UI: -tags release makes ui fail to
+    # compile without ui\dist\app\index.html (ui\release.go).
+    $goTags = @()
+    if ($Release) {
+        if (-not (Test-Path $uiBuilt)) { throw 'No UI build in ui\dist\app, and a release build must not embed the placeholder page: run npm run build in ui, or build without -SkipUI.' }
+        $goTags = @('-tags', 'release')
+    } elseif (-not (Test-Path $uiBuilt)) {
         Write-Warning 'No UI build in ui\dist\app: the app will show a page that says how to build it. Run without -SkipUI.'
     }
 
@@ -112,16 +126,16 @@ try {
     New-Item -ItemType Directory -Force $dist | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $root 'bin') | Out-Null
     Invoke-WithEnv @{ GOOS = 'windows'; GOARCH = 'amd64' } {
-        Invoke-Native 'dist\Lowpath.exe' { go build -trimpath -ldflags '-H windowsgui -s -w' -o (Join-Path $dist 'Lowpath.exe') ./cmd/lowpath }
-        Invoke-Native 'dist\lowpathsvc.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lowpathsvc.exe') ./cmd/lowpathsvc }
+        Invoke-Native 'dist\Lowpath.exe' { go build @goTags -trimpath -ldflags '-H windowsgui -s -w' -o (Join-Path $dist 'Lowpath.exe') ./cmd/lowpath }
+        Invoke-Native 'dist\lowpathsvc.exe' { go build @goTags -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lowpathsvc.exe') ./cmd/lowpathsvc }
         Invoke-Native 'bin\lowpathsvc.exe (for the end-to-end test)' { go build -o (Join-Path $root 'bin\lowpathsvc.exe') ./cmd/lowpathsvc }
-        Invoke-Native 'dist\lpcheck.exe' { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lpcheck.exe') ./cmd/lpcheck }
+        Invoke-Native 'dist\lpcheck.exe' { go build @goTags -trimpath -ldflags '-s -w' -o (Join-Path $dist 'lpcheck.exe') ./cmd/lpcheck }
         Invoke-Native 'bin\lowpath.exe (console, for debugging)' { go build -o (Join-Path $root 'bin\lowpath.exe') ./cmd/lowpath }
     }
     foreach ($arch in @('amd64', 'arm64')) {
         Invoke-WithEnv @{ GOOS = 'linux'; GOARCH = $arch; CGO_ENABLED = '0' } {
-            Invoke-Native "dist\relay-linux-$arch" { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist "relay-linux-$arch") ./cmd/relay }
-            Invoke-Native "dist\lowpath-linux-$arch" { go build -trimpath -ldflags '-s -w' -o (Join-Path $dist "lowpath-linux-$arch") ./cmd/lowpath }
+            Invoke-Native "dist\relay-linux-$arch" { go build @goTags -trimpath -ldflags '-s -w' -o (Join-Path $dist "relay-linux-$arch") ./cmd/relay }
+            Invoke-Native "dist\lowpath-linux-$arch" { go build @goTags -trimpath -ldflags '-s -w' -o (Join-Path $dist "lowpath-linux-$arch") ./cmd/lowpath }
         }
     }
     # macOS: one universal Lowpath.app for Apple silicon and Intel Macs.
@@ -129,7 +143,7 @@ try {
     foreach ($arch in @('arm64', 'amd64')) {
         $out = Join-Path $root "bin\lowpath-darwin-$arch"
         Invoke-WithEnv @{ GOOS = 'darwin'; GOARCH = $arch; CGO_ENABLED = '0' } {
-            Invoke-Native "bin\lowpath-darwin-$arch" { go build -trimpath -ldflags '-s -w' -o $out ./cmd/lowpath }
+            Invoke-Native "bin\lowpath-darwin-$arch" { go build @goTags -trimpath -ldflags '-s -w' -o $out ./cmd/lowpath }
         }
         $macBins += $out
     }
