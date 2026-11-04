@@ -380,7 +380,10 @@ go test ./...
   bytes in the 64-bit SDK layout, short and hostile replies, the unit
   rules for rates, frequencies and widths, channels on 2.4, 5 and 6 GHz,
   the BSS Load element, the channel survey (same channel, 2.4 GHz overlap,
-  an AP that sends no load or isn't in the scan), `/proc/net/wireless`
+  an AP that sends no load or isn't in the scan), channel spans from HT,
+  VHT, HE and EHT Operation elements (20 to 320 MHz, malformed and random
+  elements), the standard 5/6 GHz channel blocks, and networks on a wide
+  link's secondary channels counted as overlapping, `/proc/net/wireless`
   fixtures, a busy channel and a weak signal in the verdict and the
   report's Wi-Fi line; on Windows the real API without admin rights (a
   disconnected or missing adapter gives a reason, and nothing is changed);

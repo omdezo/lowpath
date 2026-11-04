@@ -142,6 +142,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ### Changed
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
+- Wi-Fi *Check channel* on a wide link: networks on an 80 or 160 MHz
+  link's secondary channels, and wide networks reaching over the link's
+  channel, now count as overlapping on 5 and 6 GHz too, not only nearby
+  channels on 2.4 GHz. Each network's width comes from its HT, VHT, HE and
+  EHT Operation elements, and the link's from its reported width or its
+  access point's elements; "on this channel" still means the same primary
+  channel (#157).
 
 ### Fixed
 - A boost no longer falls back to the direct route for a second right after

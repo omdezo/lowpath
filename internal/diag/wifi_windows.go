@@ -360,13 +360,18 @@ func (w *winWLAN) Survey(index int) (WiFiSurvey, error) {
 			freq = e.FreqMHz
 		}
 	}
-	if freq == 0 {
-		var l WiFiLink
-		if rt, err := c.queryRaw(&g, opRealtimeQuality); err == nil && decodeRealtimeQuality(rt, &l) == nil && l.FreqMHz != nil {
-			freq = *l.FreqMHz
-		}
+	// The link's width tells which secondary channels it uses, so networks
+	// on those count too. The realtime query is location-free and missing
+	// before Windows 11 24H2; then the width stays unknown and the access
+	// point's own operation elements give it.
+	var l WiFiLink
+	if rt, err := c.queryRaw(&g, opRealtimeQuality); err != nil || decodeRealtimeQuality(rt, &l) != nil {
+		l = WiFiLink{}
 	}
-	return NewWiFiSurvey(time.Now(), own, freq, entries), nil
+	if freq == 0 && l.FreqMHz != nil {
+		freq = *l.FreqMHz
+	}
+	return NewWiFiSurvey(time.Now(), own, freq, l.widthAt(freq), entries), nil
 }
 
 func (w *winWLAN) Tune(index int) (WiFiTuning, error) {

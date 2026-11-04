@@ -1148,7 +1148,14 @@ Lowpath.exe (user, unelevated)                 LowpathSvc = lowpathsvc.exe (Loca
   when the user presses *Check channel*: it reads the connected BSSID and
   the scan cache (no `WlanScan`), parses the AP's BSS Load element (ID 11:
   station count, channel utilization /255, admission capacity) and counts
-  the other networks on its channel (and the overlapping ones on 2.4 GHz).
+  the other networks on its primary channel and the ones whose channel
+  overlaps the link's. Each network's channel span comes from its HT, VHT,
+  HE (6 GHz Operation Information) and EHT Operation elements
+  (`wifi_ies.go`; malformed ones fall back to the primary 20 MHz), the
+  link's from its width in the realtime query placed in the standard
+  5/6 GHz channel blocks, or from its access point's own elements
+  (`wifi_span.go`), so an 80 or 160 MHz link counts the networks on its
+  secondary channels as overlapping.
   `Tune` sets `background_scan_enabled=FALSE` and
   `media_streaming_mode=TRUE` on its own handle; the Wi-Fi service keeps a
   setting while any client asks for it and resets both on a disconnect
