@@ -179,6 +179,11 @@ type analysisResult struct {
 	// measurement, so its pings are higher than the routes' own; it
 	// doesn't seed a boost's route ranking.
 	Loaded bool `json:"loaded,omitempty"`
+	// Link and Interface are the connection it was measured on (diag's
+	// LinkWiFi, ... and the adapter; "" unknown): the verdict doesn't
+	// compare routes measured on Wi-Fi once a cable is in use.
+	Link      string `json:"link,omitempty"`
+	Interface string `json:"interface,omitempty"`
 }
 
 type mappingResult struct {
@@ -640,6 +645,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	var res engine.Analysis
 	var err error
+	link := s.currentLink()
 	loaded, ok := s.measureUnloaded(r.Context(), func() {
 		res, err = engine.Analyze(r.Context(), paths, opts, 2500*time.Millisecond)
 	})
@@ -651,7 +657,8 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		s.status = "idle"
 	}
 	if err == nil {
-		a := analysisResult{At: time.Now(), Direct: res.Direct, DirectKnown: res.DirectKnown, Paths: res.Paths, Loaded: loaded}
+		a := analysisResult{At: time.Now(), Direct: res.Direct, DirectKnown: res.DirectKnown, Paths: res.Paths, Loaded: loaded,
+			Link: link.Kind, Interface: link.Name}
 		if opts.Server.IsValid() {
 			a.Server = opts.Server.String()
 		}

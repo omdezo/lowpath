@@ -2,6 +2,7 @@ package diag
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -451,5 +452,54 @@ func TestWrap(t *testing.T) {
 	wrap(&b, "", "")
 	if b.String() != "\n" {
 		t.Errorf("empty = %q", b.String())
+	}
+}
+
+// A route analysis is tied to the connection it ran on, like the
+// bufferbloat test and the trace: measured on Wi-Fi, it says nothing about
+// the cable in use now, and the checks that would use it say why (#147).
+func TestVerdictAnalysisOnAnotherLink(t *testing.T) {
+	ispPath := func(link *Route) *PathEvidence {
+		p := boostPath(PathStats{RTTMS: 40, LossPct: 6, JitterMS: 4, Samples: 50}, PathStats{RTTMS: 12, JitterMS: 1, Samples: 50}, ptr(25.0))
+		p.Source, p.At = PathAnalysis, vNow.Add(-10*time.Minute)
+		if link != nil {
+			p.Link, p.Interface = link.Kind, link.Name
+		}
+		return p
+	}
+	// On the connection in use, or one the analysis didn't record: used.
+	for _, link := range []*Route{cableLink(), nil} {
+		d := diagnose(Evidence{Link: cableLink(), Analysis: ispPath(link)})
+		wantVerdict(t, d, VerdictISP, ConfidenceLow)
+	}
+	// On Wi-Fi, with a cable in use now: not used, and said so.
+	d := diagnose(Evidence{Link: cableLink(), Analysis: ispPath(wifiLink())})
+	if d.Verdict.ID == VerdictISP {
+		t.Fatalf("an analysis on Wi-Fi gave the cable's verdict: %+v", d.Verdict)
+	}
+	const why = "The last route analysis ran on Wi-Fi (WLAN), not on the connection in use now."
+	if c := check(t, d, ruleOptimal); c.Status != CheckUnknown || !strings.HasPrefix(c.Summary, why) {
+		t.Errorf("optimal: %s %q", c.Status, c.Summary)
+	}
+	if c := check(t, d, ruleISP); c.Status != CheckUnknown || !slices.Contains(c.Facts, why) {
+		t.Errorf("isp: %s %q", c.Status, c.Facts)
+	}
+	if c := check(t, d, ruleServer); c.Status != CheckUnknown || !strings.HasPrefix(c.Summary, why) {
+		t.Errorf("server: %s %q", c.Status, c.Summary)
+	}
+	// What to run next is still to measure routes, on this connection.
+	if !slices.ContainsFunc(d.Next, func(s Suggestion) bool { return s.ID == NextMeasure }) {
+		t.Errorf("next %+v lacks measuring routes", d.Next)
+	}
+	// A live boost measures the connection in use, whatever it records.
+	b := ispPath(wifiLink())
+	b.Source = PathBoost
+	wantVerdict(t, diagnose(Evidence{Link: cableLink(), Boost: b}), VerdictISP, ConfidenceMedium)
+	// Too old: also said.
+	old := ispPath(cableLink())
+	old.At = vNow.Add(-30 * time.Hour)
+	d = diagnose(Evidence{Link: cableLink(), Analysis: old})
+	if c := check(t, d, ruleOptimal); !strings.HasPrefix(c.Summary, "The last route analysis is ") {
+		t.Errorf("old analysis: %q", c.Summary)
 	}
 }

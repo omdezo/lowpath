@@ -441,13 +441,21 @@ export interface VerdictCheck {
   facts?: string[] | null;
 }
 
+// A measurement that would make the verdict surer (diag.Suggestion).
+export type NextStepId = "bloat" | "trace" | "measure";
+export interface NextStep {
+  id: NextStepId;
+  text: string;
+}
+
 export interface Diagnosis {
   at: string;
   verdict: Verdict;
   checks: VerdictCheck[] | null;
   link: string;
   interface: string;
-  next?: { id: "bloat" | "trace" | "measure"; text: string }[] | null;
+  // What to run for a surer verdict: one step per check left unmeasured.
+  next?: NextStep[] | null;
   // The route from this PC to the game server, part by part.
   segments?: RouteSegment[] | null;
 }

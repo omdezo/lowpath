@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Download, Stethoscope } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Download, Stethoscope } from "lucide-react";
 import { api } from "../api";
-import type { CheckStatus, Confidence, Diagnosis, RouteSegment, VerdictCheck, VerdictId } from "../types";
+import type { CheckStatus, Confidence, Diagnosis, NextStep, RouteSegment, VerdictCheck, VerdictId } from "../types";
+import { goToCard, isCardStep } from "./diagCards";
 import "../diag.css";
 
 // The verdict: one plain answer to "why am I lagging?" built from the tests
@@ -41,8 +42,9 @@ function checkLabel(c: VerdictCheck): string {
 const CONFIDENCE: Record<Confidence, string> = { high: "High confidence", medium: "Medium confidence", low: "Low confidence" };
 
 // renderSegments draws the route part by part under the verdict (the
-// Diagnostics tab passes its segment bar).
-export function Verdict({ renderSegments }: { renderSegments?: (s: RouteSegment[]) => ReactNode } = {}) {
+// Diagnostics tab passes its segment bar). withSteps: the tests the next
+// steps name are on the same page, so each step can lead to its card.
+export function Verdict({ renderSegments, withSteps }: { renderSegments?: (s: RouteSegment[]) => ReactNode; withSteps?: boolean } = {}) {
   const [d, setD] = useState<Diagnosis | null>(null);
   const [failed, setFailed] = useState(false);
   // The measurements under each check are long; they open on request.
@@ -130,6 +132,8 @@ export function Verdict({ renderSegments }: { renderSegments?: (s: RouteSegment[
             ))}
           </ul>
 
+          {d.next && d.next.length > 0 && <NextSteps steps={d.next} linked={!!withSteps} />}
+
           {(d.checks ?? []).some((c) => c.rule !== winner && c.facts && c.facts.length > 0) && (
             <button className="btn btn-ghost verdict-more" onClick={() => setDetails(!details)} aria-expanded={details}>
               {details ? <ChevronUp size={14} /> : <ChevronDown size={14} />} {details ? "Hide the measurements" : "Show the measurements behind each check"}
@@ -140,6 +144,36 @@ export function Verdict({ renderSegments }: { renderSegments?: (s: RouteSegment[
     </section>
   );
 }
+
+// NextSteps lists what would make the verdict surer, one step per check
+// left unmeasured. A step whose test is on this page leads to its card;
+// measuring routes happens on a game's page, so that step is words only.
+function NextSteps({ steps, linked }: { steps: NextStep[]; linked: boolean }) {
+  return (
+    <div className="verdict-next">
+      <div className="verdict-next-t" id="verdict-next-t">
+        For a surer answer
+      </div>
+      <ul aria-labelledby="verdict-next-t">
+        {steps.map((s) => {
+          const card = linked && isCardStep(s.id) ? s.id : null;
+          return (
+            <li key={s.id} data-step={s.id}>
+              <span className="txt">{s.text}</span>
+              {card && (
+                <button className="btn btn-xs" onClick={() => goToCard(card)}>
+                  {STEP_BUTTON[card]} <ArrowRight size={13} aria-hidden />
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+const STEP_BUTTON = { bloat: "Bufferbloat test", trace: "Route trace" } as const;
 
 function CheckRow({ c, showFacts }: { c: VerdictCheck; showFacts: boolean }) {
   const tone = checkTone(c);

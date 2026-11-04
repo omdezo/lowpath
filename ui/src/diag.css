@@ -910,3 +910,47 @@
   color: var(--bad);
   font-weight: 600;
 }
+
+/* Diagnostics: the verdict's next steps, under its checks. */
+.verdict-next {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+
+.verdict-next-t {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.verdict-next ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.verdict-next li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.verdict-next li .txt {
+  flex: 1 1 260px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.verdict-next li .btn {
+  flex: none;
+  gap: 4px;
+}

@@ -353,6 +353,11 @@ func (ispRule) check(v *view) (Check, *Verdict) {
 			traceClean = true
 		}
 	}
+	if v.path == nil && v.pathWhy != "" {
+		// Say why the route comparison, which can also find an ISP problem,
+		// wasn't used.
+		facts = append(facts, v.pathWhy)
+	}
 	c.Facts = facts
 	switch {
 	case traceClean:
@@ -480,7 +485,7 @@ func (serverRule) check(v *view) (Check, *Verdict) {
 		c.Summary = "The game server doesn't answer ping from your PC, so its end can't be measured directly."
 	default:
 		c.Status = CheckUnknown
-		c.Summary = "Measure routes on a game's page, or boost a game."
+		c.Summary = v.noPath("Measure routes on a game's page, or boost a game.")
 	}
 	if p != nil && p.ServerMS != nil {
 		facts = append(facts, fmt.Sprintf("The relay reaches the game server in %.0f ms (relays don't report that leg's loss yet).", *p.ServerMS))
@@ -497,6 +502,10 @@ func (optimalRule) check(v *view) (Check, *Verdict) {
 	c := Check{Rule: ruleOptimal, Name: "Relay or direct"}
 	p := v.path
 	switch {
+	case p == nil && v.pathWhy != "":
+		c.Status = CheckUnknown
+		c.Summary = v.noPath("Measure routes on a game's page again, or boost a game.")
+		return c, nil
 	case p == nil || p.Relay == nil:
 		c.Status = CheckUnknown
 		c.Summary = "No comparison of the direct route with a relay yet: measure routes on a game's page, or boost a game."

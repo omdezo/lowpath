@@ -3,6 +3,7 @@ import { Gauge, Loader2, Play, Square } from "lucide-react";
 import { api, describeError } from "../api";
 import type { BloatPhase, BloatResult, BloatStatus, Grade, LatencyStats } from "../types";
 import { fmtMbps, fmtMs } from "../util";
+import { DIAG_CARD } from "./diagCards";
 import "../diag.css";
 
 // The active bufferbloat test: 20 s of idle / download / upload / recovery
@@ -103,7 +104,7 @@ export function BloatTest({ onError }: Props) {
   const r = st?.result ?? null;
 
   return (
-    <section className="bloat" aria-label="Bufferbloat test">
+    <section className="bloat" aria-label="Bufferbloat test" id={DIAG_CARD.bloat}>
       <div className="bloat-head">
         <span className="bloat-ico">
           <Gauge size={18} />
@@ -120,7 +121,7 @@ export function BloatTest({ onError }: Props) {
             <Square size={14} /> Stop
           </button>
         ) : (
-          <button className="btn btn-primary" onClick={start} disabled={busy || !st}>
+          <button className="btn btn-primary" onClick={start} disabled={busy || !st} data-primary>
             {busy ? <Loader2 size={14} className="spin" /> : <Play size={14} />} {r ? "Run again" : "Run test"}
           </button>
         )}
