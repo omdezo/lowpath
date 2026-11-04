@@ -279,11 +279,52 @@ func TestProbeReplyCarriesServerRTT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p) != 4 {
-		t.Fatalf("payload %d bytes, want a 4-byte RTT block", len(p))
+	if len(p) != proto.ServerLegLen {
+		t.Fatalf("payload %d bytes, want a %d-byte server leg block", len(p), proto.ServerLegLen)
 	}
-	if _, ok := proto.ParseServerRTT(p); ok {
-		t.Fatal("probe without Addr must report unknown")
+	if l := proto.ParseServerLeg(p); l != (proto.ServerLeg{}) {
+		t.Fatalf("probe without Addr must report unknown, got %+v", l)
+	}
+}
+
+// The relay's pings to the server lose every fourth reply: once enough have
+// an outcome, probe replies carry that loss and the leg's jitter next to
+// its RTT.
+func TestProbeReplyCarriesServerLoss(t *testing.T) {
+	var calls atomic.Int64
+	ping := func(netip.Addr, time.Duration) (time.Duration, error) {
+		if calls.Add(1)%4 == 0 {
+			return 0, errors.New("no reply")
+		}
+		return 30 * time.Millisecond, nil
+	}
+	e := startEgress(t, &Options{Ping: ping, PingInterval: time.Millisecond})
+	c := dialEgress(t, e)
+	server := netip.MustParseAddrPort("203.0.113.8:7777")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for seq := uint32(1); ; seq++ {
+		send(t, c, proto.Header{Type: proto.TProbe, Flow: 6, Seq: seq, Addr: server}, nil)
+		_, p, err := recv(c, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := proto.ParseServerLeg(p)
+		if l.HasLoss && calls.Load() >= legWindowSize+4 {
+			// A full window of 60 pings is 15 lost (25%); while it fills,
+			// up to one more or fewer lost than a quarter.
+			if !l.HasRTT || l.RTT != 30*time.Millisecond || l.LossPct < 20 || l.LossPct > 30 {
+				t.Fatalf("leg %+v, want 30 ms and about 25%% loss", l)
+			}
+			if !l.HasJitter || l.Jitter != 0 {
+				t.Fatalf("leg %+v, want a known 0 jitter for steady replies", l)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server loss never reported: %+v after %d pings", l, calls.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

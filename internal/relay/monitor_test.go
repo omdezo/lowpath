@@ -7,9 +7,69 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lowpath/internal/proto"
 )
 
 var errNoReply = errors.New("no reply")
+
+func observeRTT(m *monitor, a netip.Addr) (time.Duration, bool) {
+	l := m.observe(a)
+	return l.RTT, l.HasRTT
+}
+
+// The monitor reports the leg's loss and jitter from its latest pings, and
+// only alongside a known RTT.
+func TestMonitorReportsLossAndJitter(t *testing.T) {
+	m := newMonitor(nil, time.Hour)
+	a := netip.MustParseAddr("198.51.100.30")
+	s := &server{lastUsed: time.Now()}
+	m.servers[a] = s
+
+	// Every fifth ping lost (20%), replies alternating 10 and 14 ms.
+	replies := 0
+	ping := func(i int) {
+		t.Helper()
+		var err error
+		rtt := 10 * time.Millisecond
+		if i%5 == 4 {
+			err, rtt = errNoReply, 0
+		} else {
+			if replies%2 == 1 {
+				rtt = 14 * time.Millisecond
+			}
+			replies++
+		}
+		if !m.record(a, s, rtt, err) {
+			t.Fatal("server forgotten while in use")
+		}
+	}
+	for i := range legMinPings - 1 {
+		ping(i)
+	}
+	if l := m.observe(a); !l.HasRTT || l.HasLoss || l.HasJitter {
+		t.Fatalf("after %d pings: %+v, want the RTT alone", legMinPings-1, l)
+	}
+	for i := legMinPings - 1; i < 200; i++ {
+		ping(i)
+	}
+	l := m.observe(a)
+	if !l.HasLoss || l.LossPct != 20 {
+		t.Errorf("loss %v/%v, want 20%%", l.LossPct, l.HasLoss)
+	}
+	if !l.HasJitter || l.Jitter < 3900*time.Microsecond || l.Jitter > 4*time.Millisecond {
+		t.Errorf("jitter %v/%v, want close to the 4 ms steps", l.Jitter, l.HasJitter)
+	}
+
+	// Three misses in a row: the RTT is stale, and the misses aren't passed
+	// on as a loss figure either.
+	for range maxMisses {
+		m.record(a, s, 0, errNoReply)
+	}
+	if l := m.observe(a); l != (proto.ServerLeg{}) {
+		t.Fatalf("after %d misses in a row: %+v, want nothing known", maxMisses, l)
+	}
+}
 
 func TestMonitorSmoothingAndMisses(t *testing.T) {
 	m := newMonitor(nil, time.Hour) // record is driven by hand; no pinger runs
@@ -22,7 +82,7 @@ func TestMonitorSmoothingAndMisses(t *testing.T) {
 		if !m.record(a, s, rtt, err) {
 			t.Fatal("server forgotten while in use")
 		}
-		got, ok := m.observe(a)
+		got, ok := observeRTT(m, a)
 		if ok != known || (known && got != want) {
 			t.Fatalf("after (%v, %v): got %v/%v, want %v/%v", rtt, err, got, ok, want, known)
 		}
@@ -70,7 +130,7 @@ func TestMonitorPingsRightAwayThenPeriodically(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if d, ok := m.observe(a); !ok || d != 5*time.Millisecond {
+	if d, ok := observeRTT(m, a); !ok || d != 5*time.Millisecond {
 		t.Fatalf("observe = %v, %v", d, ok)
 	}
 	if m.count() != 1 {
@@ -95,11 +155,11 @@ func TestMonitorLimit(t *testing.T) {
 	if n := m.count(); n != maxServers {
 		t.Fatalf("%d servers monitored, want the cap %d", n, maxServers)
 	}
-	if _, ok := m.observe(netip.MustParseAddr("192.0.2.200")); ok {
+	if _, ok := observeRTT(m, netip.MustParseAddr("192.0.2.200")); ok {
 		t.Fatal("server over the cap reported a RTT")
 	}
 	m.stop()
-	if _, ok := m.observe(netip.MustParseAddr("192.0.2.201")); ok || m.count() != maxServers {
+	if _, ok := observeRTT(m, netip.MustParseAddr("192.0.2.201")); ok || m.count() != maxServers {
 		t.Fatal("stopped monitor accepted a new server")
 	}
 }

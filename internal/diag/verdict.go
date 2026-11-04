@@ -190,7 +190,8 @@ type PathEvidence struct {
 	Relay *PathStats `json:"relay"`
 	// ServerMS is the relay's own leg to the game server (nil: the relay
 	// hasn't measured it). ServerLossPct and ServerJitterMS are that leg's
-	// loss and jitter, nil while relays don't report them.
+	// loss and jitter over the relay's latest pings, nil when it doesn't
+	// report them (an older relay, or too few pings yet).
 	ServerMS       *float64 `json:"server_ms"`
 	ServerLossPct  *float64 `json:"server_loss_pct"`
 	ServerJitterMS *float64 `json:"server_jitter_ms"`

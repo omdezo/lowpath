@@ -360,6 +360,12 @@ func TestTokenAndServerLegOnTheWire(t *testing.T) {
 	if !snap.ServerLegKnown || snap.ServerLeg < 24 || snap.ServerLeg > 26 {
 		t.Errorf("server leg %.1fms known=%v, want 25ms", snap.ServerLeg, snap.ServerLegKnown)
 	}
+	// fakeRelay answers like a relay that predates the leg's loss and
+	// jitter (an RTT block alone): those are unknown, not a clean 0.
+	if snap.ServerLegLossKnown || snap.ServerLegJitterKnown {
+		t.Errorf("loss %v/%v jitter %v/%v from a relay that doesn't report them",
+			snap.ServerLegLoss, snap.ServerLegLossKnown, snap.ServerLegJitter, snap.ServerLegJitterKnown)
+	}
 	if snap.After.RTT < 25 || snap.After.Server < 24 || snap.After.Server > 26 {
 		t.Errorf("after %+v: the relay's server leg must be part of the RTT", snap.After)
 	}

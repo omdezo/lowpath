@@ -316,7 +316,7 @@ func TestVerdictISPFromBoost(t *testing.T) {
 func TestVerdictGameServer(t *testing.T) {
 	relay := PathStats{RTTMS: 10, LossPct: 0.2, JitterMS: 1, Samples: 60}
 	p := boostPath(PathStats{RTTMS: 35, LossPct: 0.5, JitterMS: 2, Samples: 60}, relay, ptr(22.0))
-	p.ServerLossPct, p.ServerJitterMS = ptr(4.0), ptr(3.0)
+	p.ServerLossPct, p.ServerJitterMS = ptr(4.0), ptr(12.0)
 	// Direct is clean too, but the server leg's own loss is what counts here.
 	p.Direct = nil
 	d := diagnose(Evidence{Link: cableLink(), Boost: p})
@@ -324,6 +324,10 @@ func TestVerdictGameServer(t *testing.T) {
 	if d.Verdict.LowpathHelps {
 		t.Error("a relay can't fix the server")
 	}
+	// Loss alone, seen only by the relay's pings, may be a ping limit.
+	p.ServerJitterMS = ptr(3.0)
+	d = diagnose(Evidence{Link: cableLink(), Boost: p})
+	wantVerdict(t, d, VerdictServer, ConfidenceMedium)
 
 	// Both routes struggle to get answers from the server: a hint.
 	p = boostPath(PathStats{RTTMS: 35, LossPct: 8, JitterMS: 6, Samples: 60}, relay, nil)

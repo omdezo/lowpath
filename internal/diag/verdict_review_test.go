@@ -113,6 +113,72 @@ func TestVerdictLossyServerLegIsNotTheISP(t *testing.T) {
 	if c := check(t, d, ruleISP); c.Status == CheckFound {
 		t.Errorf("isp = %s %q", c.Status, c.Summary)
 	}
+	// The PC and the relay both lose pings to the server: no ping-limit
+	// caveat needed.
+	if f := strings.Join(d.Verdict.Facts, " "); strings.Contains(f, "ping limit") {
+		t.Errorf("facts %q", f)
+	}
+}
+
+// Only the relay's pings to the server are lost, and the leg is steady
+// otherwise: servers often limit ping, so the verdict says it can't tell
+// and is less sure, whether the PC's pings get answers or can't be sent.
+// Jitter on the leg is not something a ping limit explains.
+func TestVerdictServerLegLossMayBePingLimit(t *testing.T) {
+	clean := PathStats{RTTMS: 12, LossPct: 0.2, JitterMS: 1, Samples: 50}
+	for name, direct := range map[string]*PathStats{
+		"direct clean":    {RTTMS: 30, LossPct: 0, JitterMS: 2, Samples: 50},
+		"direct unknown":  nil,
+		"direct too few":  {RTTMS: 30, LossPct: 10, JitterMS: 2, Samples: 5},
+		"direct marginal": {RTTMS: 30, LossPct: 1.5, JitterMS: 2, Samples: 50},
+	} {
+		p := boostPath(PathStats{}, clean, ptr(25.0))
+		p.Direct = direct
+		p.ServerLossPct, p.ServerJitterMS = ptr(6.0), ptr(2.0)
+		d := diagnose(Evidence{Link: cableLink(), Boost: p})
+		wantVerdict(t, d, VerdictServer, ConfidenceMedium)
+		if f := strings.Join(d.Verdict.Facts, " "); !strings.Contains(f, "limit ping") || !strings.Contains(f, "can't tell") {
+			t.Errorf("%s: facts %q", name, f)
+		}
+		// From a route analysis: one step lower still.
+		p.Source = PathAnalysis
+		wantVerdict(t, diagnose(Evidence{Link: cableLink(), Analysis: p}), VerdictServer, ConfidenceLow)
+	}
+	// A jittery leg is the server's end at full confidence.
+	p := boostPath(PathStats{RTTMS: 30, Samples: 50}, clean, ptr(25.0))
+	p.ServerLossPct, p.ServerJitterMS = ptr(6.0), ptr(15.0)
+	d := diagnose(Evidence{Link: cableLink(), Boost: p})
+	wantVerdict(t, d, VerdictServer, ConfidenceHigh)
+	if f := strings.Join(d.Verdict.Facts, " "); strings.Contains(f, "limit ping") {
+		t.Errorf("jitter: facts %q", f)
+	}
+}
+
+// The server check states the relay leg's loss when the relay reports it,
+// and says so when it doesn't.
+func TestServerCheckLegFact(t *testing.T) {
+	relay := PathStats{RTTMS: 12, LossPct: 0.2, JitterMS: 1, Samples: 50}
+	p := boostPath(PathStats{RTTMS: 30, Samples: 50}, relay, ptr(25.0))
+	c := check(t, diagnose(Evidence{Link: cableLink(), Boost: p}), ruleServer)
+	if f := strings.Join(c.Facts, " "); !strings.Contains(f, "25 ms (it doesn't report that leg's loss") {
+		t.Errorf("unreported: %q", f)
+	}
+	p.ServerLossPct, p.ServerJitterMS = ptr(0.0), ptr(1.5)
+	c = check(t, diagnose(Evidence{Link: cableLink(), Boost: p}), ruleServer)
+	if f := strings.Join(c.Facts, " "); !strings.Contains(f, "25 ms, losing 0.0% of its pings with 1.5 ms jitter") {
+		t.Errorf("reported: %q", f)
+	}
+	// The shared report carries them too, when reported.
+	ev := Evidence{At: vNow, Link: cableLink(), Boost: p}
+	txt := strings.Join(strings.Fields(DiagnosisReport{Diagnosis: diagnose(ev), Evidence: ev}.Text()), " ")
+	if !strings.Contains(txt, "relay to server 25 ms, 0.0% loss, 1.5 ms jitter.") {
+		t.Errorf("report: %s", txt)
+	}
+	p.ServerLossPct, p.ServerJitterMS = nil, nil
+	txt = strings.Join(strings.Fields(DiagnosisReport{Diagnosis: diagnose(ev), Evidence: ev}.Text()), " ")
+	if !strings.Contains(txt, "relay to server 25 ms.") {
+		t.Errorf("report without leg loss: %s", txt)
+	}
 }
 
 // The relay reporting no time to the server is all that is known: the
