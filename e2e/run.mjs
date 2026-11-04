@@ -516,6 +516,24 @@ async function main() {
       await popList.waitFor({ timeout: 5000 }).catch(() => {});
       const uiRows = await popList.getByRole("listitem").count().catch(() => 0);
       check("Game page shows the Valve server list", uiRows > 0, `${uiRows} rows shown`);
+      // "Trace the route" opens Diagnostics with that POP picked and the
+      // keyboard on Start trace; the trace itself isn't started.
+      const traceBtn = popList.getByRole("button", { name: /^Trace the route to / }).first();
+      if (await traceBtn.count().catch(() => 0)) {
+        const to = (await traceBtn.getAttribute("aria-label")) ?? "";
+        await traceBtn.click();
+        await page.getByRole("tab", { name: "Diagnostics", selected: true }).waitFor({ timeout: 5000 }).catch(() => {});
+        await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Start trace", null, { timeout: 5000 }).catch(() => {});
+        const picked = await page.getByLabel("Trace target").inputValue().catch(() => "");
+        const focused = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+        const traceSt = (await api(page, "GET", "/diag/trace")).body;
+        check(
+          "Trace the route opens Diagnostics with that Valve POP picked, without starting",
+          picked.startsWith("pop:cs2:") && focused === "Start trace" && !traceSt?.running,
+          `${to}: target ${picked || "none"}, focus "${focused}"`,
+        );
+        await closeSettings(page);
+      }
     } else {
       const card = page.getByRole("region", { name: "Valve servers" });
       const said = await card.getByRole("status").first().textContent({ timeout: 15000 }).catch(() => "");

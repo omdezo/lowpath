@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Loader2, RotateCw, Server } from "lucide-react";
+import { AlertTriangle, Loader2, Route, RotateCw, Server } from "lucide-react";
 import { api } from "../api";
-import type { POPView, ServerList } from "../types";
+import type { POPView, ServerList, TraceRequest } from "../types";
 import { ms, pct, since } from "../util";
 
 const SHOWN = 6; // rows before "Show all"
@@ -29,7 +29,9 @@ const GEO_NOTE: Record<string, string> = {
 // game plays through, with a direct ping from this PC to each, before the
 // game is even started. The list comes from Steam and is refreshed in the
 // background; nothing here waits on the network.
-export function ValveServers({ gameId, gameName, now }: { gameId: string; gameName: string; now: number }) {
+// onTrace: each POP with a relay address offers "Trace the route" there
+// (Settings → Diagnostics, with it picked).
+export function ValveServers({ gameId, gameName, now, onTrace }: { gameId: string; gameName: string; now: number; onTrace?: (r: TraceRequest) => void }) {
   const [list, setList] = useState<ServerList | null>(null);
   const [failed, setFailed] = useState(false);
   const [all, setAll] = useState(false);
@@ -130,14 +132,20 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
 
       {pops.length > 0 && (
         <>
-          <div className="pop-row pop-row-head section-label" aria-hidden="true">
+          <div className={`pop-row pop-row-head section-label${onTrace ? " has-trace" : ""}`} aria-hidden="true">
             <span>Location</span>
             <span style={{ textAlign: "right" }}>Ping</span>
             <span style={{ textAlign: "right" }}>Loss</span>
+            {onTrace && <span />}
           </div>
           <div className="pop-list" role="list" aria-label="Valve servers">
             {rows.map((p) => (
-              <POPRow key={p.id} pop={p} pinging={pinging} />
+              <POPRow
+                key={p.id}
+                pop={p}
+                pinging={pinging}
+                onTrace={onTrace ? () => onTrace({ targetId: `pop:${gameId}:${p.id}`, label: `Valve ${p.city || p.desc} (${p.id})` }) : undefined}
+              />
             ))}
           </div>
           {pops.length > SHOWN && (
@@ -160,14 +168,14 @@ export function ValveServers({ gameId, gameName, now }: { gameId: string; gameNa
   );
 }
 
-function POPRow({ pop, pinging }: { pop: POPView; pinging: boolean }) {
+function POPRow({ pop, pinging, onTrace }: { pop: POPView; pinging: boolean; onTrace?: () => void }) {
   const measured = pop.ping_ms != null;
   const pending = !measured && !pop.pinged_at;
   const loss = pop.loss_pct;
   const sub = [pop.id, pop.country].filter(Boolean).join(" · ");
   const geo = pop.geo_fix ? GEO_NOTE[pop.geo_fix] : undefined;
   return (
-    <div className="pop-row" role="listitem" title={geo}>
+    <div className={`pop-row${onTrace ? " has-trace" : ""}`} role="listitem" title={geo}>
       <span className="pop-name">
         <Server size={14} className="pop-icon" aria-hidden="true" />
         <span style={{ minWidth: 0 }}>
@@ -202,6 +210,15 @@ function POPRow({ pop, pinging }: { pop: POPView; pinging: boolean }) {
           <span className="faint">—</span>
         )}
       </span>
+      {onTrace &&
+        // A POP without a public relay has nothing to trace to.
+        (pop.relays > 0 ? (
+          <button className="btn btn-ghost icon-btn pop-trace" onClick={onTrace} aria-label={`Trace the route to ${pop.city || pop.id}`} title="Trace the route here (Settings → Diagnostics)">
+            <Route size={15} />
+          </button>
+        ) : (
+          <span />
+        ))}
     </div>
   );
 }

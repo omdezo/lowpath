@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe, Monitor, Router, Server, Waypoints } from "lucide-react";
 import { api } from "../api";
-import type { GatewaySecond, GatewayStats, GatewayView, RouteSegment, SegmentId } from "../types";
+import type { GatewaySecond, GatewayStats, GatewayView, RouteSegment, SegmentId, TraceRequest } from "../types";
 import { fmtMs, pct } from "../util";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
@@ -14,7 +14,15 @@ import "../diag.css";
 // Nothing here invents a number: a part nobody measured shows "—" and says
 // what would measure it.
 
-export function Diagnostics({ onError, wifiTuning }: { onError: (msg: string, title?: string) => void; wifiTuning: boolean }) {
+export function Diagnostics({
+  onError,
+  wifiTuning,
+  traceRequest,
+}: {
+  onError: (msg: string, title?: string) => void;
+  wifiTuning: boolean;
+  traceRequest?: TraceRequest | null;
+}) {
   return (
     <>
       <h3>Diagnostics</h3>
@@ -25,7 +33,7 @@ export function Diagnostics({ onError, wifiTuning }: { onError: (msg: string, ti
       <GatewayCard />
       <WiFiCard tuningEnabled={wifiTuning} />
       <BloatTest onError={onError} />
-      <RouteTrace onError={onError} />
+      <RouteTrace onError={onError} request={traceRequest} />
     </>
   );
 }

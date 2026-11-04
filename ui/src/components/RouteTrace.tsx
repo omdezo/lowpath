@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, Loader2, Play, Route, Square } from "lucide-react";
 import { api, describeError } from "../api";
-import type { TraceHop, TraceMode, TraceResult, TraceStatus, TraceTarget } from "../types";
+import type { TraceHop, TraceMode, TraceRequest, TraceResult, TraceStatus, TraceTarget } from "../types";
 import { fmtMs, pct } from "../util";
 
 // The route trace (MTR): every router between this PC and a target, with
@@ -14,9 +14,13 @@ const OTHER = "__other";
 
 interface Props {
   onError: (msg: string, title?: string) => void;
+  // request: a game page asked to trace one of its servers. The card picks
+  // it, brings itself into view and puts the keyboard on Start trace; it
+  // doesn't start the trace, which takes minutes.
+  request?: TraceRequest | null;
 }
 
-export function RouteTrace({ onError }: Props) {
+export function RouteTrace({ onError, request }: Props) {
   const [st, setSt] = useState<TraceStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [targetId, setTargetId] = useState("");
@@ -46,7 +50,29 @@ export function RouteTrace({ onError }: Props) {
     };
   }, [poll]);
 
-  const targets = useMemo(() => st?.targets ?? [], [st?.targets]);
+  // A requested POP isn't among the server's suggestions (a game lists
+  // dozens): it is offered as one more target, under the name the game page
+  // showed, and the server looks it up by id when the trace starts.
+  const targets = useMemo(() => {
+    const ts = st?.targets ?? [];
+    if (!request || ts.some((t) => t.id === request.targetId)) return ts;
+    return [...ts, { id: request.targetId, label: request.label, addr: "", udp: false, kind: "server" as const }];
+  }, [st?.targets, request]);
+  const section = useRef<HTMLElement>(null);
+  const startBtn = useRef<HTMLButtonElement>(null);
+  const applied = useRef<TraceRequest | null>(null);
+  useEffect(() => {
+    // Once per request, when the card knows its targets; a running trace
+    // isn't interrupted, and its result stays on screen.
+    if (!request || applied.current === request || !st || st.running) return;
+    applied.current = request;
+    setTargetId(request.targetId);
+    setMode("icmp");
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    section.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+    // After the render that enables the button for the new target.
+    window.setTimeout(() => startBtn.current?.focus({ preventScroll: true }), 0);
+  }, [request, st]);
   // Default to the first relay (the route games take with Lowpath), else
   // whatever comes first.
   const chosen: TraceTarget | undefined = targets.find((t) => t.id === targetId) ?? (targetId === OTHER ? undefined : targets[0]);
@@ -86,7 +112,7 @@ export function RouteTrace({ onError }: Props) {
   const canStart = !!st && (targetId === OTHER ? host.trim() !== "" : !!chosen);
 
   return (
-    <section className="bloat trace" aria-label="Route trace">
+    <section className="bloat trace" aria-label="Route trace" ref={section}>
       <div className="bloat-head">
         <span className="bloat-ico">
           <Route size={18} />
@@ -153,7 +179,7 @@ export function RouteTrace({ onError }: Props) {
               <Square size={14} /> Stop
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={start} disabled={busy || !canStart}>
+            <button className="btn btn-primary" onClick={start} disabled={busy || !canStart} ref={startBtn}>
               {busy ? <Loader2 size={14} className="spin" /> : <Play size={14} />} {st?.result ? "Trace again" : "Start trace"}
             </button>
           )}
@@ -176,6 +202,8 @@ export function RouteTrace({ onError }: Props) {
 }
 
 function targetLabel(t: TraceTarget): string {
+  // A requested POP has no address here: the server looks it up.
+  if (!t.addr) return t.label;
   const kind = t.kind === "relay" ? "relay" : t.kind === "server" ? "last server" : "";
   return `${t.label} · ${t.addr}${kind && !t.label.toLowerCase().includes(kind) ? ` (${kind})` : ""}`;
 }

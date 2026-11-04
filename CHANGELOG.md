@@ -9,6 +9,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Trace a game's server from its page: each Valve POP with a relay
+  address, and the current or last server, has a *Trace* button that opens
+  Settings → Diagnostics with that server picked and the keyboard on
+  *Start trace*; the trace still starts only when pressed. A POP is named
+  by game and id, and Lowpath looks its address up in the server list it
+  already holds (#140).
 - Relay lane statistics: the egress relay records which path delivered
   each copy of the game's packets and once a second sends the client a
   TStats report per flow: each path's loss, the loss two paths share and

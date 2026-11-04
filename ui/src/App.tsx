@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Radio, Search, Settings as Gear, WifiOff, Zap } from "lucide-react";
 import { api, ApiError, describeError, subscribeLive } from "./api";
-import type { Bootstrap, Game, Live, Platform, RelayView, Settings } from "./types";
+import type { Bootstrap, Game, Live, Platform, RelayView, Settings, TraceRequest } from "./types";
 import { Logo } from "./components/Bits";
 import { Mapping } from "./components/Mapping";
 import { Library } from "./components/Library";
@@ -37,6 +37,13 @@ export function App() {
   const [relays, setRelays] = useState<RelayView[]>([]);
   const [platform, setPlatform] = useState<Platform | null>(null);
   const [showSettings, setShowSettings] = useState<SettingsTab | null>(null);
+  // A game page asked to trace one of its servers: Diagnostics opens with
+  // it picked, until Settings closes.
+  const [traceRequest, setTraceRequest] = useState<TraceRequest | null>(null);
+  const traceServer = useCallback((r: TraceRequest) => {
+    setTraceRequest(r);
+    setShowSettings("diagnostics");
+  }, []);
   const [showAddGame, setShowAddGame] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   // The fail-open notice the user closed (by its time): hidden here at once,
@@ -360,6 +367,7 @@ export function App() {
               onError={onError}
               onOpenRelays={() => setShowSettings("relays")}
               onEnableLoopback={enableLoopback}
+              onTrace={traceServer}
             />
             {boot.demo && (
               <div style={{ maxWidth: 920, margin: "-22px auto 40px", padding: "0 28px" }}>
@@ -386,8 +394,12 @@ export function App() {
             setShowSettings(null);
             setPhase("mapping");
           }}
-          onClose={() => setShowSettings(null)}
+          onClose={() => {
+            setShowSettings(null);
+            setTraceRequest(null);
+          }}
           onError={onError}
+          traceRequest={traceRequest}
         />
       )}
       {showAddGame && <AddGameModal games={games} onAdded={onGameAdded} onClose={() => setShowAddGame(false)} />}

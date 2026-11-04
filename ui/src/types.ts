@@ -408,6 +408,15 @@ export interface TraceTarget {
   kind: "public" | "relay" | "server";
 }
 
+// TraceRequest asks the route trace card to pick a target that a game page
+// named ("Trace this server"): a trace target id ("server:<game>", or
+// "pop:<game>:<POP>" for a Valve POP, which the server looks up itself) and
+// how to show it until the server's own name comes back with the result.
+export interface TraceRequest {
+  targetId: string;
+  label: string;
+}
+
 export interface TraceStatus {
   running: boolean;
   progress: TraceResult | null;
