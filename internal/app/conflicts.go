@@ -105,7 +105,7 @@ func (w *conflictWatch) check() (r compat.Report, fresh bool) {
 	case <-t.C:
 	}
 	r = w.current()
-	r.Unchecked = append(slices.Clone(r.Unchecked), fmt.Sprintf("the check didn't finish within %v; showing the last result", wait))
+	r.Unchecked = append(r.Unchecked, fmt.Sprintf("the check didn't finish within %v; showing the last result", wait))
 	return r, false
 }
 
@@ -117,14 +117,17 @@ func (w *conflictWatch) scanOnce(done chan struct{}) {
 			w.log.Error("conflict scan panicked", "panic", p)
 			r = compat.Report{At: time.Now(), Conflicts: []compat.Conflict{}, Unchecked: []string{fmt.Sprintf("the check failed: %v", p)}}
 		}
+		// Everything read from r happens before it is published: from then
+		// on it is the watch's, handed out only as copies.
+		found, unchecked := summary(&r), slices.Clone(r.Unchecked)
 		w.mu.Lock()
-		prev := w.last
+		changed := summary(w.last) != found
 		w.last = &r
 		w.inflight = nil
 		w.mu.Unlock()
 		close(done)
-		if summary(prev) != summary(&r) {
-			w.log.Info("other network software", "found", summary(&r), "unchecked", r.Unchecked)
+		if changed {
+			w.log.Info("other network software", "found", found, "unchecked", unchecked)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(w.lifetime, conflictLimit)
@@ -132,21 +135,29 @@ func (w *conflictWatch) scanOnce(done chan struct{}) {
 	r = w.det.Scan(ctx)
 }
 
-// current is the last report, or an empty one before the first scan.
+// current is a copy of the last report, or an empty one before the first
+// scan. The caller may change it.
 func (w *conflictWatch) current() compat.Report {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.last == nil {
 		return compat.Report{Conflicts: []compat.Conflict{}, Unchecked: []string{}}
 	}
-	return *w.last
+	return w.last.Clone()
 }
 
-// view is the last report for the live feed (nil before the first scan).
+// view is a copy of the last report for the live feed (nil before the
+// first scan). Never the watch's own: the live view goes to callers that
+// may change it (a client decoding into the same value), and that must not
+// rewrite what the next boost is checked against.
 func (w *conflictWatch) view() *compat.Report {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.last
+	if w.last == nil {
+		return nil
+	}
+	r := w.last.Clone()
+	return &r
 }
 
 // summary is "exitlag:block vpn:warn", for logging changes only.

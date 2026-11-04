@@ -101,19 +101,30 @@ func (r Report) Active() []Conflict {
 	return out
 }
 
+// Clone is a deep copy of the report: changing it leaves r as it was. A
+// nil slice stays nil and an empty one empty, so both encode as before.
+func (r Report) Clone() Report {
+	out := r
+	if r.Conflicts != nil {
+		out.Conflicts = make([]Conflict, len(r.Conflicts))
+		for i, c := range r.Conflicts {
+			c.Found = slices.Clone(c.Found)
+			out.Conflicts[i] = c
+		}
+	}
+	out.Unchecked = slices.Clone(r.Unchecked)
+	return out
+}
+
 // Redacted is the report with user folder names cut out of the evidence,
 // for the diagnostics export a player may post publicly.
 func (r Report) Redacted() Report {
-	out := r
-	out.Conflicts = make([]Conflict, len(r.Conflicts))
-	for i, c := range r.Conflicts {
-		c.Found = slices.Clone(c.Found)
+	out := r.Clone()
+	for _, c := range out.Conflicts {
 		for j, f := range c.Found {
 			c.Found[j] = redactUser(f)
 		}
-		out.Conflicts[i] = c
 	}
-	out.Unchecked = slices.Clone(r.Unchecked)
 	return out
 }
 

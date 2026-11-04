@@ -235,3 +235,28 @@ func TestConflictsInLiveAPIAndDiagnostics(t *testing.T) {
 		t.Errorf("diagnostics: conflicts missing or user folder not cut: %s", body)
 	}
 }
+
+// The watch hands out copies: a caller that changes a live view or a
+// check's report (a client decoding JSON into the same value) doesn't
+// rewrite what the next boost is checked against (#224).
+func TestConflictReportsAreCopies(t *testing.T) {
+	w := &conflictWatch{last: &compat.Report{
+		Conflicts: []compat.Conflict{{ID: "exitlag", Level: compat.LevelBlock, Found: []string{"ExitLag.exe is running"}}},
+		Unchecked: []string{},
+	}}
+	v := w.view()
+	v.Conflicts[0].Level = compat.LevelInfo
+	v.Conflicts[0].Found[0] = "changed"
+	v.Unchecked = append(v.Unchecked, "changed")
+	c := w.current()
+	c.Conflicts[0].ID = "changed"
+	for _, got := range []compat.Report{*w.view(), w.current()} {
+		if len(got.Conflicts) != 1 || got.Conflicts[0].ID != "exitlag" || got.Conflicts[0].Level != compat.LevelBlock ||
+			got.Conflicts[0].Found[0] != "ExitLag.exe is running" || len(got.Unchecked) != 0 {
+			t.Errorf("the watch's report changed: %+v", got)
+		}
+	}
+	if (&conflictWatch{}).view() != nil {
+		t.Error("view before the first scan isn't nil")
+	}
+}
