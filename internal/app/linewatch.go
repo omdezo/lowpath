@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -29,6 +31,7 @@ type lineWatch struct {
 	split *diag.ConnWatch
 
 	// Only the watch goroutine touches these.
+	splitLog onceLog
 	meter    *diag.Meter
 	route    diag.Route
 	routeOK  bool
@@ -43,12 +46,43 @@ type lineWatch struct {
 	newLine *diag.LineRate     // from a test that just finished, for the next tick
 }
 
-// newLineWatch watches ns; split may be nil (no per-connection counters).
-func newLineWatch(ns diag.NetStats, split *diag.ConnWatch, line diag.LineRate) *lineWatch {
+// newLineWatch watches ns; split may be nil (no per-connection counters),
+// and so may log.
+func newLineWatch(ns diag.NetStats, split *diag.ConnWatch, line diag.LineRate, log *slog.Logger) *lineWatch {
 	if split == nil {
 		split = diag.NewConnWatch(nil, nil, nil)
 	}
-	return &lineWatch{net: ns, det: diag.NewPassiveDetector(diag.PassiveConfig{}, line), split: split, meter: diag.NewMeter()}
+	return &lineWatch{net: ns, det: diag.NewPassiveDetector(diag.PassiveConfig{}, line), split: split, meter: diag.NewMeter(),
+		splitLog: onceLog{log: log}}
+}
+
+// maxLogged bounds the reasons a onceLog remembers. The per-connection
+// counters fail for a handful of reasons (an errno, a timeout), but the
+// app runs for weeks.
+const maxLogged = 32
+
+// onceLog logs each distinct problem once. The per-connection counters are
+// read every second of a session: a failure that persists would fill the
+// log, and one that comes and goes (a busy host's timeouts) would too if
+// only a repeat in a row were left out.
+type onceLog struct {
+	log  *slog.Logger
+	seen map[string]bool
+}
+
+func (o *onceLog) report(msg string, err error) {
+	if err == nil || o.log == nil || o.seen[err.Error()] || len(o.seen) >= maxLogged {
+		return
+	}
+	if o.seen == nil {
+		o.seen = map[string]bool{}
+	}
+	o.seen[err.Error()] = true
+	level := slog.LevelWarn
+	if errors.Is(err, diag.ErrUnsupported) {
+		level = slog.LevelInfo // Windows and macOS: expected, see diag.ConnStats
+	}
+	o.log.Log(context.Background(), level, msg, "err", err)
 }
 
 // lineRate is the line rate a finished bufferbloat test measured.
@@ -143,6 +177,7 @@ func (w *lineWatch) tick(now time.Time, in lineInput) {
 	connsOK := false
 	if rateOK {
 		conns, connsOK = w.split.Sample(now, w.route.Index)
+		w.splitLog.report("per-connection counters", w.split.Err())
 	} else {
 		w.split.Reset()
 	}

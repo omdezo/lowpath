@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"net/netip"
 	"slices"
@@ -338,7 +341,7 @@ func (f *fakeCounters) Counters(int) (diag.Counters, error) {
 
 func TestLineWatchFlagsADownloadDuringASession(t *testing.T) {
 	nic := &fakeCounters{at: time.Unix(1000, 0)}
-	w := newLineWatch(nic, nil, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8})
+	w := newLineWatch(nic, nil, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8}, nil)
 	started := time.Unix(999, 0)
 	snap := &engine.Snapshot{}
 	step := func(rtt, server float64, rxMbps, gameKBps float64) *diag.PassiveState {
@@ -389,7 +392,7 @@ func TestLineWatchFlagsADownloadDuringASession(t *testing.T) {
 
 func TestLineWatchUnreadableCounters(t *testing.T) {
 	nic := &fakeCounters{at: time.Unix(0, 0), err: errors.New("no adapter")}
-	w := newLineWatch(nic, nil, diag.LineRate{})
+	w := newLineWatch(nic, nil, diag.LineRate{}, nil)
 	snap := &engine.Snapshot{After: engine.Stats{RTT: 30, Up: true, Samples: 5}}
 	for i := range 3 {
 		w.tick(time.Unix(int64(i+1), 0), lineInput{snap: snap, started: time.Unix(0, 0)})
@@ -507,9 +510,10 @@ func TestLoadMarks(t *testing.T) {
 type fakeTCP struct {
 	conns  []diag.TCPConn
 	owners map[uint64]uint32
+	err    error
 }
 
-func (f *fakeTCP) TCPConns() ([]diag.TCPConn, error) { return slices.Clone(f.conns), nil }
+func (f *fakeTCP) TCPConns() ([]diag.TCPConn, error) { return slices.Clone(f.conns), f.err }
 func (f *fakeTCP) Owners(c []diag.TCPConn) map[uint64]uint32 {
 	out := map[uint64]uint32{}
 	for _, x := range c {
@@ -528,7 +532,7 @@ func TestLineWatchLeavesLANOutAndNamesTheDownloader(t *testing.T) {
 	lan := diag.LinkAddrs{Iface: []netip.Prefix{netip.MustParsePrefix("192.0.2.10/24")}, Local: []netip.Addr{netip.MustParseAddr("192.0.2.10")}}
 	split := diag.NewConnWatch(tcp, func() (map[uint32]string, error) { return map[uint32]string{300: "steam"}, nil },
 		func(int) (diag.LinkAddrs, error) { return lan, nil })
-	w := newLineWatch(nic, split, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8})
+	w := newLineWatch(nic, split, diag.LineRate{DownBps: 100e6 / 8, UpBps: 20e6 / 8}, nil)
 	started := time.Unix(999, 0)
 	snap := &engine.Snapshot{}
 	var steam, nas uint64
@@ -571,5 +575,48 @@ func TestLineWatchLeavesLANOutAndNamesTheDownloader(t *testing.T) {
 	w.tick(nic.at.Add(time.Second), lineInput{})
 	if w.view() != nil {
 		t.Fatal("state after the session")
+	}
+}
+
+// The per-connection counters are read every second of a session: a
+// failure is logged once per reason, not every second, also when it comes
+// and goes; the watch keeps reading either way.
+func TestLineWatchLogsEachCountersProblemOnce(t *testing.T) {
+	nic := &fakeCounters{at: time.Unix(1000, 0)}
+	tcp := &fakeTCP{}
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	split := diag.NewConnWatch(tcp, nil, func(int) (diag.LinkAddrs, error) { return diag.LinkAddrs{}, nil })
+	w := newLineWatch(nic, split, diag.LineRate{}, log)
+	denied := errors.New("diag: per-connection byte counters: IPv6 connections unreadable: permission denied")
+	timeout := errors.New("netlink: no answer from the kernel within 3s")
+	snap := &engine.Snapshot{}
+	tick := func(err error) {
+		tcp.err = err
+		nic.at = nic.at.Add(time.Second)
+		w.tick(nic.at, lineInput{snap: snap, started: time.Unix(999, 0)})
+	}
+	for _, err := range []error{nil, denied, denied, nil, denied, timeout, denied, timeout} {
+		tick(err)
+	}
+	got := logged.String()
+	if n := strings.Count(got, "permission denied"); n != 1 {
+		t.Errorf("the denied dump logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "no answer"); n != 1 {
+		t.Errorf("the timeout logged %d times, want once:\n%s", n, got)
+	}
+	if n := strings.Count(got, "level=WARN"); n != 2 {
+		t.Errorf("%d warnings, want two:\n%s", n, got)
+	}
+	// Windows and macOS have no counters without administrator rights,
+	// which is expected there: one line, at info level.
+	logged.Reset()
+	w = newLineWatch(nic, diag.NewConnWatch(tcp, nil, nil), diag.LineRate{}, log)
+	for range 4 {
+		tick(fmt.Errorf("per-connection byte counters: %w", diag.ErrUnsupported))
+	}
+	if got := logged.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "level=INFO") {
+		t.Errorf("unsupported counters logged:\n%s\nwant one info line", got)
 	}
 }

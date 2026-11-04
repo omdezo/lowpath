@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -154,7 +155,7 @@ func TestConnWatchSplitsLANFromInternet(t *testing.T) {
 	}
 }
 
-// A connection missing from one reading (an IPv6 dump that failed) comes
+// A connection missing from one reading (a socket the kernel skipped) comes
 // back with only what it moved meanwhile, not its whole lifetime; one gone
 // for longer than the grace is forgotten.
 func TestConnWatchConnectionMissingFromAReading(t *testing.T) {
@@ -180,6 +181,59 @@ func TestConnWatchConnectionMissingFromAReading(t *testing.T) {
 	}
 	if _, kept := w.prev[1]; kept {
 		t.Error("a connection gone longer than the grace is still remembered")
+	}
+}
+
+// While the IPv6 dump keeps failing, the IPv4 connections still give a
+// split and the failure stays visible; when IPv6 is back, its connections
+// don't count everything they moved while unseen as one second's traffic.
+func TestConnWatchPartialReadings(t *testing.T) {
+	f := &fakeConns{owners: map[uint64]uint32{1: 300}}
+	w, _ := newTestConnWatch(f, map[uint32]string{300: "steam"})
+	at := time.Unix(0, 0)
+	steam := conn(1, "192.0.2.10:50001", "203.0.113.5:443", 0, 0)
+	nas := conn(2, "192.0.2.10:50002", "192.0.2.20:445", 0, 0)
+	nas6 := conn(3, "[2001:db8:0:1::10]:50003", "[2001:db8:0:1::20]:445", 0, 0)
+	read := func(i int, partial bool) (ConnSample, bool) {
+		steam.Received += 2e6
+		nas.Received += 10e6
+		nas6.Received += 30e6 // moves on whether or not it is read
+		f.conns, f.err = []TCPConn{steam, nas, nas6}, nil
+		if partial {
+			f.conns = []TCPConn{steam, nas}
+			f.err = connsPartial{missing: "IPv6", err: errors.New("netlink: dump IPv6 TCP sockets: permission denied")}
+		}
+		return w.Sample(at.Add(time.Duration(i)*time.Second), 7)
+	}
+	read(0, false)
+	if s, ok := read(1, false); !ok || s.LANRx != 40e6 || w.Err() != nil {
+		t.Fatalf("complete reading: %+v %v, err %v", s, ok, w.Err())
+	}
+	// The IPv6 dump fails for longer than the grace: every second still
+	// has the IPv4 split, and Err says what is missing.
+	for i := 2; i < 2+2*int(connGrace/time.Second); i++ {
+		s, ok := read(i, true)
+		if !ok || s.LANRx != 10e6 || len(s.Talkers) != 1 || s.Talkers[0].Name != "steam" || s.Talkers[0].Rx != 2e6 {
+			t.Fatalf("partial reading %d: %+v %v; want the IPv4 split", i, s, ok)
+		}
+		var partial connsPartial
+		if !errors.As(w.Err(), &partial) || !strings.Contains(w.Err().Error(), "IPv6") || isUnsupported(w.Err()) {
+			t.Fatalf("partial reading %d: Err = %v", i, w.Err())
+		}
+	}
+	if f.reads != 2+2*int(connGrace/time.Second) {
+		t.Errorf("%d readings, want one a second", f.reads)
+	}
+	// IPv6 is back: one reading to start over from, then the full split.
+	i := 2 + 2*int(connGrace/time.Second)
+	if s, ok := read(i, false); ok {
+		t.Fatalf("first complete reading after partial ones: %+v; want a new start, not 20 s of the IPv6 copy in one", s)
+	}
+	if w.Err() != nil {
+		t.Errorf("complete reading: Err = %v", w.Err())
+	}
+	if s, ok := read(i+1, false); !ok || s.LANRx != 40e6 {
+		t.Fatalf("after IPv6 is back: %+v %v", s, ok)
 	}
 }
 
@@ -306,6 +360,9 @@ func TestConnWatchWithoutCounters(t *testing.T) {
 	w.Sample(time.Unix(1, 0), 7)
 	if f.reads != 2 {
 		t.Errorf("failing counters read %d times, want 2", f.reads)
+	}
+	if w.Err() != f.err {
+		t.Errorf("Err = %v, want the reading's error", w.Err())
 	}
 	// No ConnStats at all.
 	if _, ok := NewConnWatch(nil, nil, nil).Sample(time.Unix(0, 0), 7); ok {
