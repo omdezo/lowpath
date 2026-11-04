@@ -3,9 +3,12 @@ package engine_test
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"net/netip"
+	"os"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,21 +19,40 @@ import (
 
 // gameClient sends n numbered packets to addr and reports how many distinct
 // ones came back and how many came back more than once.
+//
+// It stops reading only once every packet is sent and then no reply has come
+// for replyWait. A read timeout while packets are still going out means
+// nothing: on a busy machine the reader can go unscheduled for longer than
+// replyWait while the sender keeps going, and giving up then would count every
+// later reply as lost (#215).
 func gameClient(t *testing.T, addr netip.AddrPort, n int, every time.Duration) (got, dupes int) {
 	t.Helper()
+	const (
+		replyWait = 1500 * time.Millisecond
+		// Replies stop soon after the last send; a reader still busy this
+		// long after it is a bug, and closing the socket ends it.
+		readLimit = 30 * time.Second
+	)
 	c, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(addr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	seen := map[uint32]int{}
+	var allSent atomic.Bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		buf := make([]byte, 1500)
 		for {
-			c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+			// Checked before the deadline is armed, so a timeout ends the
+			// read only when the whole quiet window came after the last send.
+			sent := allSent.Load()
+			c.SetReadDeadline(time.Now().Add(replyWait))
 			m, err := c.Read(buf)
+			if errors.Is(err, os.ErrDeadlineExceeded) && !sent {
+				continue
+			}
 			if err != nil {
 				return
 			}
@@ -45,7 +67,14 @@ func gameClient(t *testing.T, addr netip.AddrPort, n int, every time.Duration) (
 		c.Write(pkt)
 		time.Sleep(every)
 	}
-	<-done
+	allSent.Store(true)
+	select {
+	case <-done:
+	case <-time.After(readLimit):
+		c.Close()
+		<-done
+		t.Errorf("replies still arriving %v after the last packet was sent", readLimit)
+	}
 	for _, k := range seen {
 		got++
 		if k > 1 {
