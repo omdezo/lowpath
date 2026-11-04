@@ -235,3 +235,30 @@ func TestConflictsInLiveAPIAndDiagnostics(t *testing.T) {
 		t.Errorf("diagnostics: conflicts missing or user folder not cut: %s", body)
 	}
 }
+
+// While route mode's own TUN carries the internet route, the conflict
+// check doesn't call the boost a VPN; once it stops, an adapter of that
+// index on the route is judged like any other (#149).
+func TestBoostAdapterIsNotAVPN(t *testing.T) {
+	fp := newFake(t)
+	fp.Privileges.SetElevated(true)
+	fp.Capture.SetOwnAdapter(9)
+	fp.Inventory.Set(compat.Inventory{Adapters: []compat.Adapter{{Index: 9, Name: "tun0", Type: 53, Up: true}}, DefaultRoute: 9})
+	ts, srv := newRealServer(t, fp)
+	call(t, ts, "PUT", "/api/settings", `{"capture_mode":"route","loopback_relay":true}`, nil)
+	var g gameView
+	call(t, ts, "POST", "/api/games/custom", `{"name":"LP Check","process":"lpcheck.exe"}`, &g)
+	if code, body := do(t, ts, "POST", "/api/apply", `{"game_id":"`+g.ID+`","mode":"smart"}`, csrf); code != 200 {
+		t.Fatalf("apply: %d %s", code, body)
+	}
+	var rep compat.Report
+	call(t, ts, "GET", "/api/conflicts?fresh=1", "", &rep)
+	if len(rep.Conflicts) != 0 {
+		t.Errorf("during the boost: %+v", rep.Conflicts)
+	}
+	srv.stopSession()
+	call(t, ts, "GET", "/api/conflicts?fresh=1", "", &rep)
+	if len(rep.Conflicts) != 1 || rep.Conflicts[0].ID != "vpn" {
+		t.Errorf("after the boost, tun0 on the route: %+v", rep.Conflicts)
+	}
+}

@@ -311,7 +311,12 @@ type Capture struct {
 	recoverErr error
 	sessions   []*Session
 	recovered  []capture.Marker
+	adapter    int // sessions' own adapter index (capture.OwnAdapter); 0 none
 }
+
+// SetOwnAdapter makes the sessions started from now on report an adapter
+// of their own, as Linux route mode's TUN device does; 0: none.
+func (c *Capture) SetOwnAdapter(index int) { c.mu.Lock(); c.adapter = index; c.mu.Unlock() }
 
 func (c *Capture) Name() string { return "fake" }
 
@@ -339,7 +344,7 @@ func (c *Capture) Start(cfg capture.Config) (capture.Session, error) {
 	if cfg.OnPacket == nil {
 		return nil, errors.New("fakeplatform: Config.OnPacket is required")
 	}
-	s := &Session{cfg: cfg, injected: make(chan Injected, 1024), done: make(chan struct{})}
+	s := &Session{cfg: cfg, injected: make(chan Injected, 1024), done: make(chan struct{}), adapter: c.adapter}
 	c.sessions = append(c.sessions, s)
 	return s, nil
 }
@@ -395,7 +400,11 @@ type Session struct {
 	done               chan struct{}
 	stopOnce           sync.Once
 	reason             atomic.Pointer[error]
+	adapter            int
 }
+
+// OwnAdapter is the adapter Capture.SetOwnAdapter gave the session.
+func (s *Session) OwnAdapter() (int, bool) { return s.adapter, s.adapter > 0 }
 
 // Config is what the app asked to capture.
 func (s *Session) Config() capture.Config { return s.cfg }

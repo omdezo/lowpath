@@ -476,6 +476,19 @@ func (c *Capture) fail(err error) {
 	}
 }
 
+// adapterDevice is a device that is a network adapter of its own (the TUN).
+type adapterDevice interface {
+	adapterIndex() int
+}
+
+// OwnAdapter is the adapter the device created, if it is one (OwnAdapter).
+func (c *Capture) OwnAdapter() (int, bool) {
+	if a, ok := c.dev.(adapterDevice); ok {
+		return a.adapterIndex(), true
+	}
+	return 0, false
+}
+
 func (c *Capture) Stats() Stats {
 	s := Stats{
 		Captured:     c.captured.Load(),

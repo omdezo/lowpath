@@ -147,6 +147,9 @@ type tunLink struct {
 	closeErr            error
 }
 
+// adapterIndex is the TUN's interface index (Capture.OwnAdapter).
+func (d *tunLink) adapterIndex() int { return d.index }
+
 func (d *tunLink) setUp(dev string, r tunRoute, own bool) error {
 	fd, err := unix.Open(dev, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
