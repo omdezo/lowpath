@@ -51,6 +51,9 @@ type Inventory struct {
 type System interface {
 	Processes() ([]string, error)
 	Services() ([]Service, error)
+	// Programs returns the installed programs' display names. It reads
+	// several places (registry keys); when some fail, it returns the names
+	// from the others along with an error naming the ones that failed.
 	Programs() ([]string, error)
 	Adapters() ([]Adapter, error)
 	// DefaultRoute returns the interface index carrying internet traffic,

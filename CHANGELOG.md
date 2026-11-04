@@ -151,6 +151,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (logged at most once a minute); Windows retries a snapshot that fails
   with `ERROR_BAD_LENGTH`, and the conflict check lists running programs
   as unchecked instead of saying no booster runs (#211).
+- The conflict check no longer says "None found" for installed programs it
+  couldn't read: when one Uninstall registry key is refused (by policy,
+  for example) the programs under the other keys are still matched and the
+  report names the key it couldn't check (#150).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent
