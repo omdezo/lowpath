@@ -9,6 +9,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Heroic's GOG and Amazon games on Linux and macOS: game detection now
+  also reads the GOG list (`gog_store/installed.json`) and Nile's Amazon
+  list (`nile_config/nile/installed.json`) in Heroic's config folder and
+  its Flatpak's, next to the Epic games from Legendary. Lutris's `pga.db`
+  is still not read: Lutris's Wine games are found through their prefix,
+  and Lowpath has no SQLite reader (#135).
 - Relay lane statistics: the egress relay records which path delivered
   each copy of the game's packets and once a second sends the client a
   TStats report per flow: each path's loss, the loss two paths share and

@@ -101,6 +101,67 @@ func TestWinePrefixesAndInstalls(t *testing.T) {
 	}
 }
 
+// Heroic's GOG and Amazon (Nile) lists, in its native and Flatpak config
+// folders on Linux and in Application Support on macOS, as Heroic and Nile
+// write them: games found where they exist, every odd entry or file
+// skipped.
+func TestHeroicGOGAndAmazonInstalls(t *testing.T) {
+	home := t.TempDir()
+	j := filepath.Join
+	games := j(home, "Games", "Heroic")
+	witcher := mkdir(t, games, "The Witcher 3 Wild Hunt")
+	gwent := mkdir(t, games, "Gwent")
+	amazon := mkdir(t, games, "Amazon", "Fallout 76")
+	native := j(home, ".config", "heroic")
+	flatpak := j(home, ".var", "app", "com.heroicgameslauncher.hgl", "config", "heroic")
+
+	write(t, j(native, "gog_store", "installed.json"), `{"installed": [
+		{"appName": "1207664663", "platform": "windows", "install_path": "`+slash(witcher)+`", "is_dlc": false},
+		{"appName": "1", "platform": "linux", "install_path": "`+slash(j(games, "Deleted Since"))+`"},
+		{"appName": "2", "install_path": "Games/Heroic/Relative"},
+		{"appName": "3", "install_path": 7},
+		{"appName": "4"},
+		"not an object"
+	]}`)
+	write(t, j(flatpak, "gog_store", "installed.json"), `{"installed": [{"appName": "1207666373", "install_path": "`+slash(gwent)+`"}]}`)
+	write(t, j(native, "nile_config", "nile", "installed.json"), `[
+		{"id": "amzn1.adg.product.0001", "version": "v1", "path": "`+slash(amazon)+`"},
+		{"id": "amzn1.adg.product.0002", "path": "relative/x"},
+		{"id": "amzn1.adg.product.0003", "path": ""},
+		{"id": "amzn1.adg.product.0004"},
+		{"id": "amzn1.adg.product.0005", "path": "`+slash(witcher)+`"}
+	]`) // the last one is already listed by GOG
+	write(t, j(flatpak, "nile_config", "nile", "installed.json"), `[{"id": "x", "path": `) // cut off mid-write
+
+	got := NewSystem(nil, UnixLocations("linux", home, nil)).LauncherInstalls()
+	if want := []string{witcher, gwent, amazon}; !slices.Equal(got, want) {
+		t.Errorf("Linux LauncherInstalls =\n%q\nwant\n%q", got, want)
+	}
+
+	// macOS: Heroic keeps the same files in Application Support. A list
+	// over maxManifest is skipped even though it is valid JSON.
+	mac := j(home, "Library", "Application Support", "heroic")
+	write(t, j(mac, "gog_store", "installed.json"), `{"installed": [{"install_path": "`+slash(gwent)+`"}]}`)
+	write(t, j(mac, "nile_config", "nile", "installed.json"),
+		`[{"path": "`+slash(amazon)+`"}]`+strings.Repeat(" ", maxManifest))
+	got = NewSystem(nil, UnixLocations("darwin", home, nil)).LauncherInstalls()
+	if want := []string{gwent}; !slices.Equal(got, want) {
+		t.Errorf("macOS LauncherInstalls = %q, want %q (the oversized Nile list skipped)", got, want)
+	}
+
+	lib := Library{Installs: []string{witcher, amazon}}
+	for p, want := range map[string]bool{
+		`C:\GOG Games\The Witcher 3 Wild Hunt`:          true, // GOG's folder
+		`C:\Amazon Games\Library\Fallout 76`:            true, // Nile's folder
+		`C:\Program Files (x86)\GOG Galaxy\Games\Thief`: false,
+	} {
+		drive, parts, _ := splitWindowsPath(p)
+		if got := lib.hasWindowsPath(drive, parts); got != want {
+			t.Errorf("hasWindowsPath(%s) = %v", p, got)
+		}
+	}
+}
+
 func TestSplitWindowsPath(t *testing.T) {
 	for in, want := range map[string]string{
 		`C:\Riot Games\VALORANT`: "c|Riot Games|VALORANT",
@@ -136,6 +197,20 @@ func TestLauncherFileParsers(t *testing.T) {
 	if got := legendaryInstalls([]byte(`not json`)); got != nil {
 		t.Errorf("legendaryInstalls of junk = %q", got)
 	}
+	// Each list in another launcher's shape, or with an odd "installed".
+	for _, b := range []string{`[{"install_path": "` + slash(abs) + `"}]`, `{"installed": {"x": {"install_path": "` + slash(abs) + `"}}}`, `{"installed": 5}`, `{"installed": `} {
+		if got := gogInstalls([]byte(b)); got != nil {
+			t.Errorf("gogInstalls(%s) = %q", b, got)
+		}
+	}
+	for _, b := range []string{`{"x": {"path": "` + slash(abs) + `"}}`, `{"installed": [{"path": "` + slash(abs) + `"}]}`, `null`, `[`} {
+		if got := nileInstalls([]byte(b)); got != nil {
+			t.Errorf("nileInstalls(%s) = %q", b, got)
+		}
+	}
+	if got := gogInstalls([]byte(`{"installed": null}`)); got != nil {
+		t.Errorf("gogInstalls of no games = %q", got)
+	}
 	big := filepath.Join(t.TempDir(), "huge.json")
 	f, err := os.Create(big)
 	if err != nil {
@@ -163,6 +238,12 @@ func TestUnixLocations(t *testing.T) {
 		!slices.Contains(lin.Lutris, j(home, ".config", "lutris", "games")) || !slices.Contains(lin.Prefixes, j(home, ".wine")) {
 		t.Errorf("Linux launchers: %+v", lin)
 	}
+	hgl := j(home, ".var", "app", "com.heroicgameslauncher.hgl", "config", "heroic")
+	if !slices.Equal(lin.GOG, []string{j(home, ".config", "heroic", "gog_store", "installed.json"), j(hgl, "gog_store", "installed.json")}) ||
+		!slices.Equal(lin.Nile, []string{j(home, ".config", "heroic", "nile_config", "nile", "installed.json"), j(hgl, "nile_config", "nile", "installed.json")}) ||
+		!slices.Contains(lin.Legendary, j(hgl, "legendaryConfig", "legendary", "installed.json")) {
+		t.Errorf("Linux Heroic lists: %+v", lin)
+	}
 	xdg := t.TempDir()
 	custom := UnixLocations("linux", home, env(map[string]string{"XDG_CONFIG_HOME": xdg, "XDG_DATA_HOME": "relative/is/ignored"}))
 	if !slices.Contains(custom.Lutris, j(xdg, "lutris", "games")) || !slices.Contains(custom.Steam, j(home, ".local", "share", "Steam")) {
@@ -173,6 +254,13 @@ func TestUnixLocations(t *testing.T) {
 	if !slices.Equal(mac.Steam, []string{j(home, "Library", "Application Support", "Steam")}) ||
 		!slices.Contains(mac.Prefixes, j(home, "Library", "Application Support", "CrossOver", "Bottles", "*")) || mac.Lutris != nil {
 		t.Errorf("macOS: %+v", mac)
+	}
+	heroic := j(home, "Library", "Application Support", "heroic")
+	if !slices.Equal(mac.GOG, []string{j(heroic, "gog_store", "installed.json")}) ||
+		!slices.Equal(mac.Nile, []string{j(heroic, "nile_config", "nile", "installed.json")}) ||
+		!slices.Equal(mac.Heroic, []string{j(heroic, "GamesConfig")}) ||
+		!slices.Contains(mac.Legendary, j(heroic, "legendaryConfig", "legendary", "installed.json")) {
+		t.Errorf("macOS Heroic lists: %+v", mac)
 	}
 	if l := UnixLocations("linux", "", nil); l.Steam != nil || l.Prefixes != nil {
 		t.Errorf("no home: %+v", l)

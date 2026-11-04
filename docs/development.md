@@ -257,8 +257,10 @@ go test ./...
 - **Owners and detection on Linux and macOS:** `/proc` fixtures (IPv4,
   IPv6, v4-mapped, a Proton game, another user's process, no `/proc`),
   libproc reply layouts, Wine name and path rules, and a home folder with
-  Steam, Proton, Lutris, Heroic and Legendary files, on every OS; on Linux
-  and macOS the tests also find their own sockets and process for real.
+  Steam, Proton, Lutris, Heroic, Legendary, GOG and Nile files (native,
+  Flatpak and macOS paths; broken, oversized and odd entries), on every
+  OS; on Linux and macOS the tests also find their own sockets and process
+  for real.
 - **Catalog:** SDR config parsing against a trimmed copy of the live CS2
   config, every geo fix seen in it, hostile replies, download errors and
   timeouts, the disk cache, POP pinging, and the refresh/backoff/offline
