@@ -570,6 +570,21 @@ async function main() {
     await page.getByRole("tab", { name: "Diagnostics" }).click();
     await page.getByRole("button", { name: "Run test" }).waitFor();
     await shot(page, "diagnostics", "Settings → Diagnostics: the verdict with nothing measured yet");
+    // With checks unmeasured, the verdict lists what to run, and a step
+    // whose test is on the page leads to it with the keyboard on its button.
+    const steps = page.locator(".verdict-next li");
+    await steps.first().waitFor({ timeout: 8000 }).catch(() => {});
+    const stepIds = await steps.evaluateAll((ls) => ls.map((l) => l.dataset.step));
+    await page.locator(".verdict-next").getByRole("button", { name: "Bufferbloat test" }).click().catch(() => {});
+    await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Run test", null, { timeout: 5000 }).catch(() => {});
+    const focused = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+    check(
+      "The verdict lists the next steps, and the bufferbloat step leads to its test",
+      stepIds.includes("bloat") && stepIds.includes("trace") && focused === "Run test",
+      `steps ${stepIds.join(", ") || "none"}; focus on "${focused}"`,
+    );
+    await scrollToStart(page, ".verdict-next");
+    await shot(page, "verdict-next", "Diagnostics verdict: for a surer answer, the tests still to run");
 
     // The router pinger runs while the tab is open (20 Hz), and its card
     // shows numbers, or "—" and why (a router that ignores ping, no rights).

@@ -197,6 +197,12 @@ type PathEvidence struct {
 	// SameMethod: direct and relay were measured the same way, to the same
 	// target. False today: direct is ICMP, the relay route UDP probes.
 	SameMethod bool `json:"same_method"`
+	// Link and Interface are the connection the routes were measured on
+	// (LinkWiFi, ... and the adapter's name; "" unknown, as for a running
+	// boost, which measures the connection in use). A route analysis on
+	// Wi-Fi says nothing about the cable plugged in since.
+	Link      string `json:"link,omitempty"`
+	Interface string `json:"interface,omitempty"`
 }
 
 // Path evidence sources.
@@ -437,7 +443,8 @@ type view struct {
 	gateway     *GatewaySample
 	gatewayConf Confidence
 
-	path *PathEvidence // boost, else analysis
+	path    *PathEvidence // boost, else a usable analysis
+	pathWhy string        // why the last route analysis isn't used, "" when it is or there is none
 }
 
 func newView(ev Evidence, cfg VerdictConfig) *view {
@@ -445,13 +452,40 @@ func newView(ev Evidence, cfg VerdictConfig) *view {
 	v.useBloat()
 	v.useTrace()
 	v.useGateway()
-	switch {
-	case ev.Boost != nil:
+	if ev.Boost != nil {
 		v.path = ev.Boost
-	case ev.Analysis != nil && ev.At.Sub(ev.Analysis.At) <= cfg.MaxAge:
-		v.path = ev.Analysis
+	} else {
+		v.useAnalysis()
 	}
 	return v
+}
+
+// useAnalysis takes the last route analysis when it is recent and was
+// measured on the connection in use, as useBloat and useTrace do for their
+// tests; otherwise pathWhy says why it isn't used.
+func (v *view) useAnalysis() {
+	a := v.ev.Analysis
+	if a == nil {
+		return
+	}
+	if v.ev.At.Sub(a.At) > v.cfg.MaxAge {
+		v.pathWhy = fmt.Sprintf("The last route analysis is %s old.", ago(v.ev.At.Sub(a.At)))
+		return
+	}
+	if v.otherLink(a.Link, a.Interface) == linkOther {
+		v.pathWhy = fmt.Sprintf("The last route analysis ran on %s, not on the connection in use now.", linkWords(a.Link, a.Interface))
+		return
+	}
+	v.path = a
+}
+
+// noPath is a check's summary when it has no route comparison: why the
+// last analysis isn't used, if one was taken, then what to run.
+func (v *view) noPath(run string) string {
+	if v.pathWhy == "" {
+		return run
+	}
+	return v.pathWhy + " " + run
 }
 
 // ageConf is how sure evidence taken at t can be, or ok false when it is

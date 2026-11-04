@@ -120,7 +120,7 @@ func boostEvidence(snap engine.Snapshot, game string, now time.Time) *diag.PathE
 // analysisEvidence is the last route analysis: direct against the best
 // relay that answered.
 func analysisEvidence(a analysisResult, game string) *diag.PathEvidence {
-	p := &diag.PathEvidence{Source: diag.PathAnalysis, At: a.At, Game: game}
+	p := &diag.PathEvidence{Source: diag.PathAnalysis, At: a.At, Game: game, Link: a.Link, Interface: a.Interface}
 	if a.DirectKnown && a.Direct.Up && a.Direct.Samples > 0 {
 		p.Direct = pathStats(a.Direct, false)
 	}
@@ -154,6 +154,16 @@ func pathStats(st engine.Stats, leg bool) *diag.PathStats {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// currentLink is the connection in use now (the zero Route when offline or
+// unknown), for results that must say what they were measured on.
+func (s *Server) currentLink() diag.Route {
+	r, err := s.verdict.net.DefaultRoute()
+	if err != nil {
+		return diag.Route{}
+	}
+	return r
+}
 
 // diagnosis is the current verdict.
 func (s *Server) diagnosis() diag.Diagnosis {

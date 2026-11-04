@@ -21,7 +21,7 @@ export function Diagnostics({ onError, wifiTuning }: { onError: (msg: string, ti
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
         Is the lag on your side of the connection? Keep this tab open on Wi-Fi and again on a cable to compare.
       </div>
-      <Verdict renderSegments={(segs) => <RouteSegments segments={segs} />} />
+      <Verdict renderSegments={(segs) => <RouteSegments segments={segs} />} withSteps />
       <GatewayCard />
       <WiFiCard tuningEnabled={wifiTuning} />
       <BloatTest onError={onError} />

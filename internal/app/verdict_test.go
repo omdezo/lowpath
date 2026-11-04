@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -232,5 +233,36 @@ func TestVerdictAPIAlreadyOptimalFromAnalysis(t *testing.T) {
 	}
 	if f := strings.Join(d.Verdict.Facts, " "); !strings.Contains(f, "Counter-Strike 2") {
 		t.Errorf("facts %q", f)
+	}
+}
+
+// An analysis records the connection it ran on, and the verdict doesn't
+// use one taken on Wi-Fi once a cable carries the traffic (#147).
+func TestAnalysisRecordsItsConnection(t *testing.T) {
+	line := newFakeHomeLine() // Wi-Fi
+	ts, srv := newDemoBloatServer(t, line)
+	if code, body := do(t, ts, "POST", "/api/games/cs2/analyze", "", csrf); code != 200 {
+		t.Fatalf("analyze: %d %s", code, body)
+	}
+	srv.mu.Lock()
+	a := srv.analysis["cs2"]
+	srv.mu.Unlock()
+	if a.Link != diag.LinkWiFi || a.Interface != "Wi-Fi" {
+		t.Fatalf("analysis link %q %q, want Wi-Fi", a.Link, a.Interface)
+	}
+	if ev := analysisEvidence(a, "Counter-Strike 2"); ev.Link != diag.LinkWiFi || ev.Interface != "Wi-Fi" {
+		t.Errorf("evidence link %q %q", ev.Link, ev.Interface)
+	}
+	srv.verdict.net = cableLine{line} // a cable plugged in since
+	var d diag.Diagnosis
+	if code := call(t, ts, "GET", "/api/diag/verdict", "", &d); code != 200 {
+		t.Fatalf("verdict: %d", code)
+	}
+	i := slices.IndexFunc(d.Checks, func(c diag.Check) bool { return c.Rule == "optimal" })
+	if i < 0 {
+		t.Fatalf("no optimal check in %+v", d.Checks)
+	}
+	if c := d.Checks[i]; c.Status != diag.CheckUnknown || !strings.Contains(c.Summary, "ran on Wi-Fi") {
+		t.Errorf("optimal on the cable: %s %q", c.Status, c.Summary)
 	}
 }

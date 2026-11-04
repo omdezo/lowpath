@@ -140,6 +140,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   necessary addresses pass (#131).
 
 ### Changed
+- The verdict ties a route analysis to the connection it ran on, like the
+  bufferbloat test and the route trace: one measured on Wi-Fi no longer
+  drives the ISP and "Already optimal" checks once a cable is in use, and
+  those checks say why. The verdict card now lists what to run for a surer
+  answer, and the bufferbloat and route trace steps lead to their test
+  with the keyboard on its start button (#147).
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
 

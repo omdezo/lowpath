@@ -3,6 +3,7 @@ import { Download, Loader2, Play, Route, Square } from "lucide-react";
 import { api, describeError } from "../api";
 import type { TraceHop, TraceMode, TraceResult, TraceStatus, TraceTarget } from "../types";
 import { fmtMs, pct } from "../util";
+import { DIAG_CARD } from "./diagCards";
 
 // The route trace (MTR): every router between this PC and a target, with
 // loss and delay at each, measured many times. Loss only counts when it
@@ -86,7 +87,7 @@ export function RouteTrace({ onError }: Props) {
   const canStart = !!st && (targetId === OTHER ? host.trim() !== "" : !!chosen);
 
   return (
-    <section className="bloat trace" aria-label="Route trace">
+    <section className="bloat trace" aria-label="Route trace" id={DIAG_CARD.trace}>
       <div className="bloat-head">
         <span className="bloat-ico">
           <Route size={18} />
@@ -153,7 +154,7 @@ export function RouteTrace({ onError }: Props) {
               <Square size={14} /> Stop
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={start} disabled={busy || !canStart}>
+            <button className="btn btn-primary" onClick={start} disabled={busy || !canStart} data-primary>
               {busy ? <Loader2 size={14} className="spin" /> : <Play size={14} />} {st?.result ? "Trace again" : "Start trace"}
             </button>
           )}
