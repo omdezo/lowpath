@@ -145,7 +145,7 @@ func TestNewWiFiSurvey(t *testing.T) {
 		{BSSID: [6]byte{2, 0, 0x5e, 0, 0, 4}, FreqMHz: 5200, RSSI: -50},
 		{BSSID: [6]byte{2, 0, 0x5e, 0, 0, 5}, FreqMHz: 2437, RSSI: -40},
 	}
-	s := NewWiFiSurvey(vNow, ownAP, 5180, entries)
+	s := NewWiFiSurvey(vNow, ownAP, 5180, nil, entries)
 	if s.Networks != 5 || s.SameChannel != 2 || s.Overlapping != 0 || s.LoudestNeighbor == nil || *s.LoudestNeighbor != -64 {
 		t.Errorf("counts: %+v", s)
 	}
@@ -162,7 +162,7 @@ func TestNewWiFiSurvey(t *testing.T) {
 		{BSSID: [6]byte{3}, FreqMHz: 2462, RSSI: -60}, // 11
 		{BSSID: [6]byte{4}, FreqMHz: 2437, RSSI: -80}, // 6
 	}
-	s = NewWiFiSurvey(vNow, ownAP, 2437, two)
+	s = NewWiFiSurvey(vNow, ownAP, 2437, nil, two)
 	if s.SameChannel != 1 || s.Overlapping != 2 {
 		t.Errorf("2.4 GHz: same %d, overlapping %d", s.SameChannel, s.Overlapping)
 	}
@@ -170,10 +170,10 @@ func TestNewWiFiSurvey(t *testing.T) {
 		t.Errorf("no BSS Load element: %+v %q", s.Load, s.LoadNote)
 	}
 
-	if s := NewWiFiSurvey(vNow, ownAP, 5180, entries[1:]); s.Load != nil || !strings.Contains(s.LoadNote, "wasn't in the adapter's last scan") {
+	if s := NewWiFiSurvey(vNow, ownAP, 5180, nil, entries[1:]); s.Load != nil || !strings.Contains(s.LoadNote, "wasn't in the adapter's last scan") {
 		t.Errorf("own AP missing: %q", s.LoadNote)
 	}
-	if s := NewWiFiSurvey(vNow, [6]byte{}, 0, entries); s.Load != nil || s.SameChannel != 0 || !strings.Contains(s.LoadNote, "couldn't tell") {
+	if s := NewWiFiSurvey(vNow, [6]byte{}, 0, nil, entries); s.Load != nil || s.SameChannel != 0 || !strings.Contains(s.LoadNote, "couldn't tell") {
 		t.Errorf("unknown AP: %+v", s)
 	}
 }
@@ -292,7 +292,7 @@ func TestDecodeBSSList(t *testing.T) {
 	if out[0].BSSID != ownAP || out[0].FreqMHz != 5180 || out[0].RSSI != -55 || len(out[0].IEs) != 7 || out[1].IEs != nil || out[1].RSSI != -81 {
 		t.Errorf("%+v", out)
 	}
-	s := NewWiFiSurvey(vNow, ownAP, 5180, out)
+	s := NewWiFiSurvey(vNow, ownAP, 5180, nil, out)
 	if s.Load == nil || s.Load.Stations != 3 {
 		t.Errorf("survey from the list: %+v", s)
 	}

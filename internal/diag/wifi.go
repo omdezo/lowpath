@@ -128,6 +128,23 @@ func (l WiFiLink) Signal() WiFiSignal {
 	return WiFiSignal{RSSI: l.RSSI, Band: l.Band, Channel: l.Channel, WidthMHz: l.WidthMHz, Generation: l.Generation, TxMbps: l.TxMbps}
 }
 
+// widthAt is the width of the radio link on the channel at mhz (a primary
+// channel from a scan): on a Wi-Fi 7 multi-link connection the link on that
+// channel, whose width may differ from the strongest link's that the
+// reading shows. nil when no link is on that channel or its width is
+// unknown.
+func (l WiFiLink) widthAt(mhz int) *int {
+	for _, rl := range l.Links {
+		if OnChannel(rl.FreqMHz, rl.WidthMHz, mhz) {
+			return rl.WidthMHz
+		}
+	}
+	if len(l.Links) == 0 && l.FreqMHz != nil && OnChannel(*l.FreqMHz, l.WidthMHz, mhz) {
+		return l.WidthMHz
+	}
+	return nil
+}
+
 // WiFiSurvey is what the adapter's last scan says about the channel.
 type WiFiSurvey struct {
 	At time.Time `json:"at"`
@@ -137,8 +154,11 @@ type WiFiSurvey struct {
 	Load     *BSSLoad `json:"load"`
 	LoadNote string   `json:"load_note,omitempty"`
 	// Networks is every access point heard (each band of a router counts);
-	// SameChannel the other ones on the link's channel, which share its
-	// airtime; Overlapping the 2.4 GHz ones close enough to overlap it.
+	// SameChannel the other ones on the link's primary channel, which
+	// contend for all of its airtime; Overlapping the others whose channel
+	// shares spectrum with the link's: on 2.4 GHz the nearby channels, and
+	// on any band networks on a wide link's secondary channels or wide
+	// networks reaching over the link's channel.
 	Networks    int `json:"networks"`
 	SameChannel int `json:"same_channel"`
 	Overlapping int `json:"overlapping"`
@@ -200,21 +220,35 @@ func ParseBSSLoad(ies []byte) (BSSLoad, bool) {
 }
 
 // NewWiFiSurvey sums up a scan for the access point own on freqMHz (own
-// zero: unknown, so no BSS Load is looked up).
-func NewWiFiSurvey(at time.Time, own [6]byte, freqMHz int, entries []BSSEntry) WiFiSurvey {
+// zero: unknown, so no BSS Load is looked up). freqMHz is the link's
+// primary channel (or, failing that, the center of its whole channel) and
+// widthMHz its width as the adapter reports it (nil: unknown).
+//
+// "Same channel" stays "same primary channel": those networks contend for
+// every frame the link sends. A network whose channel only shares part of
+// the link's spectrum (a 20 MHz one on a secondary channel of an 80 MHz
+// link, or an 80 MHz one reaching over a 20 MHz link) counts as
+// overlapping: it takes airtime from the link's wide frames, not from all
+// of them.
+func NewWiFiSurvey(at time.Time, own [6]byte, freqMHz int, widthMHz *int, entries []BSSEntry) WiFiSurvey {
 	s := WiFiSurvey{At: at, FreqMHz: freqMHz, Networks: len(entries)}
 	var zero [6]byte
 	found := false
-	ownCh, ownBand := ChannelOf(freqMHz)
+	var apSpan ChannelSpan
 	for _, e := range entries {
 		if own != zero && e.BSSID == own {
 			found = true
+			apSpan = BSSSpan(e.FreqMHz, e.IEs)
 			if l, ok := ParseBSSLoad(e.IEs); ok {
 				s.Load = &l
 			}
+		}
+	}
+	link := linkSpan(freqMHz, widthMHz, apSpan).reach()
+	for _, e := range entries {
+		if own != zero && e.BSSID == own {
 			continue
 		}
-		ch, band := ChannelOf(e.FreqMHz)
 		switch {
 		case freqMHz > 0 && absInt(e.FreqMHz-freqMHz) <= 2:
 			s.SameChannel++
@@ -222,8 +256,7 @@ func NewWiFiSurvey(at time.Time, own [6]byte, freqMHz int, entries []BSSEntry) W
 				r := e.RSSI
 				s.LoudestNeighbor = &r
 			}
-		case band == "2.4" && ownBand == "2.4" && ch > 0 && ownCh > 0 && absInt(ch-ownCh) < 5:
-			// 20 MHz channels 5 MHz apart: up to 4 channels away overlap.
+		case BSSSpan(e.FreqMHz, e.IEs).reach().Overlaps(link):
 			s.Overlapping++
 		}
 	}
