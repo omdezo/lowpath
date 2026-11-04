@@ -372,3 +372,161 @@ func TestRefusePeer(t *testing.T) {
 		}
 	}
 }
+
+// gatePolicy is a PeerPolicy whose check of one account blocks until the
+// test opens the gate (a directory lookup that doesn't answer); every
+// other account is decided by inner at once.
+type gatePolicy struct {
+	slow    uint32
+	entered chan struct{} // a check of slow started
+	gate    chan struct{} // closed: the slow check may finish
+	once    sync.Once
+	inner   PeerPolicy
+}
+
+// open lets the slow check finish; safe to call more than once. Tests
+// also call it in a cleanup that runs before the server's, so a test that
+// fails with the check still blocked fails instead of hanging.
+func (g *gatePolicy) open() { g.once.Do(func() { close(g.gate) }) }
+
+func (g *gatePolicy) Admit(p PeerCred) error {
+	if p.UID == g.slow {
+		g.entered <- struct{}{}
+		<-g.gate
+	}
+	return g.inner.Admit(p)
+}
+
+func newGatePolicy(t *testing.T, slow uint32) *gatePolicy {
+	t.Helper()
+	g := &gatePolicy{
+		slow: slow, entered: make(chan struct{}, 4), gate: make(chan struct{}),
+		inner: &SessionPolicy{Sources: []Sessions{sessionsFake{name: "logind", in: map[uint32]bool{1000: true}}}},
+	}
+	return g
+}
+
+// listenGated serves "ok" on a socket whose peer check is policy.
+func listenGated(t *testing.T, policy PeerPolicy) (*SocketAPI, *peerQueue, net.Listener) {
+	t.Helper()
+	q := &peerQueue{}
+	api := NewSocketAPI(filepath.Join(socketDir(t), "api.sock"), testMode(), policy)
+	api.peer = q.next
+	ln, err := api.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })}
+	go hs.Serve(ln)
+	t.Cleanup(func() { hs.Close() })
+	return api, q, ln
+}
+
+// A check that takes long holds up only its own connection: root and a
+// signed-in user are served meanwhile, and the slow one is answered once
+// its check is done (#182).
+func TestSocketAPISlowPeerCheckDoesNotBlockOthers(t *testing.T) {
+	policy := newGatePolicy(t, 501)
+	api, q, _ := listenGated(t, policy)
+	t.Cleanup(policy.open) // before the server's cleanup closes it
+
+	q.push(PeerCred{UID: 501, PID: 77}, nil)
+	slow := make(chan int, 1)
+	go func() {
+		status, _, err := get(t, api)
+		if err != nil {
+			t.Errorf("slow peer: %v", err)
+		}
+		slow <- status
+	}()
+	<-policy.entered
+
+	for _, p := range []PeerCred{{UID: 0, PID: 1}, {UID: 1000, PID: 4242}} {
+		q.push(p, nil)
+		start := time.Now()
+		if status, _, err := get(t, api); err != nil || status != http.StatusOK {
+			t.Fatalf("%v while another check blocks: %d, %v", p, status, err)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("%v took %v while another check blocks", p, d)
+		}
+	}
+	select {
+	case s := <-slow:
+		t.Fatalf("the slow peer was answered (%d) before its check finished", s)
+	default:
+	}
+	policy.open()
+	if s := <-slow; s != http.StatusForbidden {
+		t.Errorf("slow peer, not signed in: %d, want 403", s)
+	}
+}
+
+// Close waits for a check in progress and ends its connection; nothing the
+// listener started runs on after it returns.
+func TestPeerListenerCloseWaitsForChecks(t *testing.T) {
+	policy := newGatePolicy(t, 501)
+	api, q, ln := listenGated(t, policy)
+	t.Cleanup(policy.open) // before the server's cleanup closes it
+	q.push(PeerCred{UID: 501}, nil)
+	c, err := api.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	<-policy.entered
+
+	closed := make(chan struct{})
+	go func() {
+		ln.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a check was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	policy.open()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close didn't return after the check finished")
+	}
+	l := ln.(*peerListener)
+	l.mu.Lock()
+	left := len(l.checking)
+	l.mu.Unlock()
+	if left != 0 {
+		t.Errorf("%d connections still tracked", left)
+	}
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if n, err := c.Read(make([]byte, 1)); err == nil {
+		t.Errorf("the checked connection is still open (read %d bytes)", n)
+	}
+	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Accept after Close: %v", err)
+	}
+	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("second Close: %v", err)
+	}
+}
+
+// Close doesn't wait out the refusal of a client that never sends its
+// request.
+func TestPeerListenerCloseEndsRefusals(t *testing.T) {
+	api, q, ln := listenGated(t, &SessionPolicy{})
+	refused := make(chan struct{}, 1)
+	ln.(RefusingListener).OnRefused(func(PeerCred, error) { refused <- struct{}{} })
+	q.push(PeerCred{UID: 65534}, nil)
+	c, err := api.Dial(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() // never writes: RefusePeer waits for its request
+	<-refused
+	start := time.Now()
+	ln.Close()
+	if d := time.Since(start); d > refuseWait/2 {
+		t.Errorf("Close took %v", d)
+	}
+}

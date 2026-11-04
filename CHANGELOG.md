@@ -140,6 +140,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   necessary addresses pass (#131).
 
 ### Changed
+- The service's Unix socket checks who connected off its accept loop: a
+  check that waits (a Mac's directory service that doesn't answer) holds
+  up only its own connection, not root or the signed-in user connecting
+  meanwhile. At most 32 checks run at once, and closing the socket ends
+  the connections still being checked or refused and waits for the
+  checks (#182).
 - Test fixtures and docs use documentation addresses and AS numbers
   (AS64496–AS64511) and neutral example networks and locations (#131).
 

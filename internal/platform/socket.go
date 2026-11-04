@@ -88,7 +88,7 @@ func (s *SocketAPI) Listen() (net.Listener, error) {
 	if s.admit == nil {
 		return ln, nil
 	}
-	return &peerListener{Listener: ln, admit: s.admit, peer: s.peer, reported: map[uint32]time.Time{}}, nil
+	return newPeerListener(ln, s.admit, s.peer), nil
 }
 
 // Dial connects to the socket; ErrServiceNotRunning when nothing listens,
@@ -154,15 +154,53 @@ type RefusingListener interface {
 // refusalReportEvery is how often one account's refusals are reported.
 const refusalReportEvery = time.Minute
 
-// peerListener hands Accept only the connections admit lets in.
+// maxPeerChecks bounds the peer checks in progress at once. Past it the
+// accept loop waits for a check to finish, so an account that floods the
+// socket with connections can't make the service start a goroutine for
+// each.
+const maxPeerChecks = 32
+
+// peerListener hands Accept only the connections admit lets in. The checks
+// run off the accept loop, one goroutine per connection: on macOS Admit can
+// wait seconds on a directory service that doesn't answer, and that must
+// not hold up root or the signed-in user connecting meanwhile.
 type peerListener struct {
 	net.Listener
 	admit PeerPolicy
 	peer  func(net.Conn) (PeerCred, error)
 
+	// out carries what Accept returns: admitted connections, and the
+	// accept loop's errors, which it hands on so the server can back off
+	// a temporary one or stop at the last one.
+	out    chan accepted
+	slots  chan struct{} // one per check in progress (maxPeerChecks)
+	done   chan struct{} // closed by Close
+	closer sync.Once
+	wg     sync.WaitGroup // the accept loop and every check
+
 	mu       sync.Mutex
 	report   func(PeerCred, error)
 	reported map[uint32]time.Time
+	checking map[net.Conn]struct{} // connections Close must end
+}
+
+type accepted struct {
+	c   net.Conn
+	err error
+}
+
+func newPeerListener(ln net.Listener, admit PeerPolicy, peer func(net.Conn) (PeerCred, error)) *peerListener {
+	l := &peerListener{
+		Listener: ln, admit: admit, peer: peer,
+		out:      make(chan accepted),
+		slots:    make(chan struct{}, maxPeerChecks),
+		done:     make(chan struct{}),
+		reported: map[uint32]time.Time{},
+		checking: map[net.Conn]struct{}{},
+	}
+	l.wg.Add(1)
+	go l.acceptLoop()
+	return l
 }
 
 func (l *peerListener) OnRefused(fn func(PeerCred, error)) {
@@ -171,25 +209,113 @@ func (l *peerListener) OnRefused(fn func(PeerCred, error)) {
 	l.mu.Unlock()
 }
 
+// Accept returns the next connection a check admitted.
 func (l *peerListener) Accept() (net.Conn, error) {
+	select {
+	case a := <-l.out:
+		return a.c, a.err
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+// Close stops accepting, ends the connections still being checked or
+// refused, and returns once every goroutine the listener started has: a
+// check in progress is waited for until its Admit returns.
+func (l *peerListener) Close() error {
+	err := net.ErrClosed
+	l.closer.Do(func() {
+		close(l.done)
+		err = l.Listener.Close()
+		l.mu.Lock()
+		for c := range l.checking {
+			c.Close()
+		}
+		l.mu.Unlock()
+		l.wg.Wait()
+	})
+	return err
+}
+
+// acceptLoop accepts connections and starts a check for each. The peer's
+// credentials are read here: the kernel recorded them at connect, so the
+// read is quick, and the checks see the connections in the order they came.
+func (l *peerListener) acceptLoop() {
+	defer l.wg.Done()
 	for {
 		c, err := l.Listener.Accept()
 		if err != nil {
-			return nil, err
+			select {
+			case l.out <- accepted{err: err}:
+			case <-l.done:
+				return
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			continue // temporary (out of file descriptors): Accept's caller backs off
 		}
-		p, err := l.peer(c)
-		if err != nil {
-			// Fail closed: an account that can't be named isn't served.
-			p = PeerCred{UID: unknownUID}
-			err = fmt.Errorf("%w: can't tell which account connected: %w", ErrPeerRefused, err)
-		} else {
-			err = l.admit.Admit(p)
+		p, perr := l.peer(c)
+		select {
+		case l.slots <- struct{}{}:
+		case <-l.done:
+			c.Close()
+			return
 		}
-		if err == nil {
-			return c, nil
+		if !l.track(c) {
+			<-l.slots
+			c.Close()
+			return
 		}
+		l.wg.Add(1)
+		go l.check(c, p, perr)
+	}
+}
+
+// track records a connection Close must end; false once closed.
+func (l *peerListener) track(c net.Conn) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	select {
+	case <-l.done:
+		return false
+	default:
+	}
+	l.checking[c] = struct{}{}
+	return true
+}
+
+func (l *peerListener) untrack(c net.Conn) {
+	l.mu.Lock()
+	delete(l.checking, c)
+	l.mu.Unlock()
+}
+
+// check admits c and hands it to Accept, or answers it with 403.
+func (l *peerListener) check(c net.Conn, p PeerCred, err error) {
+	defer l.wg.Done()
+	if err != nil {
+		// Fail closed: an account that can't be named isn't served.
+		p = PeerCred{UID: unknownUID}
+		err = fmt.Errorf("%w: can't tell which account connected: %w", ErrPeerRefused, err)
+	} else {
+		err = l.admit.Admit(p)
+	}
+	<-l.slots // the slow part is over: let the next check start
+	if err != nil {
 		l.refused(p, err)
-		go RefusePeer(c)
+		RefusePeer(c) // Close ends it early by closing c
+		l.untrack(c)
+		return
+	}
+	// From here c is the server's once Accept returns it, and a Close
+	// during a graceful shutdown must leave it alone; until then it is
+	// closed here if the listener closes first.
+	l.untrack(c)
+	select {
+	case l.out <- accepted{c: c}:
+	case <-l.done:
+		c.Close()
 	}
 }
 
