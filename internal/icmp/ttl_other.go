@@ -89,39 +89,63 @@ func sendError(err error) error {
 // echoTTL sends one echo with the given TTL through c, a socket that
 // receives every ICMP message the PC gets (a raw socket, or a macOS
 // datagram one), and waits for the destination's echo reply or a router's
-// error quoting the probe. Matching on the probe's own ID and sequence
-// keeps concurrent probes apart.
+// error quoting the probe.
 func echoTTL(c *icmp.PacketConn, to net.Addr, dst netip.Addr, ttl int, timeout time.Duration, v6 bool) (Reply, error) {
-	proto := 1
-	var reqType, replyType icmp.Type = ipv4.ICMPTypeEcho, ipv4.ICMPTypeEchoReply
+	p := ttlProbe{dst: dst.WithZone(""), id: uint16(rand.IntN(0x10000)), seq: uint16(rand.IntN(0x10000)), v6: v6}
+	r := newReplyReader(c, time.Now().Add(timeout))
+	start, err := p.send(c, to, ttl)
+	if err != nil {
+		return Reply{}, err
+	}
+	return p.await(r, start)
+}
+
+// ttlProbe is one TTL-limited echo request. Matching answers on the
+// probe's own ID and sequence keeps concurrent probes apart.
+type ttlProbe struct {
+	dst     netip.Addr // without a zone, as answers report it
+	id, seq uint16
+	v6      bool
+}
+
+// send sets c's TTL and sends the echo request, and returns when it did.
+func (p ttlProbe) send(c *icmp.PacketConn, to net.Addr, ttl int) (time.Time, error) {
+	var reqType icmp.Type = ipv4.ICMPTypeEcho
 	var err error
-	if v6 {
-		proto = 58
-		reqType, replyType = ipv6.ICMPTypeEchoRequest, ipv6.ICMPTypeEchoReply
+	if p.v6 {
+		reqType = ipv6.ICMPTypeEchoRequest
 		err = c.IPv6PacketConn().SetHopLimit(ttl)
 	} else {
 		err = c.IPv4PacketConn().SetTTL(ttl)
 	}
 	if err != nil {
-		return Reply{}, fmt.Errorf("icmp: set TTL: %w", err)
+		return time.Time{}, fmt.Errorf("icmp: set TTL: %w", err)
 	}
-
-	id, seq := uint16(rand.IntN(0x10000)), uint16(rand.IntN(0x10000))
 	// The kernel fills in the ICMPv6 checksum on these sockets.
-	msg := icmp.Message{Type: reqType, Body: &icmp.Echo{ID: int(id), Seq: int(seq), Data: payloadTTL[:]}}
+	msg := icmp.Message{Type: reqType, Body: &icmp.Echo{ID: int(p.id), Seq: int(p.seq), Data: payloadTTL[:]}}
 	b, err := msg.Marshal(nil)
 	if err != nil {
-		return Reply{}, err
+		return time.Time{}, err
 	}
-	c.SetReadDeadline(time.Now().Add(timeout))
 	start := time.Now()
 	if _, err := c.WriteTo(b, to); err != nil {
-		return Reply{}, sendError(err)
+		return time.Time{}, sendError(err)
 	}
-	want := dst.WithZone("")
+	return start, nil
+}
+
+// await reads until the destination's echo reply or a router's error
+// quoting the probe arrives, timed from start to reading it (which
+// includes a stall the read outlasted: see replyReader), or ErrTimeout.
+func (p ttlProbe) await(r *replyReader, start time.Time) (Reply, error) {
+	proto := 1
+	var replyType icmp.Type = ipv4.ICMPTypeEchoReply
+	if p.v6 {
+		proto, replyType = 58, ipv6.ICMPTypeEchoReply
+	}
 	buf := make([]byte, 1500)
 	for {
-		n, from, err := c.ReadFrom(buf)
+		n, from, err := r.ReadFrom(buf)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				return Reply{}, ErrTimeout
@@ -139,15 +163,15 @@ func echoTTL(c *icmp.PacketConn, to net.Addr, dst netip.Addr, ttl int, timeout t
 		}
 		switch body := m.Body.(type) {
 		case *icmp.Echo:
-			if m.Type == replyType && uint16(body.ID) == id && uint16(body.Seq) == seq && peer == want {
+			if m.Type == replyType && uint16(body.ID) == p.id && uint16(body.Seq) == p.seq && peer == p.dst {
 				return Reply{From: peer, RTT: rtt, Kind: Echo}, nil
 			}
 		case *icmp.TimeExceeded:
-			if q, qid, qseq, ok := quotedEcho(body.Data, v6); ok && q == want && qid == id && qseq == seq {
+			if q, qid, qseq, ok := quotedEcho(body.Data, p.v6); ok && q == p.dst && qid == p.id && qseq == p.seq {
 				return Reply{From: peer, RTT: rtt, Kind: TimeExceeded}, nil
 			}
 		case *icmp.DstUnreach:
-			if q, qid, qseq, ok := quotedEcho(body.Data, v6); ok && q == want && qid == id && qseq == seq {
+			if q, qid, qseq, ok := quotedEcho(body.Data, p.v6); ok && q == p.dst && qid == p.id && qseq == p.seq {
 				return Reply{From: peer, RTT: rtt, Kind: Unreachable}, nil
 			}
 		}

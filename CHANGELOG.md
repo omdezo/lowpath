@@ -144,6 +144,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- On Linux and macOS, a ping whose reply had already arrived no longer
+  counts as lost when the PC stalls past its timeout (a busy PC, a paused
+  virtual machine): Go gave up on the timeout before looking at the
+  socket, so *Before* loss jumped after each stall. The reply is now read
+  first, with its round trip timed when it is read, and the route trace's
+  probes through a raw socket (and macOS's unprivileged one) do the same
+  (#219).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent
