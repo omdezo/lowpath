@@ -15,7 +15,8 @@ type Locations struct {
 	// Steam libraries and need no entry here.
 	Prefixes []string
 	// Lutris are folders of Lutris game files (<game>.yml), whose
-	// "prefix:" lines name each game's Wine prefix.
+	// "prefix:" lines name each game's Wine prefix. Lutris's pga.db is
+	// not read (see lutrisPrefixes).
 	Lutris []string
 	// Heroic are Heroic's GamesConfig folders: <app>.json files whose
 	// "winePrefix" names each game's Wine prefix.
@@ -23,6 +24,26 @@ type Locations struct {
 	// Legendary are installed.json files of Legendary, the Epic Games
 	// client Heroic runs: each game's "install_path".
 	Legendary []string
+	// GOG are Heroic's gog_store/installed.json files: each GOG game's
+	// "install_path".
+	GOG []string
+	// Nile are installed.json files of Nile, the Amazon Games client
+	// Heroic runs: each game's "path".
+	Nile []string
+}
+
+// withHeroic adds the files Heroic keeps in each of its config folders
+// (paths.ts and constants.ts: GamesConfig, and the installed lists of the
+// Epic, GOG and Amazon clients it runs).
+func (l Locations) withHeroic(roots ...string) Locations {
+	j := filepath.Join
+	for _, r := range roots {
+		l.Heroic = append(l.Heroic, j(r, "GamesConfig"))
+		l.Legendary = append(l.Legendary, j(r, "legendaryConfig", "legendary", "installed.json"))
+		l.GOG = append(l.GOG, j(r, "gog_store", "installed.json"))
+		l.Nile = append(l.Nile, j(r, "nile_config", "nile", "installed.json"))
+	}
+	return l
 }
 
 // UnixLocations are the usual Linux or macOS places (goos "linux" or
@@ -32,8 +53,10 @@ type Locations struct {
 //
 // Sources: Steam's Linux install (~/.steam/steam links to
 // ~/.local/share/Steam), its Flatpak (com.valvesoftware.Steam) and Snap
-// packages, Heroic's paths.ts and legendary/constants.ts, Lutris and
-// Bottles defaults, CrossOver's and Whisky's bottle folders.
+// packages, Heroic's paths.ts, legendary/constants.ts, the gog_store
+// electron-store and nile_config (its Flatpak, com.heroicgameslauncher.hgl,
+// keeps the same files under ~/.var/app), Lutris and Bottles defaults,
+// CrossOver's and Whisky's bottle folders.
 func UnixLocations(goos, home string, env func(string) string) Locations {
 	if home == "" {
 		return Locations{}
@@ -50,12 +73,8 @@ func UnixLocations(goos, home string, env func(string) string) Locations {
 				j(support, "CrossOver", "Bottles", "*"),
 				j(home, "Library", "Containers", "com.isaacmarovitz.Whisky", "Bottles", "*"),
 			}, heroicPrefixes...),
-			Heroic: []string{j(support, "heroic", "GamesConfig")},
-			Legendary: []string{
-				j(support, "heroic", "legendaryConfig", "legendary", "installed.json"),
-				j(home, ".config", "legendary", "installed.json"),
-			},
-		}
+			Legendary: []string{j(home, ".config", "legendary", "installed.json")},
+		}.withHeroic(j(support, "heroic"))
 	case "linux":
 		config, data := j(home, ".config"), j(home, ".local", "share")
 		if env != nil {
@@ -69,7 +88,6 @@ func UnixLocations(goos, home string, env func(string) string) Locations {
 		flatpak := func(app string, parts ...string) string {
 			return j(append([]string{home, ".var", "app", app}, parts...)...)
 		}
-		heroicFlatpak := flatpak("com.heroicgameslauncher.hgl", "config", "heroic")
 		return Locations{
 			Steam: []string{
 				j(home, ".steam", "steam"),
@@ -91,13 +109,8 @@ func UnixLocations(goos, home string, env func(string) string) Locations {
 				flatpak("net.lutris.Lutris", "config", "lutris", "games"),
 				flatpak("net.lutris.Lutris", "data", "lutris", "games"),
 			},
-			Heroic: []string{j(config, "heroic", "GamesConfig"), j(heroicFlatpak, "GamesConfig")},
-			Legendary: []string{
-				j(config, "heroic", "legendaryConfig", "legendary", "installed.json"),
-				j(heroicFlatpak, "legendaryConfig", "legendary", "installed.json"),
-				j(config, "legendary", "installed.json"),
-			},
-		}
+			Legendary: []string{j(config, "legendary", "installed.json")},
+		}.withHeroic(j(config, "heroic"), flatpak("com.heroicgameslauncher.hgl", "config", "heroic"))
 	}
 	return Locations{}
 }

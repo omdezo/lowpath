@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,21 +60,30 @@ func (s *System) WinePrefixes() []string {
 	return out
 }
 
-// LauncherInstalls returns the game folders launchers say they installed
-// (Legendary's install_path, which Heroic uses for Epic games), each once,
-// only those that exist.
+// LauncherInstalls returns the game folders launchers say they installed,
+// each once, only those that exist: Heroic's Epic games (Legendary's
+// install_path), its GOG games (gog_store) and its Amazon games (Nile).
 func (s *System) LauncherInstalls() []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, f := range s.loc.Legendary {
-		b, err := readSmall(f)
-		if err != nil {
-			continue
-		}
-		for _, p := range legendaryInstalls(b) {
-			if k := dirKey(p); !seen[k] && isDir(p) {
-				seen[k] = true
-				out = append(out, p)
+	for _, l := range []struct {
+		files []string
+		parse func([]byte) []string
+	}{
+		{s.loc.Legendary, legendaryInstalls},
+		{s.loc.GOG, gogInstalls},
+		{s.loc.Nile, nileInstalls},
+	} {
+		for _, f := range l.files {
+			b, err := readSmall(f)
+			if err != nil {
+				continue
+			}
+			for _, p := range l.parse(b) {
+				if k := dirKey(p); !seen[k] && isDir(p) {
+					seen[k] = true
+					out = append(out, p)
+				}
 			}
 		}
 	}
@@ -87,6 +97,16 @@ func (s *System) LauncherInstalls() []string {
 //	  prefix: /home/player/Games/x
 //
 // A line scan is enough for these flat files and keeps a YAML parser out.
+//
+// Lutris also records each game's install folder in the "directory"
+// column of its SQLite database, pga.db, which is deliberately not read:
+// a correct reader of SQLite's file format (B-tree and overflow pages,
+// the schema's SQL to place a column that migrations added, rows still in
+// a -wal file) is far more code than it earns, and Lowpath takes no
+// SQLite library or cgo. A Wine game's folder is its prefix, found here
+// and by the ~/Games/* pattern, and Lutris names the folder after its
+// slug ("league-of-legends"), which the catalog's folder names rarely
+// match anyway.
 func lutrisPrefixes(b []byte) []string {
 	var out []string
 	sc := bufio.NewScanner(bytes.NewReader(b))
@@ -115,14 +135,47 @@ func heroicPrefixes(b []byte) []string { return jsonField(b, "winePrefix") }
 // {"install_path": "/home/player/Games/Heroic/rocketleague", ...}}.
 func legendaryInstalls(b []byte) []string { return jsonField(b, "install_path") }
 
+// gogInstalls reads Heroic's gog_store/installed.json, the electron-store
+// file its GOG library keeps (storeManagers/gog/electronStores.ts):
+// {"installed": [{"appName": "1207664663", "platform": "windows",
+// "install_path": "/home/player/Games/Heroic/The Witcher 3", ...}]}.
+func gogInstalls(b []byte) []string {
+	var f struct {
+		Installed []json.RawMessage `json:"installed"`
+	}
+	if json.Unmarshal(b, &f) != nil {
+		return nil
+	}
+	return pathsIn(f.Installed, "install_path")
+}
+
+// nileInstalls reads the installed.json of Nile, the Amazon Games client
+// Heroic runs (Nile's library manager writes it, Heroic's
+// storeManagers/nile reads it): [{"id": "amzn1.adg.product.…", "version":
+// "…", "path": "/home/player/Games/Heroic/Amazon/x"}].
+func nileInstalls(b []byte) []string {
+	var entries []json.RawMessage
+	if json.Unmarshal(b, &entries) != nil {
+		return nil
+	}
+	return pathsIn(entries, "path")
+}
+
 // jsonField collects the absolute paths in field of every entry of a JSON
-// object of objects. Entries are decoded one by one, so one odd entry
-// doesn't hide the others.
+// object of objects.
 func jsonField(b []byte, field string) []string {
 	var entries map[string]json.RawMessage
 	if json.Unmarshal(b, &entries) != nil {
 		return nil
 	}
+	return pathsIn(slices.Collect(maps.Values(entries)), field)
+}
+
+// pathsIn collects the absolute paths in field of each entry, a JSON
+// object. Entries are decoded one by one, so one odd entry doesn't hide
+// the others; a missing, empty or relative path is skipped, as there is
+// no telling what it is relative to.
+func pathsIn(entries []json.RawMessage, field string) []string {
 	var out []string
 	for _, raw := range entries {
 		var e map[string]json.RawMessage
