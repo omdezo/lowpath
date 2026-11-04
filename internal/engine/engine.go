@@ -130,6 +130,7 @@ type Engine struct {
 	paths     []*path
 	before    tracker
 	after     tracker
+	awake     *awakeClock // stalls the probe trackers leave out of a probe's age
 	probeFlow uint64
 	afterFlow uint64
 	flows     *flowTable
@@ -195,6 +196,7 @@ func Start(cfg Config) (*Engine, error) {
 		}
 		e.paths = append(e.paths, p)
 	}
+	e.watchStalls()
 
 	e.choose(time.Now(), cfg.Seed)
 
@@ -209,10 +211,22 @@ func Start(cfg Config) (*Engine, error) {
 	for _, p := range e.paths {
 		e.spawn(func() { e.readPath(p) })
 	}
+	e.awake.beat(time.Now()) // so a stall before the first heartbeat counts too
+	e.spawn(func() { e.awake.run(ctx) })
 	e.spawn(func() { e.probeLoop(ctx) })
 	e.spawn(func() { e.beforeLoop(ctx) })
 	e.spawn(func() { e.selectLoop(ctx) })
 	return e, nil
+}
+
+// watchStalls gives every probe tracker one awakeClock, so a process stall
+// doesn't read as probe loss; call before the first probe.
+func (e *Engine) watchStalls() {
+	e.awake = &awakeClock{}
+	e.before.awake, e.after.awake = e.awake, e.awake
+	for _, p := range e.paths {
+		p.probes.awake = e.awake
+	}
 }
 
 func (e *Engine) spawn(f func()) {
@@ -484,7 +498,12 @@ func (e *Engine) selectLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-t.C:
+		case <-t.C:
+			// The tick's value is when it was scheduled, which after a
+			// stall is up to a whole stall ago: judge at the real time, and
+			// put the stall on record before judging the probes it delayed.
+			now := time.Now()
+			e.awake.beat(now)
 			if e.flows.updatePrimary() {
 				e.primaryChanged()
 			}
@@ -710,6 +729,7 @@ func labels(ps []*path) string {
 
 func (e *Engine) Snapshot() Snapshot {
 	now := time.Now()
+	e.awake.beat(now) // a stall not yet on record would show as loss
 	r := e.routing.Load()
 	e.mu.Lock()
 	events := slices.Clone(e.events)
