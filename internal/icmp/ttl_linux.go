@@ -88,7 +88,10 @@ type pingQueue struct {
 // wait polls the socket until the probe's answer arrives or the deadline
 // passes. It blocks in poll(2) rather than in Go's network poller: the
 // poller reports a wakeup with only EPOLLERR set, which is how a queued
-// error announces itself, as an error of the read (ErrNotPollable).
+// error announces itself, as an error of the read (ErrNotPollable). It
+// reads before it checks the deadline, so an answer queued while the
+// process stalled past the deadline is still taken, as replyReader does
+// for the sockets the poller serves.
 func (q pingQueue) wait(start, deadline time.Time) (Reply, error) {
 	buf := make([]byte, 1500)
 	oob := make([]byte, 512)
