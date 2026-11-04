@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Radar, Wifi } from "lucide-react";
 import { api } from "../api";
-import type { WiFiLink, WiFiSurveyView, WiFiTuning, WiFiView } from "../types";
+import { usePoll } from "../usePoll";
+import type { WiFiLink, WiFiSurveyView, WiFiTuning } from "../types";
 import "../diag.css";
 
 // The Wi-Fi card: signal, band and link rate of the Wi-Fi adapter, read
@@ -35,41 +36,23 @@ function frequency(l: WiFiLink): string {
 }
 
 export function WiFiCard({ tuningEnabled }: { tuningEnabled: boolean }) {
-  const [v, setV] = useState<WiFiView | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { data: v, failed, set, fail } = usePoll(api.wifi, POLL_MS);
   const [surveying, setSurveying] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
   const alive = useRef(true);
-
-  const poll = useCallback(async () => {
-    window.clearTimeout(timer.current);
-    try {
-      const r = await api.wifi();
-      if (!alive.current) return;
-      setV(r);
-      setFailed(false);
-    } catch {
-      if (alive.current) setFailed(true);
-    }
-    if (alive.current) timer.current = window.setTimeout(poll, POLL_MS);
-  }, []);
-
   useEffect(() => {
     alive.current = true;
-    poll();
     return () => {
       alive.current = false;
-      window.clearTimeout(timer.current);
     };
-  }, [poll]);
+  }, []);
 
   const survey = async () => {
     setSurveying(true);
     try {
       const r = await api.wifiSurvey();
-      if (alive.current) setV(r);
+      if (alive.current) set(r);
     } catch {
-      if (alive.current) setFailed(true);
+      if (alive.current) fail();
     } finally {
       if (alive.current) setSurveying(false);
     }

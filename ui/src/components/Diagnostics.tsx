@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe, Monitor, Router, Server, Waypoints } from "lucide-react";
 import { api } from "../api";
 import type { GatewaySecond, GatewayStats, GatewayView, RouteSegment, SegmentId } from "../types";
 import { fmtMs, pct } from "../util";
+import { usePoll } from "../usePoll";
 import { BloatTest } from "./BloatTest";
 import { RouteTrace } from "./RouteTrace";
 import { Verdict } from "./Verdict";
@@ -92,7 +92,8 @@ export function RouteSegments({ segments }: { segments: RouteSegment[] }) {
 // --- Live router pings -------------------------------------------------------
 
 // The pinger keeps going while this polls (it stops 15 s after the last
-// poll), so the card polls once a second while it is on screen.
+// poll), so the card polls once a second while it is on screen and the
+// window is shown.
 const GATEWAY_POLL_MS = 1000;
 
 function linkName(v: GatewayView): string {
@@ -110,32 +111,10 @@ function routerTone(st: GatewayStats): "good" | "warn" | "bad" {
 }
 
 export function GatewayCard() {
-  const [v, setV] = useState<GatewayView | null>(null);
-  const [failed, setFailed] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  const alive = useRef(true);
-
-  const poll = useCallback(async () => {
-    window.clearTimeout(timer.current);
-    try {
-      const g = await api.gateway();
-      if (!alive.current) return;
-      setV(g);
-      setFailed(false);
-    } catch {
-      if (alive.current) setFailed(true);
-    }
-    if (alive.current) timer.current = window.setTimeout(poll, GATEWAY_POLL_MS);
-  }, []);
-
-  useEffect(() => {
-    alive.current = true;
-    poll();
-    return () => {
-      alive.current = false;
-      window.clearTimeout(timer.current);
-    };
-  }, [poll]);
+  // Paused while the window is hidden: each poll keeps the pinger on for
+  // 15 s, so the router is left alone 15 s after the window is (a boost
+  // keeps it on regardless).
+  const { data: v, failed } = usePoll(api.gateway, GATEWAY_POLL_MS);
 
   const st = v?.state === "on" ? v.stats : null;
   const tone = st ? routerTone(st) : "none";

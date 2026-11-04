@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Download, Stethoscope } from "lucide-react";
 import { api } from "../api";
-import type { CheckStatus, Confidence, Diagnosis, RouteSegment, VerdictCheck, VerdictId } from "../types";
+import { usePoll } from "../usePoll";
+import type { CheckStatus, Confidence, RouteSegment, VerdictCheck, VerdictId } from "../types";
 import "../diag.css";
 
 // The verdict: one plain answer to "why am I lagging?" built from the tests
@@ -43,34 +44,9 @@ const CONFIDENCE: Record<Confidence, string> = { high: "High confidence", medium
 // renderSegments draws the route part by part under the verdict (the
 // Diagnostics tab passes its segment bar).
 export function Verdict({ renderSegments }: { renderSegments?: (s: RouteSegment[]) => ReactNode } = {}) {
-  const [d, setD] = useState<Diagnosis | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { data: d, failed } = usePoll(api.verdict, POLL_MS);
   // The measurements under each check are long; they open on request.
   const [details, setDetails] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  const alive = useRef(true);
-
-  const poll = useCallback(async () => {
-    window.clearTimeout(timer.current);
-    try {
-      const v = await api.verdict();
-      if (!alive.current) return;
-      setD(v);
-      setFailed(false);
-    } catch {
-      if (alive.current) setFailed(true);
-    }
-    if (alive.current) timer.current = window.setTimeout(poll, POLL_MS);
-  }, []);
-
-  useEffect(() => {
-    alive.current = true;
-    poll();
-    return () => {
-      alive.current = false;
-      window.clearTimeout(timer.current);
-    };
-  }, [poll]);
 
   const v = d?.verdict;
   // The first check that found something gave the verdict; its facts are
