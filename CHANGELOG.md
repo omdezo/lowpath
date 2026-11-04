@@ -144,6 +144,13 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- A process list that couldn't be read no longer counts as "every game
+  exited": with *Stop on game exit* on, one failed scan mid-match used to
+  end the boost and log "game exited". Now the last scan, the library's
+  running badges and the session are kept until a scan reads the list
+  (logged at most once a minute); Windows retries a snapshot that fails
+  with `ERROR_BAD_LENGTH`, and the conflict check lists running programs
+  as unchecked instead of saying no booster runs (#211).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent

@@ -77,8 +77,8 @@ func TestInstalledAndFindExe(t *testing.T) {
 // Every OS answers: real data, or an honest "unsupported", never a panic.
 func TestSystemOnThisOS(t *testing.T) {
 	s := New()
-	if s.Running() == nil {
-		t.Error("Running returned nil")
+	if run, err := s.Running(); err != nil || run == nil {
+		t.Errorf("Running = %v, %v", run, err)
 	}
 	if p := s.RunningExe([]string{"no-such-program-lowpath.exe"}); p != "" {
 		t.Errorf("RunningExe of nothing = %q", p)
@@ -103,8 +103,8 @@ func TestSystemSeesSelf(t *testing.T) {
 		t.Skip(err)
 	}
 	s := New()
-	if name := filepath.Base(exe); !s.Running()[strings.ToLower(name)] {
-		t.Errorf("%q not among the running programs", name)
+	if run, err := s.Running(); err != nil || !run[strings.ToLower(filepath.Base(exe))] {
+		t.Errorf("%q not among the running programs: %v, %v", filepath.Base(exe), run, err)
 	}
 	got := s.RunningExe([]string{filepath.Base(exe)})
 	if real, _ := filepath.EvalSymlinks(exe); got != exe && got != real {

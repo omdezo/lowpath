@@ -197,7 +197,10 @@ func TestSystemWithProcessTable(t *testing.T) {
 		{PID: 11, Name: "cs2", Names: []string{"cs2"}, Exe: filepath.Join(t.TempDir(), "gone")},
 		{PID: 12, Name: "dota2", Names: []string{"dota2"}},
 	}}, Locations{})
-	run := s.Running()
+	run, err := s.Running()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, n := range []string{"rocketleague.exe", "rocketleague.ex", "wine64-preloader", "cs2", "dota2"} {
 		if !run[n] {
 			t.Errorf("Running lacks %q: %v", n, run)
@@ -213,9 +216,12 @@ func TestSystemWithProcessTable(t *testing.T) {
 		t.Errorf("RunningExe of a removed or unknown file = %q", got)
 	}
 
-	broken := NewSystem(fakeTable{err: errors.New("no /proc")}, Locations{})
-	if run := broken.Running(); run == nil || len(run) != 0 || broken.RunningExe([]string{"cs2"}) != "" {
-		t.Errorf("unreadable process table: %v", run)
+	// An unreadable process table is an error, not "nothing runs": a
+	// game that is still running must not look like it exited.
+	noProc := errors.New("no /proc")
+	broken := NewSystem(fakeTable{err: noProc}, Locations{})
+	if run, err := broken.Running(); run != nil || !errors.Is(err, noProc) || broken.RunningExe([]string{"cs2"}) != "" {
+		t.Errorf("unreadable process table: %v, %v", run, err)
 	}
 }
 

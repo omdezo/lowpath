@@ -71,8 +71,17 @@ func TestFakeParts(t *testing.T) {
 	}
 	f.Games.SetRunning("CS2.exe")
 	f.Games.SetExe("cs2.exe", "/games/cs2.exe")
-	if !f.Games.Running()["cs2.exe"] || f.Games.RunningExe([]string{"Cs2.exe"}) != "/games/cs2.exe" {
-		t.Fatal("running game not reported")
+	if run, err := f.Games.Running(); err != nil || !run["cs2.exe"] || f.Games.RunningExe([]string{"Cs2.exe"}) != "/games/cs2.exe" {
+		t.Fatalf("running game not reported: %v, %v", run, err)
+	}
+	unreadable := errors.New("snapshot failed")
+	f.Games.FailRunning(unreadable)
+	if run, err := f.Games.Running(); run != nil || !errors.Is(err, unreadable) {
+		t.Fatalf("failed scan: %v, %v", run, err)
+	}
+	f.Games.FailRunning(nil)
+	if run, err := f.Games.Running(); err != nil || !run["cs2.exe"] {
+		t.Fatalf("scan after a failure: %v, %v", run, err)
 	}
 	if err := f.Privileges.Relaunch([]string{"-x"}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Relaunch without a prompt: %v", err)

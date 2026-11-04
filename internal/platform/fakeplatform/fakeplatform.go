@@ -550,6 +550,7 @@ func (p *Privileges) Relaunches() [][]string {
 type Games struct {
 	mu      sync.Mutex
 	running map[string]bool
+	runErr  error // non-nil: Running fails with it
 	exes    map[string]string
 	libs    []string
 	roots   []string
@@ -565,6 +566,15 @@ func (g *Games) SetRunning(names ...string) {
 	}
 	g.mu.Lock()
 	g.running = m
+	g.mu.Unlock()
+}
+
+// FailRunning makes Running fail with err (a process list that couldn't be
+// read) until it is called again with nil; the running processes set with
+// SetRunning are kept for when it succeeds again.
+func (g *Games) FailRunning(err error) {
+	g.mu.Lock()
+	g.runErr = err
 	g.mu.Unlock()
 }
 
@@ -593,13 +603,16 @@ func (g *Games) SetWine(driveC, installs []string) {
 	g.wine, g.install = slices.Clone(driveC), slices.Clone(installs)
 }
 
-func (g *Games) Running() map[string]bool {
+func (g *Games) Running() (map[string]bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.running == nil {
-		return map[string]bool{}
+	if g.runErr != nil {
+		return nil, g.runErr
 	}
-	return maps.Clone(g.running)
+	if g.running == nil {
+		return map[string]bool{}, nil
+	}
+	return maps.Clone(g.running), nil
 }
 
 func (g *Games) RunningExe(names []string) string {

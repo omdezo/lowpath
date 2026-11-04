@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -463,22 +464,33 @@ func TestRunningGamesFromDetector(t *testing.T) {
 	}
 }
 
+// unreadable in a scan list is a scan whose process list couldn't be read.
+const unreadable = "<unreadable>"
+
 // Stop on game exit: the session ends only after the game was seen while
 // it was on and is then gone, and the log says when the game was first
-// seen, so a session that never ended shows which half was missing.
+// seen, so a session that never ended shows which half was missing. A scan
+// that couldn't read the process list is neither: it keeps the session,
+// and the next scan that reads the list decides.
 func TestStopOnGameExit(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		stopOn bool
-		scans  [][]string // what runs at each scan, in order
-		ends   bool
-		seen   int // "game seen" log lines
+		scans  [][]string // what runs at each scan, in order (or unreadable)
+		endsAt int        // the scan (1-based) after which the session is over; 0: never
+		seen   int        // "game seen" log lines
+		fails  int        // "couldn't read" log lines
 	}{
-		{name: "seen then gone", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {"LPCHECK.EXE"}, {}}, ends: true, seen: 1},
+		{name: "seen then gone", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {"LPCHECK.EXE"}, {}}, endsAt: 3, seen: 1},
 		{name: "never seen", stopOn: true, scans: [][]string{{}, {}, {}}},
 		{name: "only another game", stopOn: true, scans: [][]string{{"cs2.exe"}, {}}},
 		{name: "gone, setting off", stopOn: false, scans: [][]string{{"lpcheck.exe"}, {}, {}}, seen: 1},
 		{name: "back after a gap", stopOn: false, scans: [][]string{{"lpcheck.exe"}, {}, {"lpcheck.exe"}}, seen: 1},
+		{name: "failed scan mid-game", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {unreadable}, {"lpcheck.exe"}}, seen: 1, fails: 1},
+		{name: "failing scans mid-game", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {unreadable}, {unreadable}, {unreadable}}, seen: 1, fails: 1},
+		{name: "failed scan after the exit", stopOn: true, scans: [][]string{{"lpcheck.exe"}, {unreadable}, {}, {}}, endsAt: 3, seen: 1, fails: 1},
+		{name: "failed scan before the game", stopOn: true, scans: [][]string{{unreadable}, {"lpcheck.exe"}, {}}, endsAt: 3, seen: 1, fails: 1},
+		{name: "failed scan only", stopOn: true, scans: [][]string{{unreadable}, {}}, fails: 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fc := newFake(t)
@@ -493,21 +505,62 @@ func TestStopOnGameExit(t *testing.T) {
 			if code := call(t, ts, "POST", "/api/apply", `{"game_id":"`+g.ID+`","mode":"smart"}`, nil); code != 200 {
 				t.Fatalf("apply: %d", code)
 			}
-			for _, procs := range c.scans {
-				fc.Games.SetRunning(procs...)
+			for i, procs := range c.scans {
+				if slices.Equal(procs, []string{unreadable}) {
+					fc.Games.FailRunning(errors.New("snapshot failed"))
+				} else {
+					fc.Games.FailRunning(nil)
+					fc.Games.SetRunning(procs...)
+				}
 				srv.scanRunning()
-			}
-			if lv := srv.live(); (lv.Session == nil) != c.ends {
-				t.Errorf("session after the scans: %+v, want ended %v", lv.Session, c.ends)
+				over := c.endsAt != 0 && i+1 >= c.endsAt
+				if lv := srv.live(); (lv.Session == nil) != over {
+					t.Fatalf("after scan %d (%q): session %+v, want ended %v", i+1, procs, lv.Session, over)
+				}
 			}
 			out := log.String()
 			if n := strings.Count(out, `msg="game seen during the session" game=`+g.ID); n != c.seen {
 				t.Errorf("%d \"game seen\" lines, want %d:\n%s", n, c.seen, out)
 			}
-			if exited := strings.Contains(out, "game exited, stopping optimization"); exited != c.ends {
-				t.Errorf("game exit logged %v, want %v:\n%s", exited, c.ends, out)
+			if exited := strings.Contains(out, "game exited, stopping optimization"); exited != (c.endsAt != 0) {
+				t.Errorf("game exit logged %v, want %v:\n%s", exited, c.endsAt != 0, out)
+			}
+			// Scans 3 s apart fail within the minute: logged once.
+			if n := strings.Count(out, "couldn't read the running programs"); n != c.fails {
+				t.Errorf("%d \"couldn't read\" lines, want %d:\n%s", n, c.fails, out)
 			}
 		})
+	}
+}
+
+// A scan that can't read the process list keeps the library's running
+// badges: the game is still running as far as anyone knows.
+func TestFailedScanKeepsRunningGames(t *testing.T) {
+	fc := newFake(t)
+	fc.Games.SetRunning("cs2.exe")
+	ts, srv := newRealServer(t, fc)
+	srv.scanRunning()
+	fc.Games.FailRunning(errors.New("snapshot failed"))
+	fc.Games.SetRunning() // what a successful scan would see now
+	srv.scanRunning()
+	running := func() map[string]bool {
+		var b bootstrap
+		call(t, ts, "GET", "/api/bootstrap", "", &b)
+		out := map[string]bool{}
+		for _, g := range b.Games {
+			if g.Running {
+				out[g.ID] = true
+			}
+		}
+		return out
+	}
+	if got := running(); len(got) != 1 || !got["cs2"] {
+		t.Errorf("running after a failed scan = %v, want only cs2", got)
+	}
+	fc.Games.FailRunning(nil)
+	srv.scanRunning()
+	if got := running(); len(got) != 0 {
+		t.Errorf("running after the game exited = %v, want none", got)
 	}
 }
 

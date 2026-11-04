@@ -52,7 +52,10 @@ type Privileges interface {
 // GameDetector finds installed and running games.
 type GameDetector interface {
 	// Running returns the lower-cased image names of all running processes.
-	Running() map[string]bool
+	// It returns a nil map and an error when the process list couldn't be
+	// read: that says nothing about which programs run, so callers keep what
+	// they knew rather than reading it as "nothing runs".
+	Running() (map[string]bool, error)
 	// RunningExe returns the full path of a running process with one of the
 	// given image names, or "" when none runs or the OS won't tell.
 	RunningExe(names []string) string

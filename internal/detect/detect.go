@@ -4,6 +4,7 @@ package detect
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"io/fs"
 	"os"
@@ -40,19 +41,24 @@ func NewSystem(procs owner.ProcessTable, loc Locations) *System {
 }
 
 // Running returns the lower-cased image names of all running processes:
-// on Linux and macOS every name a process goes by (see owner.Program).
-func (s *System) Running() map[string]bool {
+// on Linux and macOS every name a process goes by (see owner.Program). An
+// unreadable process list is an error, never an empty list: "nothing runs"
+// would end a boost whose game is still running (Stop on game exit).
+func (s *System) Running() (map[string]bool, error) {
 	if s.procs == nil {
 		return running()
 	}
+	progs, err := s.procs.Programs()
+	if err != nil {
+		return nil, fmt.Errorf("detect: list running programs: %w", err)
+	}
 	out := map[string]bool{}
-	progs, _ := s.procs.Programs() // unreadable: nothing found runs
 	for _, p := range progs {
 		for _, n := range p.Names {
 			out[strings.ToLower(n)] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
 // RunningExe returns the full path of a running process with one of the

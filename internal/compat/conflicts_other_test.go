@@ -13,7 +13,9 @@ import (
 
 type noProcs struct{}
 
-func (noProcs) Running() map[string]bool { return map[string]bool{"lowpath.test": true} }
+func (noProcs) Running() (map[string]bool, error) {
+	return map[string]bool{"lowpath.test": true}, nil
+}
 
 func TestUnixSystem(t *testing.T) {
 	sys := NewSystem(noProcs{}, diag.NewNetStats())
@@ -29,5 +31,19 @@ func TestUnixSystem(t *testing.T) {
 	}
 	if !slices.ContainsFunc(ads, func(a Adapter) bool { return strings.HasPrefix(a.Name, "lo") && a.Up }) {
 		t.Errorf("no loopback adapter among %d", len(ads))
+	}
+}
+
+type failingProcs struct{ err error }
+
+func (f failingProcs) Running() (map[string]bool, error) { return nil, f.err }
+
+// A process list that couldn't be read is an error, so the report lists
+// running programs as unchecked instead of saying no booster runs.
+func TestUnixSystemUnreadableProcesses(t *testing.T) {
+	unreadable := errors.New("no /proc")
+	sys := NewSystem(failingProcs{unreadable}, diag.NewNetStats())
+	if p, err := sys.Processes(); p != nil || !errors.Is(err, unreadable) {
+		t.Errorf("Processes = %v, %v; want %v", p, err, unreadable)
 	}
 }

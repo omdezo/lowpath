@@ -60,8 +60,9 @@ type System interface {
 
 // ProcessLister is the running process list (platform.GameDetector).
 type ProcessLister interface {
-	// Running returns the lower-cased image names of running processes.
-	Running() map[string]bool
+	// Running returns the lower-cased image names of running processes, or
+	// an error when the list couldn't be read.
+	Running() (map[string]bool, error)
 }
 
 // RouteFinder finds the interface that carries internet traffic
@@ -70,14 +71,19 @@ type RouteFinder interface {
 	DefaultRoute() (diag.Route, error)
 }
 
-// processNames is the running process list as a slice.
-func processNames(p ProcessLister) []string {
-	run := p.Running()
+// processNames is the running process list as a slice. A list that
+// couldn't be read is an error, so the report says running programs were
+// unchecked instead of that none of the boosters run.
+func processNames(p ProcessLister) ([]string, error) {
+	run, err := p.Running()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]string, 0, len(run))
 	for n := range run {
 		out = append(out, n)
 	}
-	return out
+	return out, nil
 }
 
 // routeIndex asks r which interface carries internet traffic.

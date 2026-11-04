@@ -25,7 +25,7 @@ func NewSystem(procs ProcessLister, route RouteFinder) System {
 	return windowsSystem{procs: procs, route: route}
 }
 
-func (w windowsSystem) Processes() ([]string, error) { return processNames(w.procs), nil }
+func (w windowsSystem) Processes() ([]string, error) { return processNames(w.procs) }
 
 func (w windowsSystem) DefaultRoute() (int, error) { return routeIndex(w.route) }
 
