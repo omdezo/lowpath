@@ -20,11 +20,7 @@ func (c *liveClock) set(at time.Duration) { c.now.Store(int64(at)) }
 
 // testLink is a Link without sockets: send runs the real impairment path,
 // on the test's clock.
-func testLink(p Profile, clock func() time.Duration) *Link {
-	l := &Link{clock: clock, imp: newImpairer(p.Seed)}
-	l.profile.Store(&p)
-	return l
-}
+func testLink(p Profile, clock func() time.Duration) *Link { return newLink(p, clock) }
 
 func testSegment(p Profile, clock func() time.Duration) *Segment {
 	s := NewSegment(p)
@@ -137,7 +133,7 @@ func TestSegmentAddsToLink(t *testing.T) {
 	if l.Segment() != seg {
 		t.Fatal("Segment() doesn't return the attached segment")
 	}
-	if drop, d := l.imp.decide(l.profile.Load(), 0); drop || d != 20*time.Millisecond {
+	if drop, d := l.up.decide(0); drop || d != 20*time.Millisecond {
 		t.Fatalf("link alone: drop %v delay %v", drop, d)
 	}
 	sent := make(chan time.Time, 1)

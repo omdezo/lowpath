@@ -518,7 +518,7 @@ Each milestone ends with a field test on a real gaming PC (the reference setup i
 | DSCP via `QOSSetFlow` toggle; Delivery Optimization throttle toggle (with revert) | S | `internal/diag/qos_windows.go` |
 | Optional RS FEC for TCP streams / > 200 pps | M | `internal/fec` |
 | Live screen: lane vs delivered loss, switch markers, session summary | M | `ui/src/components/LiveGraph.tsx` |
-| netsim: Gilbert-Elliott bursts and a shared-segment topology | S | `internal/netsim` |
+| netsim: Gilbert-Elliott bursts, a shared-segment topology and a profile per direction | S | `internal/netsim` |
 | Per-direction redundancy policy (L11, egress side) | S | `internal/relay/egress.go`, `internal/engine/policy.go` |
 | **Multi-Internet** (moved up from M9): lanes bound to Ethernet + Wi-Fi + USB phone tether with `IP_UNICAST_IF`; metered-link rule (N9) | L | `internal/engine/path.go`, `internal/diag/links_windows.go` |
 

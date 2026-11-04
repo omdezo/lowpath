@@ -9,6 +9,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
 ## [Unreleased]
 
 ### Added
+- Network simulator: a link can impair the upload (game to server) and
+  the download (server to game) differently, such as 3% loss on the
+  download only, and each direction keeps its own seeded random state; a
+  shared segment stays one half-duplex radio unless it is split into a
+  channel per direction, as on a wired hop (#194).
 - Relay lane statistics: the egress relay records which path delivered
   each copy of the game's packets and once a second sends the client a
   TStats report per flow: each path's loss, the loss two paths share and
