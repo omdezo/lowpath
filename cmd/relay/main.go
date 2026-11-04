@@ -160,5 +160,5 @@ func logEgressStats(log *slog.Logger, e *relay.Egress) {
 		"pkts_up", s.PacketsUp, "pkts_down", s.PacketsDown, "dups", s.Duplicates,
 		"probes", s.Probes, "token_drops", s.TokenDrops, "policy_drops", s.PolicyDrops,
 		"limit_drops", s.LimitDrops, "too_big", s.TooBig, "malformed", s.Malformed,
-		"seqs_settled", s.Settled, "seqs_missing", s.Missing, "tstats_sent", s.Reports)
+		"seqs_settled", s.Settled, "seqs_missing", s.Missing, "tstats_sent", s.Reports, "tstats_bytes", s.ReportBytes)
 }

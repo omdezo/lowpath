@@ -20,6 +20,12 @@ import (
 //
 // A reader ignores bytes after the blocks, so a later version can append
 // fields. With MaxLanes lanes and every pair it is 813 bytes.
+//
+// A short report (Stats.Short) is the same version-1 payload with no lane
+// and no pair blocks: 13 bytes that carry self, seqs and lost. The egress
+// sends the full report down one lane a second and short ones down the
+// others, so every lane still learns its index without paying for the
+// blocks.
 const (
 	wireVersion = 1
 	headLen     = 5 + 4 + 4

@@ -1,6 +1,7 @@
 package tstats
 
 import (
+	"bytes"
 	"math"
 	"testing"
 	"time"
@@ -400,6 +401,34 @@ func TestWireRoundTrip(t *testing.T) {
 		if _, _, err := Parse(p); err == nil {
 			t.Errorf("%s: parsed", name)
 		}
+	}
+}
+
+// A short report is a version-1 payload with zero lane and pair blocks: the
+// version-1 decoder reads its self, seqs and lost, and finds no blocks.
+func TestWireShortReport(t *testing.T) {
+	var tr Tracker
+	feed(&tr, merge(run(0, 1, 30, 0, 4), run(3, 1, 30, 3, 4, 9)))
+	full := tr.Report(2 * time.Second)
+	if len(full.Lanes) == 0 || full.Seqs == 0 || full.Lost == 0 {
+		t.Fatalf("%+v", full)
+	}
+	b := full.Short().Append(nil, 3)
+	if len(b) != headLen {
+		t.Fatalf("short report is %d bytes, want %d", len(b), headLen)
+	}
+	if want := []byte{wireVersion, 3, byte(Up), 0, 0}; !bytes.Equal(b[:5], want) {
+		t.Fatalf("head % x, want % x", b[:5], want)
+	}
+	got, self, err := Parse(b)
+	if err != nil || self != 3 || got.Dir != Up || got.Seqs != full.Seqs || got.Lost != full.Lost {
+		t.Fatalf("parse: %+v self %d %v", got, self, err)
+	}
+	if len(got.Lanes) != 0 || len(got.Pairs) != 0 {
+		t.Fatalf("short report has blocks: %+v", got)
+	}
+	if _, ok := got.Lane(3); ok {
+		t.Fatal("a short report answers for a lane")
 	}
 }
 

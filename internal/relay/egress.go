@@ -6,7 +6,8 @@
 // It also pings every game server it delivers to and answers path probes with
 // that relay->server RTT, so clients can show the full route latency, and
 // keeps per-lane delivery statistics of each flow (which return address
-// delivered which sequence numbers), sent to the client once a second.
+// delivered which sequence numbers), sent to the client once a second: in
+// full down one lane, and as a short report naming the lane down the others.
 //
 // Forwarder is the other kind of relay: a hop in front of an egress that
 // gives clients another route to it.
@@ -95,10 +96,13 @@ type Stats struct {
 	TooBig      uint64 `json:"too_big"`      // game server packets over maxDatagram, dropped
 	Malformed   uint64 `json:"malformed"`    // not a valid overlay packet
 	// Upstream lane statistics: sequence numbers settled (some lane was
-	// carrying them), the ones no lane delivered, and TStats reports sent.
-	Settled uint64 `json:"seqs_settled"`
-	Missing uint64 `json:"seqs_missing"`
-	Reports uint64 `json:"tstats_sent"`
+	// carrying them), the ones no lane delivered, and TStats reports sent
+	// (full and short) with their bytes (UDP payload: overlay header and
+	// report), what the reports cost the clients' downlinks.
+	Settled     uint64 `json:"seqs_settled"`
+	Missing     uint64 `json:"seqs_missing"`
+	Reports     uint64 `json:"tstats_sent"`
+	ReportBytes uint64 `json:"tstats_bytes"`
 }
 
 type Egress struct {
@@ -107,6 +111,7 @@ type Egress struct {
 	token        uint64 // expected header token; 0 = open relay
 	allowPrivate bool
 	statsEvery   time.Duration // 0 = no TStats reports
+	now          func() time.Time
 	mon          *monitor
 	self         atomic.Pointer[addrSet]
 
@@ -120,7 +125,7 @@ type Egress struct {
 
 	packetsUp, packetsDown, duplicates, probes          atomic.Uint64
 	tokenDrops, policyDrops, limitDrops, tooBig, broken atomic.Uint64
-	settled, missing, reports                           atomic.Uint64
+	settled, missing, reports, reportBytes              atomic.Uint64
 }
 
 type flow struct {
@@ -142,6 +147,7 @@ type flow struct {
 	lanesUp  tstats.Tracker
 	reports  uint32 // TStats reports sent (their header seq)
 	reported tstats.Stats
+	sched    reportScheduler // which lane gets the full report, which a short one
 }
 
 // ListenEgress binds an open egress relay on addr (e.g. ":40000") that may
@@ -186,6 +192,7 @@ func ListenEgressOpts(addr string, o Options, log *slog.Logger) (*Egress, error)
 		token:        proto.TokenFromKey(o.Key),
 		allowPrivate: o.AllowPrivate,
 		statsEvery:   statsEvery,
+		now:          time.Now,
 		mon:          newMonitor(ping, interval),
 		flows:        map[uint64]*flow{},
 		start:        time.Now(),
@@ -228,6 +235,7 @@ func (e *Egress) Stats() Stats {
 		Settled:     e.settled.Load(),
 		Missing:     e.missing.Load(),
 		Reports:     e.reports.Load(),
+		ReportBytes: e.reportBytes.Load(),
 	}
 }
 
@@ -305,7 +313,7 @@ func (e *Egress) data(h proto.Header, payload []byte, src netip.AddrPort) {
 		e.policyDrops.Add(1)
 		return
 	}
-	now := time.Now()
+	now := e.now()
 	f := e.getFlow(h.Flow, h.Token, h.Addr, now)
 	if f == nil {
 		return
@@ -318,6 +326,7 @@ func (e *Egress) data(h proto.Header, payload []byte, src netip.AddrPort) {
 		// Every copy counts here, duplicates included: which lanes
 		// delivered a number is what the statistics are about.
 		f.lanesUp.Add(lane, h.Seq, h.TS, now.Sub(e.start))
+		f.sched.delivered(lane, first)
 	}
 	f.mu.Unlock()
 	if !first {
@@ -443,6 +452,7 @@ func (f *flow) dropPath(a netip.AddrPort) {
 		delete(f.lanes, a)
 		f.used &^= 1 << i
 		f.lanesUp.Close(i)
+		f.sched.forget(i)
 	}
 }
 
@@ -487,7 +497,7 @@ func (e *Egress) downstream(f *flow) {
 			continue
 		}
 		e.packetsDown.Add(1)
-		now := time.Now()
+		now := e.now()
 		f.mu.Lock()
 		f.lastDown = now
 		f.downSeq++
@@ -563,9 +573,11 @@ func (e *Egress) statsLoop(ctx context.Context) {
 }
 
 // sendStats sends each flow that settled new numbers since its last
-// report a TStats packet down every live return address. Each copy names
-// the lane it goes down, which is how the client learns which of its
-// paths each lane is: the relay only knows the addresses they come from.
+// report a TStats packet: the full report down one live return address and
+// a short one, at most every selfEvery, down each of the others (see
+// reportScheduler). Each copy names the lane it goes down, which is how the
+// client learns which of its paths each lane is: the relay only knows the
+// addresses they come from.
 func (e *Egress) sendStats(now time.Time) {
 	e.mu.Lock()
 	flows := make([]*flow, 0, len(e.flows))
@@ -574,8 +586,12 @@ func (e *Egress) sendStats(now time.Time) {
 	}
 	e.mu.Unlock()
 	at := now.Sub(e.start)
-	var targets []netip.AddrPort
-	var buf []byte
+	var (
+		targets []netip.AddrPort
+		lanes   []int
+		kinds   []reportKind
+		buf     []byte
+	)
 	for _, f := range flows {
 		f.mu.Lock()
 		s := f.lanesUp.Report(at)
@@ -589,15 +605,25 @@ func (e *Egress) sendStats(now time.Time) {
 		f.reports++
 		h := proto.Header{Type: proto.TStats, Token: f.token, Flow: f.id, Seq: f.reports, TS: uint32(at.Milliseconds()), Addr: f.dst}
 		targets = f.replyTargets(targets[:0])
-		lanes := make([]int, len(targets))
-		for i, a := range targets {
-			lanes[i] = f.lanes[a]
+		lanes = lanes[:0]
+		for _, a := range targets {
+			lanes = append(lanes, f.lanes[a])
 		}
+		kinds = f.sched.plan(now, lanes, kinds[:0])
 		f.mu.Unlock()
+		short := s.Short()
 		for i, a := range targets {
-			buf = s.Append(proto.Append(buf[:0], h, nil), lanes[i])
+			switch kinds[i] {
+			case reportFull:
+				buf = s.Append(proto.Append(buf[:0], h, nil), lanes[i])
+			case reportShort:
+				buf = short.Append(proto.Append(buf[:0], h, nil), lanes[i])
+			default:
+				continue
+			}
 			e.conn.WriteToUDPAddrPort(buf, a)
 			e.reports.Add(1)
+			e.reportBytes.Add(uint64(len(buf)))
 		}
 	}
 }

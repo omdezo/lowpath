@@ -53,16 +53,24 @@ next is in the [roadmap](roadmap.md).
   new sender (relay restart, egress failover) and starts over instead of
   rejecting it as too old.
 - `TStats` (type 4, egress → client, `internal/tstats`): about once a second
-  the egress sends each live return address of a flow that settled new
-  numbers a report of the flow's upstream lanes (header: the data flow's
-  id and token, `seq` = report counter, `ts` = relay clock, `addr` = game
-  server). Payload (version 1, big endian): `self` (the lane this copy went
-  down, so the client maps lanes to its paths), direction, cumulative
-  `seqs` / `lost` (numbers no lane delivered), per lane `{index, id,
-  expected, lost, late, n00, n01, n10, n11, jitter_us}` and per lane pair
-  `{a, b, both, lost_a, lost_b, joint}`; at most 813 bytes. Counters are
-  cumulative, as in RTCP receiver reports, so a lost report loses nothing;
+  the egress sends a flow that settled new numbers a report of its upstream
+  lanes (header: the data flow's id and token, `seq` = report counter,
+  `ts` = relay clock, `addr` = game server). Payload (version 1, big
+  endian): `self` (the lane this copy went down, so the client maps lanes
+  to its paths), direction, cumulative `seqs` / `lost` (numbers no lane
+  delivered), per lane `{index, id, expected, lost, late, n00, n01, n10,
+  n11, jitter_us}` and per lane pair `{a, b, both, lost_a, lost_b, joint}`;
+  13 + 37·lanes + 18·pairs bytes, at most 813. Counters are cumulative, as
+  in RTCP receiver reports, so a lost report loses nothing;
   `tstats.Stats.Since` takes a window. Older clients ignore the type.
+  The full report goes down one live return address per report; the
+  others get a short report, the same version-1 payload with zero lane and
+  pair blocks (13 bytes: `self`, `seqs`, `lost`), when they are new and
+  then every 3 s (at most 4 s with a late tick), so every lane hears its
+  `self` well within 5 s. A reader takes lane and pair counters only from
+  a report that carries them (a short one still has current `seqs` and
+  `lost`); a lane that hears no `self` for 5 s is getting nothing. Which
+  lane gets the full report is in the relay section below.
 
 ## Platform layer — `internal/platform`, `internal/owner`
 
@@ -619,8 +627,28 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
   milliseconds, so a steady path still reads a few hundred microseconds).
   `Options.StatsInterval` (default 1 s, negative = off) paces the `TStats`
   reports; a quiet flow sends none. `Stats` adds `seqs_settled`,
-  `seqs_missing` and `tstats_sent`. Downstream lanes are the client's to
+  `seqs_missing`, `tstats_sent` and `tstats_bytes` (reports and their UDP
+  payload bytes, full and short). Downstream lanes are the client's to
   measure with the same `Tracker` (L11).
+- Which lane gets the full `TStats` report (`reportScheduler`, one per
+  flow): sending it down every lane (#208) cost each lane 166 B/s with two
+  lanes and 330 B/s with four (IPv4: 61 bytes of IP, UDP and overlay
+  header per datagram), 0.6 to 1.2 MB an hour on a tethered phone's
+  downlink. The counters are cumulative, so one copy a second is enough;
+  only `self` must reach every lane. The full report therefore stays on
+  one lane, and the others get a short report (74 B on the wire) every
+  3 s: about 0.09 MB an hour each. The full lane is sticky, not rotated,
+  so the cost isn't spread onto a metered lane: it is the lane that won
+  the most upstream races (first copies of a number) in the last
+  interval, the path the game's packets actually ride, which a tethered
+  phone, usually the slower path, rarely is. It moves at once when that
+  lane stops being a live return address, or stops delivering upstream
+  while another lane still does (dropped or broken; when every lane is
+  quiet it stays), and to a lane that won at least twice as many races
+  for 3 reports running, so lanes about as fast as each other don't trade
+  it back and forth. A lane slot given to a new return address starts
+  over: it gets its `self` at the next report and never inherits the full
+  report.
 - `cmd/relay` flags: `-listen :40000`, `-key` (or env `LOWPATH_RELAY_KEY`),
   `-forward host:port` (forwarder hop), `-allow-private`, `-stats 60s`
   (periodic log of flows/packets/drops).
@@ -642,7 +670,9 @@ func (e *Engine) Send(local, remote netip.AddrPort, payload []byte) bool
 - Tests: wrong token dropped, private destination blocked, probe reply carries
   the (fake) pinger's RTT, open relay still works, the limits above, and
   `TStats` counts through two netsim lanes on IPv4 and IPv6 loopback
-  matching the links' seeded losses.
+  matching the links' seeded losses, and four lanes over 60 s on a fake
+  clock: `self` on every lane at least every 5 s, the full counters every
+  second, and under 0.3 MB an hour on every lane but the full one.
 
 ## Location and ISP — `internal/stun`, `internal/diag`
 
