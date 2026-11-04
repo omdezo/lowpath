@@ -144,6 +144,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- The conflict check hands out copies of its last report: the live view
+  used to share it, so code that changed a view (a client decoding into
+  the same value, in a test) rewrote what the next boost was checked
+  against, and the race detector caught it (#224).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent

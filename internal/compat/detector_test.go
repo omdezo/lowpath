@@ -339,3 +339,26 @@ func TestProductTable(t *testing.T) {
 		}
 	}
 }
+
+// A clone shares nothing with the report: changing it, down to a
+// conflict's evidence, leaves the original as it was. Nil stays nil and
+// empty stays empty, so the JSON doesn't change.
+func TestReportClone(t *testing.T) {
+	r := Report{
+		Conflicts: []Conflict{{ID: "exitlag", Found: []string{"ExitLag.exe is running"}}},
+		Unchecked: []string{"installed programs: denied"},
+	}
+	c := r.Clone()
+	c.Conflicts[0].ID = "changed"
+	c.Conflicts[0].Found[0] = "changed"
+	c.Unchecked[0] = "changed"
+	if r.Conflicts[0].ID != "exitlag" || r.Conflicts[0].Found[0] != "ExitLag.exe is running" || r.Unchecked[0] != "installed programs: denied" {
+		t.Errorf("changing the clone changed the report: %+v", r)
+	}
+	if e := (Report{Conflicts: []Conflict{}, Unchecked: []string{}}).Clone(); e.Conflicts == nil || e.Unchecked == nil {
+		t.Errorf("empty slices became nil: %+v", e)
+	}
+	if n := (Report{}).Clone(); n.Conflicts != nil || n.Unchecked != nil {
+		t.Errorf("nil slices became empty: %+v", n)
+	}
+}
