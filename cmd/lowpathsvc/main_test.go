@@ -162,12 +162,25 @@ func TestDispatch(t *testing.T) {
 	}
 }
 
+// fakeCDN answers the service's game-art downloads in memory with a tiny
+// JPEG, so the tests never reach Steam (#206).
+type fakeCDN struct{}
+
+func (fakeCDN) RoundTrip(r *http.Request) (*http.Response, error) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "image/jpeg")
+	rec.Write(append([]byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00"), make([]byte, 64)...))
+	return rec.Result(), nil
+}
+
 // runService runs the service on the fake platform until the test ends.
 func runService(t *testing.T, fp *fakeplatform.Fake, data string) (stop func() error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- newService(fp.Platform(), runOptions{data: data}).serve(ctx) }()
+	svc := newService(fp.Platform(), runOptions{data: data})
+	svc.art = &http.Client{Transport: fakeCDN{}}
+	go func() { done <- svc.serve(ctx) }()
 	stopped := false
 	stop = func() error {
 		if stopped {
@@ -268,6 +281,14 @@ func TestServeAPI(t *testing.T) {
 	}
 	if _, err := fe.Check(t.Context()); err == nil {
 		t.Error("still answering after stop")
+	}
+	// The game-art warm-up has stopped with the service: nothing is left
+	// half-written, and nothing writes into the folder any more (#206).
+	arts, _ := os.ReadDir(filepath.Join(data, "art"))
+	for _, e := range arts {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("half-written art left: %s", e.Name())
+		}
 	}
 	if fi, err := os.Stat(filepath.Join(data, "lowpath.log")); err != nil || fi.Size() == 0 {
 		t.Errorf("service log: %v", err)

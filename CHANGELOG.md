@@ -220,6 +220,14 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   the session to end in the API, then in the window. The log now says
   when the game was first seen during a session, so the check can say
   which half missed (#177, #201).
+- Shutting down stops the game-art warm-up: closing the app or the service
+  cancels the cover downloads still running and waits for them (and for
+  the learned-server and game-detection loops), so nothing writes into
+  the data folder afterwards and no half-written image is left in the art
+  folder. The service tests download art from a fake Steam CDN
+  instead of the internet, which also stops them failing now and then
+  with "directory is not empty" when removing their temporary folder
+  (#206).
 
 ## [0.2.0] - 2026-10-26
 

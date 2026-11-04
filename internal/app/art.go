@@ -56,7 +56,7 @@ const (
 type artStore struct {
 	dir    string // cache directory; "" = memory only (tests)
 	log    *slog.Logger
-	client *http.Client
+	client *http.Client    // Steam's CDN and store API (Config.ArtClient)
 	steam  func() []string // Steam client roots
 	libs   func() []string // Steam library common\ folders
 	games  platform.GameDetector
@@ -69,11 +69,16 @@ type artStore struct {
 	fetch chan struct{} // bounds concurrent downloads
 }
 
-func newArtStore(dir string, log *slog.Logger, games platform.GameDetector, icons platform.IconProvider) *artStore {
+// newArtStore keeps art in dir and downloads it with client; nil: the
+// internet, with a timeout.
+func newArtStore(dir string, log *slog.Logger, client *http.Client, games platform.GameDetector, icons platform.IconProvider) *artStore {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
 	return &artStore{
 		dir:    dir,
 		log:    log,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: client,
 		steam:  games.SteamRoots,
 		libs:   games.SteamLibraries,
 		games:  games,
@@ -88,8 +93,9 @@ func newArtStore(dir string, log *slog.Logger, games platform.GameDetector, icon
 var errNoArt = errors.New("no artwork for this game")
 
 // path returns a file holding the art, finding (and caching) it on first use.
-// Lookups for different games run in parallel; the same one runs once.
-func (a *artStore) path(g Game, kind string) (string, error) {
+// Lookups for different games run in parallel; the same one runs once. A
+// download stops when ctx ends.
+func (a *artStore) path(ctx context.Context, g Game, kind string) (string, error) {
 	k, ok := artKinds[kind]
 	if !ok {
 		return "", errNoArt
@@ -120,9 +126,12 @@ func (a *artStore) path(g Game, kind string) (string, error) {
 		return p, nil
 	}
 
-	p, err := a.find(g, kind, k, key)
+	p, err := a.find(ctx, g, kind, k, key)
 	a.mu.Lock()
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
+		// A lookup cut short (shutdown, the page closed) says nothing about
+		// the art: the next one tries again instead of waiting out
+		// artMissTTL.
 		a.miss[key] = time.Now()
 	} else {
 		a.files[key] = p
@@ -132,7 +141,7 @@ func (a *artStore) path(g Game, kind string) (string, error) {
 	return p, err
 }
 
-func (a *artStore) find(g Game, kind string, k artKind, key string) (string, error) {
+func (a *artStore) find(ctx context.Context, g Game, kind string, k artKind, key string) (string, error) {
 	cached := filepath.Join(a.dir, safeName(key)+k.ext)
 	if a.dir != "" {
 		if fi, err := os.Stat(cached); err == nil && fi.Size() > 0 {
@@ -153,12 +162,12 @@ func (a *artStore) find(g Game, kind string, k artKind, key string) (string, err
 	if a.dir == "" {
 		return "", errNoArt
 	}
-	b, err := a.download(steamCDN + strconv.Itoa(g.SteamApp) + "/" + k.cdn)
-	if err != nil && kind == "header" {
+	b, err := a.download(ctx, steamCDN+strconv.Itoa(g.SteamApp)+"/"+k.cdn)
+	if err != nil && kind == "header" && ctx.Err() == nil {
 		// Newer store pages keep the header under a hashed path; the store
 		// API knows it.
-		if u := a.headerURL(g.SteamApp); u != "" {
-			b, err = a.download(u)
+		if u := a.headerURL(ctx, g.SteamApp); u != "" {
+			b, err = a.download(ctx, u)
 		}
 	}
 	if err != nil {
@@ -227,13 +236,15 @@ func (a *artStore) exeIcon(g Game, out string) (string, error) {
 	return out, writeFileAtomic(out, buf.Bytes())
 }
 
-func (a *artStore) download(u string) ([]byte, error) {
+func (a *artStore) download(ctx context.Context, u string) ([]byte, error) {
 	if pu, err := url.Parse(u); err != nil || pu.Scheme != "https" || !steamHost(pu.Hostname()) {
 		return nil, fmt.Errorf("art: refusing %q", u)
 	}
-	a.fetch <- struct{}{}
-	defer func() { <-a.fetch }()
-	res, err := a.client.Get(u)
+	if err := a.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer a.release()
+	res, err := a.get(ctx, u)
 	if err != nil {
 		return nil, err
 	}
@@ -255,11 +266,13 @@ func (a *artStore) download(u string) ([]byte, error) {
 }
 
 // headerURL asks the Steam store for an app's header image address.
-func (a *artStore) headerURL(app int) string {
+func (a *artStore) headerURL(ctx context.Context, app int) string {
 	id := strconv.Itoa(app)
-	a.fetch <- struct{}{}
-	res, err := a.client.Get(steamAppAPI + id)
-	<-a.fetch
+	if a.acquire(ctx) != nil {
+		return ""
+	}
+	res, err := a.get(ctx, steamAppAPI+id)
+	a.release()
 	if err != nil {
 		return ""
 	}
@@ -276,6 +289,26 @@ func (a *artStore) headerURL(app int) string {
 	return body[id].Data.HeaderImage
 }
 
+// acquire takes one of the download slots, or gives up when ctx ends.
+func (a *artStore) acquire(ctx context.Context) error {
+	select {
+	case a.fetch <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (a *artStore) release() { <-a.fetch }
+
+func (a *artStore) get(ctx context.Context, u string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	return a.client.Do(req)
+}
+
 func steamHost(h string) bool {
 	return h == "steamstatic.com" || strings.HasSuffix(h, ".steamstatic.com") || h == "store.steampowered.com"
 }
@@ -288,7 +321,12 @@ func (s *Server) handleArt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", errors.New("unknown game"))
 		return
 	}
-	p, err := s.art.path(g, r.PathValue("kind"))
+	// The lookup ends with the request, or when the server closes: nothing
+	// may write into the art folder after Close.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(s.lifetime, cancel)()
+	p, err := s.art.path(ctx, g, r.PathValue("kind"))
 	if err != nil {
 		writeErr(w, 404, "no_art", errNoArt)
 		return
@@ -335,12 +373,16 @@ func existing(dirs []string) []string {
 
 func slicesClone(s []string) []string { return append([]string(nil), s...) }
 
+// writeFileAtomic writes b to path through a temporary file, so a reader
+// (or the next start) never finds half an image under the real name, and a
+// write that fails leaves nothing behind.
 func writeFileAtomic(path string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -354,11 +396,18 @@ func writeFileAtomic(path string, b []byte) error {
 }
 
 // warm finds every game's cover and icon ahead of time, a few at a time.
+// It returns once ctx has ended and the lookups it started have stopped.
 func (a *artStore) warm(ctx context.Context, games []Game) {
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	for _, g := range games {
 		for _, kind := range []string{"cover", "icon"} {
+			// select picks at random when both cases are ready: check
+			// first, so an ended ctx starts nothing.
+			if ctx.Err() != nil {
+				wg.Wait()
+				return
+			}
 			select {
 			case <-ctx.Done():
 				wg.Wait()
@@ -368,7 +417,7 @@ func (a *artStore) warm(ctx context.Context, games []Game) {
 			wg.Add(1)
 			go func() {
 				defer func() { <-sem; wg.Done() }()
-				a.path(g, kind)
+				a.path(ctx, g, kind)
 			}()
 		}
 	}
