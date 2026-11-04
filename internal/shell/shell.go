@@ -9,6 +9,7 @@ import (
 	"context"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -37,6 +38,8 @@ type Options struct {
 	InService bool
 	// ServiceNote: see app.Config.ServiceNote.
 	ServiceNote string
+	// ArtClient: see app.Config.ArtClient (nil: the internet).
+	ArtClient *http.Client
 }
 
 // Build wires the API server to the store, catalog, relays and the
@@ -71,7 +74,7 @@ func Build(ctx context.Context, o Options, plat *platform.Platform, logger *slog
 		Cache:  catalog.NewDirCache(filepath.Join(o.Data, "catalog")),
 		Log:    logger.With("component", "catalog"),
 	})
-	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: o.UI, Log: logger, Quit: quit, ArtDir: filepath.Join(o.Data, "art"),
+	cfg := app.Config{Store: store, Games: games, Relays: relays, Servers: servers, Platform: plat, UI: o.UI, Log: logger, Quit: quit, ArtDir: filepath.Join(o.Data, "art"), ArtClient: o.ArtClient,
 		TraceCount: o.TraceCount, TraceInterval: o.TraceInterval, Elevate: o.Elevate, InService: o.InService, ServiceNote: o.ServiceNote,
 		// While route mode captures, this file says so; finding it at the
 		// next start means that run was killed or crashed.

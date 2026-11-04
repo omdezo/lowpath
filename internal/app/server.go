@@ -63,6 +63,9 @@ type Config struct {
 	UI       fs.FS // nil: API only
 	Log      *slog.Logger
 	ArtDir   string // where downloaded and extracted game art is kept; "" = Steam's own cache only
+	// ArtClient downloads game art from Steam's CDN and store API. Nil:
+	// the internet, with a 10 s timeout. Tests pass a fake CDN.
+	ArtClient *http.Client
 
 	// Elevate relaunches the app as administrator (it returns once the new
 	// process is starting, or ErrElevateCancelled); Quit then asks this
@@ -152,6 +155,10 @@ type Server struct {
 	// bufferbloat test) runs under it.
 	lifetime context.Context
 	endLife  context.CancelFunc
+	// bg counts the loops Run starts. Close waits for them after ending
+	// lifetime, so none of them writes into the data folder (game art,
+	// learned servers) or touches the session once Close has returned.
+	bg sync.WaitGroup
 
 	// life serializes starting and stopping sessions, which take long enough
 	// (driver load, engine start) that s.mu must not be held across them.
@@ -270,7 +277,7 @@ func NewServer(cfg Config) (*Server, error) {
 		store: cfg.Store, games: cfg.Games, net: cfg.Network, relays: cfg.Relays, servers: cfg.Servers, sim: cfg.Sim,
 		plat: cfg.Platform, locator: cfg.Locator, log: cfg.Log, ui: cfg.UI, elevate: cfg.Elevate, quit: cfg.Quit,
 		auth:   newAuth(cfg.Session),
-		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.Platform.Games, cfg.Platform.Icons),
+		art:    newArtStore(cfg.ArtDir, cfg.Log, cfg.ArtClient, cfg.Platform.Games, cfg.Platform.Icons),
 		status: "idle", analysis: map[string]analysisResult{},
 		installed: map[string]bool{}, running: map[string]bool{},
 		done:     make(chan struct{}),
@@ -304,15 +311,28 @@ func NewServer(cfg Config) (*Server, error) {
 }
 
 // Run starts background detection; call once. The session is stopped when
-// ctx ends, but callers should still call Close for an orderly shutdown.
+// ctx ends, but callers should still call Close for an orderly shutdown:
+// it ends the background work Run started and waits for it.
 func (s *Server) Run(ctx context.Context) {
 	// Fetch the library's artwork in the background so covers are ready
-	// the first time the home screen opens.
-	go s.art.warm(ctx, s.allGames())
+	// the first time the home screen opens. It stops with ctx or Close,
+	// whichever comes first.
+	warm, endWarm := context.WithCancel(s.lifetime)
+	stopWarm := context.AfterFunc(ctx, endWarm)
+	games := s.allGames()
+	s.bg.Go(func() {
+		defer stopWarm()
+		defer endWarm()
+		s.art.warm(warm, games)
+	})
+	// Not waited for: one pass over the disk that writes nothing but
+	// s.installed, and Close shouldn't wait on a slow drive.
 	go s.scanInstalled()
-	go s.line.run(s.lifetime, s.lineInput)
+	s.bg.Go(func() { s.line.run(s.lifetime, s.lineInput) })
+	// Not waited for either: a scan writes nothing, and one stuck in an OS
+	// call would hold Close for conflictWait.
 	go s.conflicts.run(s.lifetime)
-	go func() {
+	s.bg.Go(func() {
 		// The current server card's flow learning: once a second, so the
 		// primary-server window counts seconds like a session's does.
 		t := time.NewTicker(time.Second)
@@ -325,8 +345,8 @@ func (s *Server) Run(ctx context.Context) {
 				s.current.tick(s.runningGames())
 			}
 		}
-	}()
-	go func() {
+	})
+	s.bg.Go(func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 		for {
@@ -335,15 +355,19 @@ func (s *Server) Run(ctx context.Context) {
 			case <-ctx.Done():
 				s.stopSession()
 				return
+			case <-s.lifetime.Done():
+				return // Close stops the session itself
 			case <-t.C:
 			}
 		}
-	}()
+	})
 }
 
 // Close stops the session (capture first, so the game's traffic goes direct
 // again), shuts the loopback relay and ends live streams so an HTTP shutdown
-// doesn't wait on them. No new session can start afterwards.
+// doesn't wait on them. No new session can start afterwards, and the
+// background work Run started (the game-art warm-up among it) has stopped
+// when Close returns, so the data folder can be removed.
 func (s *Server) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -356,6 +380,9 @@ func (s *Server) Close() {
 	s.bloat.stop("Lowpath is shutting down.")
 	s.trace.stop()
 	s.endLife()
+	// Before tearing down what the loops use: a tick mid-way finishes on
+	// a working current-server watch, then nothing runs.
+	s.bg.Wait()
 	s.current.close()
 	s.stopSession()
 	s.relays.Close()

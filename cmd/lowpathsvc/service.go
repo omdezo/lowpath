@@ -19,6 +19,9 @@ type service struct {
 	plat *platform.Platform
 	api  platform.ServiceAPI
 	o    runOptions
+	// art downloads game art; nil: Steam over the internet. Tests set a
+	// fake CDN so they never reach the network.
+	art *http.Client
 }
 
 func newService(plat *platform.Platform, o runOptions) *service {
@@ -66,7 +69,7 @@ func (s *service) serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	srv, err := shell.Build(ctx, shell.Options{Data: s.o.data, Relays: s.o.relays, InService: true}, s.plat, logger, cancel)
+	srv, err := shell.Build(ctx, shell.Options{Data: s.o.data, Relays: s.o.relays, InService: true, ArtClient: s.art}, s.plat, logger, cancel)
 	if err != nil {
 		ln.Close()
 		logger.Error("can't start", "err", err)
