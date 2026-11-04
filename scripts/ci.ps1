@@ -13,7 +13,8 @@
                 darwin/arm64, darwin/amd64 and windows/arm64; the whole module
                 (tests included) vets for linux and darwin
       ui        npm ci (when needed) + typecheck + production build to
-                ui\dist\app; fails if the build changed what git status shows
+                ui\dist\app; fails if the build changed what git status shows;
+                go vet -tags release (the release build compiles)
       build     dist\Lowpath.exe, dist\lowpathsvc.exe and dist\lpcheck.exe
       e2e       end-to-end UI test (only with -E2E)
 
@@ -235,6 +236,10 @@ try {
                 $new = @($after -split "`n" | Where-Object { $_ -and $was -notcontains $_ })
                 throw "npm run build changed what git status shows (build output belongs in ui\dist\app):`n$($new -join "`n")"
             }
+            # Release builds (-tags release) embed this build and refuse the
+            # placeholder; check that they compile.
+            go vet -tags release ./...
+            if ($LASTEXITCODE -ne 0) { throw 'go vet -tags release failed' }
             $global:LASTEXITCODE = 0
         }
     }

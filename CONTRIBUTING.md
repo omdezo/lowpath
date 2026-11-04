@@ -39,6 +39,14 @@ shows up in `git status`; if it does, something writes outside
 `ui/dist/app`, and the local CI's `ui` stage fails on it. Don't commit build
 output, and only edit the placeholder on purpose.
 
+The placeholder is for development only. Anything handed to someone else
+(an installer, an update, a `dist\Lowpath.exe` for a tester) is built with
+`.\build.ps1 -Release`: it stops when there is no `ui\dist\app\index.html`,
+and builds with `-tags release`, under which `ui` doesn't compile without
+the UI build (`pattern dist/app/index.html: no matching files found`: run
+`npm run build`) and `ui.FS` refuses the placeholder, so the program won't
+start.
+
 A clone that built the UI before this layout has a rebuilt
 `ui/dist/index.html`, and git won't pull or switch branches over it: put it
 back first with `git restore ui/dist/index.html`. Then delete the old

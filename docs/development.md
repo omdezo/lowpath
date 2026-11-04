@@ -13,6 +13,7 @@
 .\build.ps1                 # UI, go vet + go test, then dist\ and bin\lowpath.exe
 .\build.ps1 -SkipTests      # faster
 .\build.ps1 -SkipUI         # keep the UI already built in ui\dist\app
+.\build.ps1 -Release        # release artifacts: stops without the UI build
 ```
 
 The UI build (`npm run build` in `ui\`) goes to `ui\dist\app`, which git
@@ -20,7 +21,12 @@ ignores; the programs embed it from there through `ui.FS`. Until it exists
 (a fresh clone) they embed the tracked `ui\dist\placeholder\index.html`
 instead, so `go vet`/`go test` and Go builds work without Node.js, and the
 window shows a page that says how to build the UI; `lowpath` logs a warning
-then, and `build.ps1` warns too.
+then, and `build.ps1` warns too. Release artifacts never carry the
+placeholder: `build.ps1 -Release` stops without `ui\dist\app\index.html`
+and builds with `-tags release`, under which `ui` fails to compile without
+it (`pattern dist/app/index.html: no matching files found`: run `npm run
+build`) and `ui.FS` returns `ui.ErrNoBuild` for the placeholder, so
+`lowpath` refuses to start.
 
 Outputs:
 

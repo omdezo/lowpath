@@ -138,6 +138,12 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
   2001:db8::/32) and a short allow-list of public resolvers and other
   necessary addresses pass (#131).
+- Release builds can't ship the UI placeholder: `build.ps1 -Release` stops
+  when `ui\dist\app` has no UI build, and builds with `-tags release`,
+  under which the UI package fails to compile without it and the app
+  refuses to start on the placeholder, saying to run `npm run build`; the
+  local CI checks that the release build compiles. Development builds still
+  embed the placeholder (#172).
 
 ### Changed
 - Test fixtures and docs use documentation addresses and AS numbers
