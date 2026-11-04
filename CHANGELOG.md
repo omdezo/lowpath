@@ -220,6 +220,10 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   the session to end in the API, then in the window. The log now says
   when the game was first seen during a session, so the check can say
   which half missed (#177, #201).
+- The engine's multipath end-to-end test no longer reports most packets
+  lost when the machine is too busy to run its reader for 1.5 s: the test
+  game client keeps reading until it has sent every packet and the replies
+  have stopped, instead of giving up at the first 1.5 s without one (#215).
 
 ## [0.2.0] - 2026-10-26
 
