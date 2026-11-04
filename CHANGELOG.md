@@ -144,6 +144,14 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- On Linux, the passive line-load detector no longer loses IPv6
+  connections without a word: the IPv6 socket dump is skipped only when the
+  kernel has no IPv6 sock_diag at all. When it fails for another reason (a
+  security module refusing it, no answer on a busy host), the IPv4
+  connections still split LAN from internet traffic and name the busiest
+  program, the failure is logged once per reason, and when IPv6 comes back
+  its connections don't count everything they moved meanwhile as one
+  second's traffic (#202).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent

@@ -34,7 +34,11 @@ type TCPConn struct {
 // administrators it reports ErrUnsupported (see docs/architecture.md).
 type ConnStats interface {
 	// TCPConns lists this network namespace's TCP connections, IPv4 and
-	// IPv6, with their counters.
+	// IPv6, with their counters. When one family can't be read but the
+	// other can, it returns the other's connections, complete, with a
+	// connsPartial error naming what is missing: a family that keeps
+	// failing must not take the working one's split down with it, nor go
+	// unnoticed. Any other error comes with no connections.
 	TCPConns() ([]TCPConn, error)
 	// Owners maps connections to the PIDs of the processes holding them,
 	// by ID. Connections whose owner this process can't see (another
@@ -178,10 +182,11 @@ const (
 	// (DHCP renewals, IPv6 privacy addresses).
 	addrsRefresh = 10 * time.Second
 	// connGrace is how long a connection missing from the readings keeps
-	// its last counters: one dump that failed for a family, or a socket
-	// the kernel skipped, would otherwise count the connection's whole
-	// lifetime as new when it shows up again. IDs are never reused, so a
-	// remembered one can't be mistaken for a new socket.
+	// its last counters: a socket the kernel skipped would otherwise count
+	// its whole lifetime as new when it shows up again. IDs are never
+	// reused, so a remembered one can't be mistaken for a new socket. (A
+	// family missing from partial readings is handled apart: see
+	// ConnWatch.Sample.)
 	connGrace = 10 * time.Second
 	// namesRefresh is how long one read of the process list names the
 	// talkers: PIDs are reused (after 32768 processes with Linux's default
@@ -203,6 +208,8 @@ type ConnWatch struct {
 	addrs func(index int) (LinkAddrs, error)
 
 	off     bool // the OS has no counters: stop asking
+	err     error
+	partial bool // the last reading missed a family
 	index   int
 	link    LinkAddrs
 	linkOK  bool
@@ -224,22 +231,45 @@ func NewConnWatch(conns ConnStats, names func() (map[uint32]string, error), addr
 }
 
 // Reset forgets the last reading (a session ended; the next starts over).
-func (w *ConnWatch) Reset() { w.prev, w.prevAt, w.linkOK, w.pidName = nil, time.Time{}, false, nil }
+func (w *ConnWatch) Reset() {
+	w.prev, w.prevAt, w.linkOK, w.pidName, w.partial = nil, time.Time{}, false, nil, false
+}
+
+// Err is what went wrong with the last Sample's reading: nil, an error
+// that left no sample (ErrUnsupported once the OS has no counters), or a
+// partial reading whose sample covers only the family that was read. The
+// caller decides whether to log it; Sample retries on its own.
+func (w *ConnWatch) Err() error { return w.err }
 
 // Sample reads the counters and returns the rates since the previous
 // Sample on the same interface. ok is false for the first reading, while
 // the counters or the interface's addresses can't be read, and for good
 // once the OS turns out to have no counters.
+//
+// A partial reading (one family unreadable, see ConnStats) still gives a
+// sample from the family that was read: its LAN bytes are still left out
+// of other traffic and its programs still named, while the missing
+// family's traffic counts as other traffic, as it would with no counters.
+// The first complete reading after partial ones starts over instead:
+// connections of the family that was missing would otherwise count
+// everything they moved while unseen as moved in that one second.
 func (w *ConnWatch) Sample(now time.Time, index int) (ConnSample, bool) {
 	if w.off {
 		return ConnSample{}, false
 	}
 	conns, err := w.conns.TCPConns()
-	if err != nil {
+	w.err = err
+	var partial connsPartial
+	isPartial := errors.As(err, &partial)
+	if err != nil && !isPartial {
 		w.Reset()
 		w.off = isUnsupported(err)
 		return ConnSample{}, false
 	}
+	if w.partial && !isPartial {
+		w.prev = nil // the missing family is back: start over (see above)
+	}
+	w.partial = isPartial
 	if index != w.index || !w.linkOK || now.Sub(w.linkAt) >= addrsRefresh || now.Before(w.linkAt) {
 		if index != w.index {
 			w.prev = nil // other adapter, other counters
@@ -355,6 +385,18 @@ func (e connsUnsupported) Error() string { return "diag: per-connection byte cou
 func (e connsUnsupported) Is(target error) bool {
 	return target == ErrUnsupported || target == errors.ErrUnsupported
 }
+
+// connsPartial is TCPConns' error when one address family's connections
+// couldn't be read and the other's were (Linux: the IPv6 dump failed).
+type connsPartial struct {
+	missing string // "IPv6"
+	err     error
+}
+
+func (e connsPartial) Error() string {
+	return "diag: per-connection byte counters: " + e.missing + " connections unreadable (their LAN traffic counts as other traffic, their programs go unnamed): " + e.err.Error()
+}
+func (e connsPartial) Unwrap() error { return e.err }
 
 func isUnsupported(err error) bool {
 	return errors.Is(err, ErrUnsupported) || errors.Is(err, errors.ErrUnsupported)

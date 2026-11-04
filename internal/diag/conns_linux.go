@@ -32,6 +32,10 @@ func newPlatformConnStats() ConnStats {
 	return &sockDiag{procfs: owner.NewProcfs(os.DirFS("/")), uid: uint32(os.Getuid()), owners: map[uint64]uint32{}}
 }
 
+// TCPConns reads the IPv4 dump, then the IPv6 one. When only the IPv6
+// dump fails, it returns the IPv4 connections with a connsPartial error,
+// so a persistent IPv6 failure keeps the IPv4 split working and is still
+// reported (see ConnStats).
 func (s *sockDiag) TCPConns() ([]TCPConn, error) {
 	c, err := netlink.Dial(netlink.SockDiag)
 	if err != nil {
@@ -41,13 +45,29 @@ func (s *sockDiag) TCPConns() ([]TCPConn, error) {
 		return nil, err
 	}
 	defer c.Close()
+	return s.read(c.Dump)
+}
+
+// read is TCPConns once the socket is open; dump runs one request (a
+// parameter so tests can make a family fail).
+func (s *sockDiag) read(dump func(netlink.Message) ([]netlink.Reply, error)) ([]TCPConn, error) {
 	var out []TCPConn
+	var partial error
 	live := map[uint64]bool{}
 	for _, v6 := range []bool{false, true} {
-		replies, err := c.Dump(sockdiag.DumpTCP(v6))
+		replies, err := dump(sockdiag.DumpTCP(v6))
 		switch {
+		case err != nil && v6 && errors.Is(err, syscall.ENOENT):
+			// No AF_INET6 sock_diag handler: a kernel built without IPv6
+			// (CONFIG_IPV6=n), so no IPv6 sockets either. ipv6.disable=1
+			// still registers the handler, and its dump is just empty.
+			continue
 		case err != nil && v6:
-			continue // IPv6 is off (ipv6.disable=1): no IPv6 sockets either
+			// Anything else (an LSM refusing the dump, no answer within the
+			// timeout on a busy host) hides real IPv6 connections: report
+			// it, with the IPv4 ones that were read.
+			partial = connsPartial{missing: "IPv6", err: err}
+			continue
 		case errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EOPNOTSUPP):
 			// A kernel built without inet_diag (CONFIG_INET_DIAG=n).
 			return nil, connsUnsupported{"this kernel has no inet_diag"}
@@ -81,7 +101,7 @@ func (s *sockDiag) TCPConns() ([]TCPConn, error) {
 		}
 	}
 	s.mu.Unlock()
-	return out, nil
+	return out, partial
 }
 
 func (s *sockDiag) Owners(conns []TCPConn) map[uint64]uint32 {
