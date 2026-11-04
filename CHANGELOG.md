@@ -144,6 +144,11 @@ Every pull request that changes behaviour adds a line under **Unreleased**.
   (AS64496–AS64511) and neutral example networks and locations (#131).
 
 ### Fixed
+- The Wi-Fi card's tests no longer fail on a starved machine: the tests
+  that expect a reading wait as long as the reading needs (up to 10 s),
+  and only the tests that hang the Wi-Fi service on purpose keep the
+  200 ms limit; the wait for start-up's flow reset gets the same bound
+  (#216).
 - A boost no longer falls back to the direct route for a second right after
   it starts when the PC is busy: a route in use is judged on what its
   probes said, so one whose first probes are still in flight (or not sent
